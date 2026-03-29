@@ -1,55 +1,52 @@
-import React from "react";
-import logo from "./logo.svg";
+import React, { useState, useMemo } from "react";
+import Header from "./components/Header";
+import BubbleMap from "./components/BubbleMap";
+import StatsPanel from "./components/StatsPanel";
+import { holders, links, TOKEN_INFO } from "./data/mockData";
 import "./App.css";
 
-/**
- * Uses Tailwind CSS for styling
- * Tailwind file is imported in App.css
- */
-
 export default function App() {
+  const [selectedNode, setSelectedNode] = useState(null);
+  const [searchQuery, setSearchQuery] = useState("");
+
+  const filteredNodes = useMemo(() => {
+    if (!searchQuery) return holders;
+    const q = searchQuery.toLowerCase();
+    return holders.filter(
+      (h) =>
+        h.id.toLowerCase().includes(q) ||
+        h.label.toLowerCase().includes(q) ||
+        h.shortAddr.toLowerCase().includes(q),
+    );
+  }, [searchQuery]);
+
+  const filteredLinks = useMemo(() => {
+    const ids = new Set(filteredNodes.map((n) => n.id));
+    return links.filter((l) => ids.has(l.source) && ids.has(l.target));
+  }, [filteredNodes]);
+
   return (
-    <div className="app min-h-screen text-blue-200 flex items-center flex-col p-20">
-      <div className="mb-10 grid grid-cols-4 grid-rows-2 w-1/2 mx-auto">
-        <img className="opacity-25" src={logo} alt="React Logo" width="300" />
-        <img
-          className="col-span-2 row-span-3 animate-spin m-auto"
-          style={{ animationDuration: "30s" }}
-          src={logo}
-          alt="React Logo"
-          width="300"
-        />
-        <img className="opacity-25" src={logo} alt="React Logo" width="300" />
-        <img className="opacity-25" src={logo} alt="React Logo" width="300" />
-        <img className="opacity-25" src={logo} alt="React Logo" width="300" />
-      </div>
-
-      <h1 className="text-2xl lg:text-5xl mb-10 text-right">
-        PlaceHolder to Test{" "}
-        <span className="block text-lg text-blue-400">on DigitalOcean</span>
-      </h1>
-
-      <div className="grid grid-cols-2 grid-rows-2 gap-4">
-        <Button
-          text="DigitalOcean Docs"
-          url="https://www.digitalocean.com/docs/app-platform"
-        />
-        <Button
-          text="DigitalOcean Dashboard"
-          url="https://cloud.digitalocean.com/apps"
+    <div className="app-root">
+      <Header onSearch={setSearchQuery} tokenInfo={TOKEN_INFO} />
+      <div className="main-layout">
+        <div className="map-area">
+          <BubbleMap
+            nodes={filteredNodes}
+            links={filteredLinks}
+            onNodeClick={setSelectedNode}
+            selectedNodeId={selectedNode?.id}
+          />
+          <div className="map-hint">
+            Scroll to zoom · Drag to pan · Click a bubble for details
+          </div>
+        </div>
+        <StatsPanel
+          holders={holders}
+          tokenInfo={TOKEN_INFO}
+          selectedNode={selectedNode}
+          onNodeSelect={setSelectedNode}
         />
       </div>
     </div>
-  );
-}
-
-function Button({ className, text, url = "#" }) {
-  return (
-    <a
-      href={url}
-      className={`${className} py-3 px-6 bg-purple-400 hover:bg-purple-300 text-purple-800 hover:text-purple-900 block rounded text-center shadow flex items-center justify-center leading-snug text-xs transition ease-in duration-150`}
-    >
-      {text}
-    </a>
   );
 }
