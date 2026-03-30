@@ -1,6 +1,11 @@
 import React, { useState } from "react";
 
-export default function Header({ onSearch, tokenInfo }) {
+export default function Header({
+  onSearch,
+  tokenInfo,
+  colorTheme,
+  onThemeChange,
+}) {
   const [input, setInput] = useState("");
 
   function handleSubmit(e) {
@@ -18,7 +23,11 @@ export default function Header({ onSearch, tokenInfo }) {
   return (
     <header className="header">
       <div className="header-logo">
-        <span className="header-logo-icon">◈</span>
+        <img
+          className="header-logo-icon"
+          src="/phantasmaMaps.png"
+          alt="PhantasmaMaps logo"
+        />
         <span className="header-logo-text">
           Phantasma<span className="header-logo-accent">Maps</span>
         </span>
@@ -48,6 +57,19 @@ export default function Header({ onSearch, tokenInfo }) {
       </form>
 
       <div className="header-meta">
+        <label className="header-theme" title="Change overall accent color">
+          <span className="header-theme-label">Theme</span>
+          <select
+            className="header-theme-select"
+            value={colorTheme}
+            onChange={(e) => onThemeChange && onThemeChange(e.target.value)}
+          >
+            <option value="dark">Dark</option>
+            <option value="light">Light</option>
+            <option value="ghost-blue">Ghost Blue</option>
+            <option value="kcal-red">Kcal Red</option>
+          </select>
+        </label>
         <div className="header-chain">
           <span className="header-chain-dot" />
           <span>Phantasma</span>
