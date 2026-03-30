@@ -16,9 +16,13 @@ const ALLOWED_COLOR_THEMES = new Set([
 const PHANTASMA_EXPLORER_BASE = "https://explorer.phantasma.info/address/";
 const PHANTASMA_TX_EXPLORER_BASE = "https://explorer.phantasma.info/tx/";
 const SOUL_PRICE_API_URL = "https://api.coingecko.com/api/v3/simple/price?ids=phantasma&vs_currencies=usd&include_24hr_change=true";
+const CMC_SOUL_QUOTES_API_URL = "https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest?symbol=SOUL&convert=USD";
+const CMC_SOUL_SYMBOL = "SOUL";
 const SOUL_PRICE_BASE_POLL_INTERVAL_MS = 60000;
 const SOUL_PRICE_MAX_BACKOFF_MS = 10 * 60 * 1000;
 const SOUL_PRICE_REQUEST_TIMEOUT_MS = 7000;
+const CMC_API_KEY = process.env.REACT_APP_CMC_API_KEY;
+const CMC_PROXY_URL = process.env.REACT_APP_CMC_PROXY_URL;
 
 function parseRetryAfterMs(response) {
   const rawValue = response.headers.get("retry-after");
@@ -28,6 +32,129 @@ function parseRetryAfterMs(response) {
     return asSeconds * 1000;
   }
   return null;
+}
+
+async function fetchJsonWithTimeout(url, options = {}) {
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(
+    () => controller.abort(),
+    SOUL_PRICE_REQUEST_TIMEOUT_MS,
+  );
+
+  try {
+    const response = await fetch(url, {
+      cache: "no-store",
+      ...options,
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      return {
+        ok: false,
+        status: response.status,
+        retryAfterMs: parseRetryAfterMs(response),
+      };
+    }
+
+    const payload = await response.json();
+    return {
+      ok: true,
+      status: response.status,
+      payload,
+      retryAfterMs: parseRetryAfterMs(response),
+    };
+  } catch {
+    return {
+      ok: false,
+      status: 0,
+      retryAfterMs: null,
+    };
+  } finally {
+    window.clearTimeout(timeoutId);
+  }
+}
+
+function parseCoinGeckoQuote(payload) {
+  const usdPrice = Number(payload?.phantasma?.usd);
+  const usdChange24h = Number(payload?.phantasma?.usd_24h_change);
+  if (!Number.isFinite(usdPrice) || !Number.isFinite(usdChange24h)) {
+    return null;
+  }
+  return {
+    price: usdPrice,
+    priceChange24h: Number(usdChange24h.toFixed(2)),
+  };
+}
+
+function parseCoinMarketCapQuote(payload) {
+  const usdQuote = payload?.data?.[CMC_SOUL_SYMBOL]?.quote?.USD;
+  const usdPrice = Number(usdQuote?.price);
+  const usdChange24h = Number(usdQuote?.percent_change_24h);
+  if (!Number.isFinite(usdPrice) || !Number.isFinite(usdChange24h)) {
+    return null;
+  }
+  return {
+    price: usdPrice,
+    priceChange24h: Number(usdChange24h.toFixed(2)),
+  };
+}
+
+async function fetchSoulQuoteFromCoinGecko() {
+  const result = await fetchJsonWithTimeout(SOUL_PRICE_API_URL);
+  if (!result.ok) return result;
+  const quote = parseCoinGeckoQuote(result.payload);
+  if (!quote) {
+    return {
+      ok: false,
+      status: result.status,
+      retryAfterMs: result.retryAfterMs,
+    };
+  }
+  return {
+    ok: true,
+    status: result.status,
+    retryAfterMs: result.retryAfterMs,
+    quote,
+    source: "coingecko",
+  };
+}
+
+async function fetchSoulQuoteFromCoinMarketCap() {
+  const endpoint = CMC_PROXY_URL || CMC_SOUL_QUOTES_API_URL;
+  const headers = {
+    Accept: "application/json",
+  };
+
+  if (CMC_API_KEY) {
+    headers["X-CMC_PRO_API_KEY"] = CMC_API_KEY;
+  }
+
+  // Without an API key, fallback via CoinMarketCap is expected to be unavailable unless a proxy is configured.
+  if (!CMC_API_KEY && !CMC_PROXY_URL) {
+    return {
+      ok: false,
+      status: 401,
+      retryAfterMs: null,
+    };
+  }
+
+  const result = await fetchJsonWithTimeout(endpoint, { headers });
+  if (!result.ok) return result;
+  const quote = parseCoinMarketCapQuote(result.payload);
+  if (!quote) {
+    return {
+      ok: false,
+      status: result.status,
+      retryAfterMs: result.retryAfterMs,
+    };
+  }
+  return {
+    ok: true,
+    status: result.status,
+    retryAfterMs: result.retryAfterMs,
+    quote,
+    source: "coinmarketcap",
+  };
 }
 
 function fmtTokenAmount(n) {
@@ -136,34 +263,36 @@ export default function App() {
     }
 
     async function fetchSoulPrice() {
-      const controller = new AbortController();
-      const requestTimeoutId = window.setTimeout(
-        () => controller.abort(),
-        SOUL_PRICE_REQUEST_TIMEOUT_MS,
-      );
-
       try {
-        const response = await fetch(SOUL_PRICE_API_URL, {
-          signal: controller.signal,
-          cache: "no-store",
-        });
+        const primaryResult = await fetchSoulQuoteFromCoinGecko();
+        const fallbackResult = primaryResult.ok
+          ? null
+          : await fetchSoulQuoteFromCoinMarketCap();
 
-        if (!response.ok) {
-          if (response.status === 429) {
-            const retryAfterMs = parseRetryAfterMs(response);
+        const winner = primaryResult.ok ? primaryResult : fallbackResult;
+
+        if (!winner?.ok || !winner.quote) {
+          const retryAfterMs = Math.max(
+            primaryResult?.retryAfterMs || 0,
+            fallbackResult?.retryAfterMs || 0,
+          );
+          const hitRateLimit =
+            primaryResult?.status === 429 || fallbackResult?.status === 429;
+
+          if (hitRateLimit) {
             nextPollDelayMs = retryAfterMs || Math.min(nextPollDelayMs * 2, SOUL_PRICE_MAX_BACKOFF_MS);
           } else {
-            nextPollDelayMs = Math.max(SOUL_PRICE_BASE_POLL_INTERVAL_MS, nextPollDelayMs);
+            nextPollDelayMs = Math.min(
+              Math.max(nextPollDelayMs * 2, SOUL_PRICE_BASE_POLL_INTERVAL_MS),
+              SOUL_PRICE_MAX_BACKOFF_MS,
+            );
           }
+
           scheduleNextPoll(nextPollDelayMs);
           return;
         }
 
-        const payload = await response.json();
-        const usdPrice = Number(payload?.phantasma?.usd);
-        const usdChange24h = Number(payload?.phantasma?.usd_24h_change);
-
-        if (!isActive || !Number.isFinite(usdPrice) || !Number.isFinite(usdChange24h)) {
+        if (!isActive) {
           nextPollDelayMs = Math.max(SOUL_PRICE_BASE_POLL_INTERVAL_MS, nextPollDelayMs);
           scheduleNextPoll(nextPollDelayMs);
           return;
@@ -171,8 +300,8 @@ export default function App() {
 
         setLiveTokenInfo((current) => ({
           ...current,
-          price: usdPrice,
-          priceChange24h: Number(usdChange24h.toFixed(2)),
+          price: winner.quote.price,
+          priceChange24h: winner.quote.priceChange24h,
         }));
         setPriceLastUpdatedAt(Date.now());
         nextPollDelayMs = SOUL_PRICE_BASE_POLL_INTERVAL_MS;
@@ -181,8 +310,6 @@ export default function App() {
         // Keep last successful price if the API is unreachable.
         nextPollDelayMs = Math.min(Math.max(nextPollDelayMs * 2, SOUL_PRICE_BASE_POLL_INTERVAL_MS), SOUL_PRICE_MAX_BACKOFF_MS);
         scheduleNextPoll(nextPollDelayMs);
-      } finally {
-        window.clearTimeout(requestTimeoutId);
       }
     }
 
