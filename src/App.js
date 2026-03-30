@@ -18,7 +18,7 @@ const PHANTASMA_TX_EXPLORER_BASE = "https://explorer.phantasma.info/tx/";
 const SOUL_PRICE_API_URL = "https://api.coingecko.com/api/v3/simple/price?ids=phantasma&vs_currencies=usd&include_24hr_change=true";
 const CMC_SOUL_QUOTES_API_URL = "https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest?symbol=SOUL&convert=USD";
 const CMC_SOUL_SYMBOL = "SOUL";
-const SOUL_PRICE_BASE_POLL_INTERVAL_MS = 60000;
+const SOUL_PRICE_BASE_POLL_INTERVAL_MS = 5 * 60 * 1000;
 const SOUL_PRICE_MAX_BACKOFF_MS = 10 * 60 * 1000;
 const SOUL_PRICE_REQUEST_TIMEOUT_MS = 7000;
 const CMC_API_KEY = process.env.REACT_APP_CMC_API_KEY;
