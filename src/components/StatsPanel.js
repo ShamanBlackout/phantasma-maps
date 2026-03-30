@@ -13,6 +13,9 @@ export default function StatsPanel({
   tokenInfo,
   selectedNode,
   onNodeSelect,
+  copiedAddress,
+  onCopyAddress,
+  onOpenTransactions,
   colorTheme,
   isCollapsed,
   onToggleCollapse,
@@ -97,10 +100,47 @@ export default function StatsPanel({
 
           {/* Selected Node Info */}
           {selectedNode && (
-            <div className="stats-card stats-card-selected">
+            <div className="stats-card stats-card-selected stats-node-detail-card">
               <div className="stats-section-title">Selected</div>
-              <div className="selected-label">{selectedNode.label}</div>
-              <div className="selected-addr">{selectedNode.shortAddr}</div>
+              <div className="stats-node-detail-head">
+                <div>
+                  <div className="stats-node-detail-title">
+                    {selectedNode.label}
+                  </div>
+                  <div className="stats-node-detail-addr-row">
+                    <div className="stats-node-detail-addr">
+                      {selectedNode.shortAddr}
+                    </div>
+                    <button
+                      type="button"
+                      className="stats-node-detail-action"
+                      onClick={() => onCopyAddress?.(selectedNode.id)}
+                      aria-label="Copy address"
+                      title="Copy address"
+                    >
+                      {copiedAddress === selectedNode.id ? "Copied" : "Copy"}
+                    </button>
+                    <a
+                      className="stats-node-detail-action"
+                      href={`https://explorer.phantasma.info/address/${encodeURIComponent(selectedNode.id)}`}
+                      target="_blank"
+                      rel="noreferrer noopener"
+                      aria-label="Open address on Phantasma Explorer"
+                      title="Open on Phantasma Explorer"
+                    >
+                      ↗
+                    </a>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  className="stats-node-detail-close"
+                  onClick={() => onNodeSelect(null)}
+                  aria-label="Deselect node"
+                >
+                  ×
+                </button>
+              </div>
               <div className="stats-token-row">
                 <span className="stats-label">Amount</span>
                 <span className="stats-value">
@@ -137,10 +177,11 @@ export default function StatsPanel({
                 </span>
               </div>
               <button
-                className="btn-deselect"
-                onClick={() => onNodeSelect(null)}
+                type="button"
+                className="map-selected-show-transfers"
+                onClick={() => onOpenTransactions?.()}
               >
-                ✕ Deselect
+                Show All Transactions
               </button>
             </div>
           )}
