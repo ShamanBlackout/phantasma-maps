@@ -14,7 +14,8 @@
     "serve": "^14.2.4"
   },
   "scripts": {
-    "start": "react-scripts start",
+    "start": "npm run start:prod",
+    "start:dev": "react-scripts start",
     "build": "react-scripts build",
     "start:prod": "node sammy.js; serve -s _static -l tcp://0.0.0.0:$PORT -n",
     "build:prod": "rm -r _static 2>/dev/null; node sammy.js; react-scripts build && mv build _static",
