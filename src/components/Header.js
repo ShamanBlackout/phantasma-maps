@@ -33,7 +33,7 @@ export default function Header({
       <div className="header-logo">
         <img
           className="header-logo-icon"
-          src="/phantasmaMaps.png"
+          src={`${process.env.PUBLIC_URL}/phantasmaMaps.png`}
           alt="PhantasmaMaps logo"
         />
         <span className="header-logo-text">

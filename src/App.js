@@ -13,14 +13,39 @@ const ALLOWED_COLOR_THEMES = new Set([
   "ghost-blue",
   "kcal-red",
 ]);
-const PHANTASMA_EXPLORER_BASE = "https://explorer.phantasma.info/address/";
-const PHANTASMA_TX_EXPLORER_BASE = "https://explorer.phantasma.info/tx/";
-const SOUL_PRICE_API_URL = "https://api.coingecko.com/api/v3/simple/price?ids=phantasma&vs_currencies=usd&include_24hr_change=true";
-const CMC_SOUL_QUOTES_API_URL = "https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest?symbol=SOUL&convert=USD";
-const CMC_SOUL_SYMBOL = "SOUL";
-const SOUL_PRICE_BASE_POLL_INTERVAL_MS = 5 * 60 * 1000;
-const SOUL_PRICE_MAX_BACKOFF_MS = 10 * 60 * 1000;
-const SOUL_PRICE_REQUEST_TIMEOUT_MS = 7000;
+
+function parseEnvMs(key, fallbackMs) {
+  const raw = process.env[key];
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallbackMs;
+}
+
+const PHANTASMA_EXPLORER_BASE =
+  process.env.REACT_APP_PHANTASMA_EXPLORER_BASE ||
+  "https://explorer.phantasma.info/address/";
+const PHANTASMA_TX_EXPLORER_BASE =
+  process.env.REACT_APP_PHANTASMA_TX_EXPLORER_BASE ||
+  "https://explorer.phantasma.info/tx/";
+const SOUL_PRICE_API_URL =
+  process.env.REACT_APP_SOUL_PRICE_API_URL ||
+  "https://api.coingecko.com/api/v3/simple/price?ids=phantasma&vs_currencies=usd&include_24hr_change=true";
+const CMC_SOUL_QUOTES_API_URL =
+  process.env.REACT_APP_CMC_SOUL_QUOTES_API_URL ||
+  "https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest?symbol=SOUL&convert=USD";
+const CMC_SOUL_SYMBOL =
+  (process.env.REACT_APP_CMC_SOUL_SYMBOL || "SOUL").toUpperCase();
+const SOUL_PRICE_BASE_POLL_INTERVAL_MS = parseEnvMs(
+  "REACT_APP_SOUL_PRICE_BASE_POLL_INTERVAL_MS",
+  5 * 60 * 1000,
+);
+const SOUL_PRICE_MAX_BACKOFF_MS = parseEnvMs(
+  "REACT_APP_SOUL_PRICE_MAX_BACKOFF_MS",
+  10 * 60 * 1000,
+);
+const SOUL_PRICE_REQUEST_TIMEOUT_MS = parseEnvMs(
+  "REACT_APP_SOUL_PRICE_REQUEST_TIMEOUT_MS",
+  7000,
+);
 const CMC_API_KEY = process.env.REACT_APP_CMC_API_KEY;
 const CMC_PROXY_URL = process.env.REACT_APP_CMC_PROXY_URL;
 
