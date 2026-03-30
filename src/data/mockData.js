@@ -15,6 +15,22 @@ export const HOLDER_TYPES = {
   regular: { label: "Holder", color: "#74b9ff" },
 };
 
+const BASE_TX_BY_TYPE = {
+  team: 460,
+  exchange: 2650,
+  contract: 1820,
+  whale: 980,
+  regular: 170,
+};
+
+const LINK_TX_WEIGHT_BY_TYPE = {
+  team: 1.35,
+  exchange: 2.4,
+  contract: 1.9,
+  whale: 1.25,
+  regular: 0.72,
+};
+
 export const holders = [
   {
     id: "P2K8mNxHvT3qAaBpFsuWcY9JeGKd4kQ7Rmj6CiDyEF",
@@ -296,7 +312,33 @@ export const holders = [
     pct: "0.09",
     type: "regular",
   },
-];
+].map((holder, index) => {
+  const base = BASE_TX_BY_TYPE[holder.type] || 200;
+  const sentTransactions = Math.max(12, Math.round(base + index * 9));
+  const receivedTransactions = Math.max(
+    10,
+    Math.round(base * 1.14 + index * 7),
+  );
+
+  return {
+    ...holder,
+    sentTransactions,
+    receivedTransactions,
+  };
+});
+
+const holderTypeById = new Map(
+  holders.map((holder) => [holder.id, holder.type]),
+);
+
+function buildFakeTransactionHash(source, target, index) {
+  const seed = `${source}>${target}:${index}`;
+  const seedHex = Array.from(seed)
+    .map((char) => char.charCodeAt(0).toString(16).padStart(2, "0"))
+    .join("");
+  const body = (seedHex + "9af03bc57de18426".repeat(8)).slice(0, 64);
+  return `0x${body}`;
+}
 
 export const links = [
   // Team inter-connections
@@ -454,4 +496,33 @@ export const links = [
     source: "P2Kholder023efghijklmnopqrstuvwxyzABCDE12367",
     target: "P2KStakingV2ContractFsuWcY9JeGKdVXnZ4kQ7Rmj6",
   },
-];
+].map((link, index) => {
+  const sourceType = holderTypeById.get(link.source) || "regular";
+  const targetType = holderTypeById.get(link.target) || "regular";
+  const sourceWeight = LINK_TX_WEIGHT_BY_TYPE[sourceType] || 1;
+  const targetWeight = LINK_TX_WEIGHT_BY_TYPE[targetType] || 1;
+  const sentTransactions = Math.max(
+    8,
+    Math.round(
+      (sourceWeight * 128 + targetWeight * 52) * (1 + (index % 6) * 0.12),
+    ),
+  );
+  const receivedTransactions = Math.max(
+    6,
+    Math.round(sentTransactions * (0.94 + (index % 4) * 0.01)),
+  );
+  const transactionVolume = sentTransactions * (18 + (index % 5) * 7);
+  const transactionHash = buildFakeTransactionHash(
+    link.source,
+    link.target,
+    index,
+  );
+
+  return {
+    ...link,
+    sentTransactions,
+    receivedTransactions,
+    transactionVolume,
+    transactionHash,
+  };
+});

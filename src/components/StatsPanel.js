@@ -114,6 +114,18 @@ export default function StatsPanel({
                 </span>
               </div>
               <div className="stats-token-row">
+                <span className="stats-label">Sent Tx</span>
+                <span className="stats-value">
+                  {(selectedNode.sentTransactions ?? 0).toLocaleString()}
+                </span>
+              </div>
+              <div className="stats-token-row">
+                <span className="stats-label">Received Tx</span>
+                <span className="stats-value">
+                  {(selectedNode.receivedTransactions ?? 0).toLocaleString()}
+                </span>
+              </div>
+              <div className="stats-token-row">
                 <span className="stats-label">Type</span>
                 <span
                   className="stats-value"
