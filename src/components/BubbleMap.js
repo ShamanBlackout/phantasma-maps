@@ -31,6 +31,7 @@ export default function BubbleMap({
   const prevGraphSignatureRef = useRef("");
   const panHintFrameRef = useRef(null);
   const pendingBoundsRef = useRef(null);
+  const [hoveredNodeId, setHoveredNodeId] = useState(null);
   const [panHints, setPanHints] = useState({
     left: false,
     right: false,
@@ -246,6 +247,7 @@ export default function BubbleMap({
       .style("cursor", "pointer")
       .on("mouseenter", function () {
         const nodeData = d3.select(this).datum();
+        setHoveredNodeId(nodeData?.id ?? null);
         if (onNodeHover && nodeData) onNodeHover(nodeData);
         d3.select(this)
           .select(".bubble-glow")
@@ -253,11 +255,15 @@ export default function BubbleMap({
           .transition()
           .duration(140)
           .attr("fill-opacity", graphThemeStyle.hoverGlowOpacity ?? 0.2)
-          .attr("stroke", graphThemeStyle.hoverStroke ?? "rgba(255,255,255,0.55)")
+          .attr(
+            "stroke",
+            graphThemeStyle.hoverStroke ?? "rgba(255,255,255,0.55)",
+          )
           .attr("stroke-width", graphThemeStyle.hoverStrokeWidth ?? 1.5)
           .attr("stroke-opacity", graphThemeStyle.hoverStrokeOpacity ?? 0.65);
       })
       .on("mouseleave", function () {
+        setHoveredNodeId(null);
         if (onNodeHover) onNodeHover(null);
         d3.select(this)
           .select(".bubble-glow")
@@ -419,6 +425,7 @@ export default function BubbleMap({
     simulation.alpha(0.14).restart();
 
     return () => {
+      setHoveredNodeId(null);
       if (onNodeHover) onNodeHover(null);
       if (panHintFrameRef.current !== null) {
         window.cancelAnimationFrame(panHintFrameRef.current);
@@ -428,18 +435,21 @@ export default function BubbleMap({
     };
   }, [nodes, links, colorTheme]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ── Selection effect: update visuals only, no simulation restart ─────────
+  // ── Focus effect (selection + hover): update visuals only ───────────────
   useEffect(() => {
     if (!svgRef.current) return;
     const svg = d3.select(svgRef.current);
     const connectedNodeIds = new Set();
+    const activeNodeId = selectedNodeId || hoveredNodeId;
+    const isSelectionMode = Boolean(selectedNodeId);
+    const isHoverMode = !selectedNodeId && Boolean(hoveredNodeId);
 
-    if (selectedNodeId) {
-      connectedNodeIds.add(selectedNodeId);
+    if (activeNodeId) {
+      connectedNodeIds.add(activeNodeId);
       svg.selectAll(".bubble-link").each((d) => {
         const srcId = d.source?.id ?? d.source;
         const tgtId = d.target?.id ?? d.target;
-        if (srcId === selectedNodeId || tgtId === selectedNodeId) {
+        if (srcId === activeNodeId || tgtId === activeNodeId) {
           connectedNodeIds.add(srcId);
           connectedNodeIds.add(tgtId);
         }
@@ -449,21 +459,25 @@ export default function BubbleMap({
     svg
       .selectAll(".bubble-node")
       .style("display", (d) =>
-        !selectedNodeId || connectedNodeIds.has(d.id) ? null : "none",
+        !isSelectionMode || connectedNodeIds.has(d.id) ? null : "none",
       )
       .style("pointer-events", (d) =>
-        !selectedNodeId || connectedNodeIds.has(d.id) ? null : "none",
-      );
+        !isSelectionMode || connectedNodeIds.has(d.id) ? null : "none",
+      )
+      .attr("opacity", (d) => {
+        if (!isHoverMode) return 1;
+        return connectedNodeIds.has(d.id) ? 1 : 0.42;
+      });
 
     svg
       .selectAll(".bubble-circle")
       .attr("fill-opacity", (d) =>
-        !selectedNodeId || d.id === selectedNodeId
+        !activeNodeId || d.id === activeNodeId
           ? graphThemeStyle.selectedFillOpacity
           : graphThemeStyle.fadedFillOpacity,
       )
       .attr("stroke-width", (d) =>
-        d.id === selectedNodeId
+        d.id === activeNodeId
           ? graphThemeStyle.selectedStrokeWidth
           : graphThemeStyle.defaultStrokeWidth,
       );
@@ -473,25 +487,33 @@ export default function BubbleMap({
       .style("display", (d) => {
         const srcId = d.source?.id ?? d.source;
         const tgtId = d.target?.id ?? d.target;
-        return !selectedNodeId || srcId === selectedNodeId || tgtId === selectedNodeId
+        return !isSelectionMode ||
+          srcId === activeNodeId ||
+          tgtId === activeNodeId
           ? null
           : "none";
       })
       .attr("stroke", (d) => {
         const srcId = d.source?.id ?? d.source;
         const tgtId = d.target?.id ?? d.target;
-        return srcId === selectedNodeId || tgtId === selectedNodeId
+        return srcId === activeNodeId || tgtId === activeNodeId
           ? graphThemeStyle.linkActive
           : graphThemeStyle.linkBase;
       })
       .attr("stroke-width", (d) => {
         const srcId = d.source?.id ?? d.source;
         const tgtId = d.target?.id ?? d.target;
-        return srcId === selectedNodeId || tgtId === selectedNodeId
+        return srcId === activeNodeId || tgtId === activeNodeId
           ? (graphThemeStyle.linkWidthActive ?? 2)
           : (graphThemeStyle.linkWidthBase ?? 1);
+      })
+      .attr("stroke-opacity", (d) => {
+        if (!isHoverMode) return 1;
+        const srcId = d.source?.id ?? d.source;
+        const tgtId = d.target?.id ?? d.target;
+        return srcId === activeNodeId || tgtId === activeNodeId ? 1 : 0.2;
       });
-  }, [selectedNodeId, colorTheme]);
+  }, [selectedNodeId, hoveredNodeId, colorTheme]);
 
   return (
     <div className="bubble-map-shell">
