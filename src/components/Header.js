@@ -3,6 +3,7 @@ import React, { useState } from "react";
 export default function Header({
   onSearch,
   tokenInfo,
+  priceUpdatedAt,
   colorTheme,
   onThemeChange,
 }) {
@@ -19,6 +20,13 @@ export default function Header({
   }
 
   const priceUp = tokenInfo.priceChange24h >= 0;
+  const priceUpdatedLabel = priceUpdatedAt
+    ? new Date(priceUpdatedAt).toLocaleTimeString([], {
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+      })
+    : "Syncing...";
 
   return (
     <header className="header">
@@ -81,6 +89,9 @@ export default function Header({
           </span>
           <span className={`header-price-change ${priceUp ? "up" : "down"}`}>
             {priceUp ? "▲" : "▼"} {Math.abs(tokenInfo.priceChange24h)}%
+          </span>
+          <span className="header-price-updated">
+            Updated {priceUpdatedLabel}
           </span>
         </div>
       </div>
