@@ -1,5 +1,6 @@
 import React from "react";
 import { HOLDER_TYPES } from "../data/mockData";
+import { getHolderPalette } from "../theme/holderPalettes";
 
 function fmt(n) {
   if (n >= 1_000_000) return (n / 1_000_000).toFixed(2) + "M";
@@ -12,9 +13,12 @@ export default function StatsPanel({
   tokenInfo,
   selectedNode,
   onNodeSelect,
+  colorTheme,
   isCollapsed,
   onToggleCollapse,
 }) {
+  const holderPalette = getHolderPalette(colorTheme);
+
   const top10pct = holders
     .slice()
     .sort((a, b) => b.value - a.value)
@@ -33,10 +37,14 @@ export default function StatsPanel({
           className="stats-panel-toggle"
           onClick={onToggleCollapse}
           aria-expanded={!isCollapsed}
-          aria-label={isCollapsed ? "Expand stats panel" : "Collapse stats panel"}
+          aria-label={
+            isCollapsed ? "Expand stats panel" : "Collapse stats panel"
+          }
           title={isCollapsed ? "Expand stats panel" : "Collapse stats panel"}
         >
-          <span className={`stats-panel-toggle-icon ${isCollapsed ? "is-collapsed" : ""}`}>
+          <span
+            className={`stats-panel-toggle-icon ${isCollapsed ? "is-collapsed" : ""}`}
+          >
             ‹
           </span>
         </button>
@@ -76,9 +84,12 @@ export default function StatsPanel({
           {/* Legend */}
           <div className="stats-card">
             <div className="stats-section-title">Legend</div>
-            {Object.entries(HOLDER_TYPES).map(([key, { label, color }]) => (
+            {Object.entries(HOLDER_TYPES).map(([key, { label }]) => (
               <div className="legend-row" key={key}>
-                <span className="legend-dot" style={{ background: color }} />
+                <span
+                  className="legend-dot"
+                  style={{ background: holderPalette[key] || "#74b9ff" }}
+                />
                 <span className="legend-label">{label}</span>
               </div>
             ))}
@@ -106,12 +117,17 @@ export default function StatsPanel({
                 <span className="stats-label">Type</span>
                 <span
                   className="stats-value"
-                  style={{ color: HOLDER_TYPES[selectedNode.type]?.color }}
+                  style={{
+                    color: holderPalette[selectedNode.type] || "#74b9ff",
+                  }}
                 >
                   {HOLDER_TYPES[selectedNode.type]?.label}
                 </span>
               </div>
-              <button className="btn-deselect" onClick={() => onNodeSelect(null)}>
+              <button
+                className="btn-deselect"
+                onClick={() => onNodeSelect(null)}
+              >
                 ✕ Deselect
               </button>
             </div>
@@ -130,7 +146,7 @@ export default function StatsPanel({
                   <span className="holder-rank">#{i + 1}</span>
                   <span
                     className="holder-dot"
-                    style={{ background: HOLDER_TYPES[h.type]?.color || "#74b9ff" }}
+                    style={{ background: holderPalette[h.type] || "#74b9ff" }}
                   />
                   <span className="holder-addr">{h.shortAddr}</span>
                   <span className="holder-pct">{h.pct}%</span>

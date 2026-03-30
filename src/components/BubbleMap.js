@@ -1,11 +1,10 @@
 import React, { useEffect, useRef, useState } from "react";
 import * as d3 from "d3";
-import { HOLDER_TYPES } from "../data/mockData";
+import { getGraphThemeStyle, getHolderPalette } from "../theme/holderPalettes";
 
-const TYPE_COLOR = Object.fromEntries(
-  Object.entries(HOLDER_TYPES).map(([k, v]) => [k, v.color]),
-);
 const PAN_HINT_THRESHOLD = 20;
+const PREWARM_TICKS = 220;
+const BOUNDS_UPDATE_EVERY = 5;
 
 const FIT_DURATION_MS = 220;
 
@@ -13,14 +12,25 @@ export default function BubbleMap({
   nodes,
   links,
   onNodeClick,
+  onNodeHover,
   selectedNodeId,
+  colorTheme,
   onReady,
 }) {
+  const holderPalette = getHolderPalette(colorTheme);
+  const graphThemeStyle = getGraphThemeStyle(colorTheme);
+  const bubbleLabelColor = colorTheme === "light" ? "#1f3248" : "white";
+  const bubblePctColor =
+    colorTheme === "light" ? "rgba(31,50,72,0.72)" : "rgba(255,255,255,0.7)";
+
   const svgRef = useRef(null);
   const boundsRef = useRef(null);
   const transformRef = useRef(d3.zoomIdentity);
   const viewportRef = useRef({ width: 0, height: 0 });
   const zoomRef = useRef(null);
+  const prevGraphSignatureRef = useRef("");
+  const panHintFrameRef = useRef(null);
+  const pendingBoundsRef = useRef(null);
   const [panHints, setPanHints] = useState({
     left: false,
     right: false,
@@ -62,6 +72,29 @@ export default function BubbleMap({
     });
   }
 
+  function schedulePanHintUpdate(nextBounds = boundsRef.current) {
+    pendingBoundsRef.current = nextBounds;
+    if (panHintFrameRef.current !== null) return;
+    panHintFrameRef.current = window.requestAnimationFrame(() => {
+      panHintFrameRef.current = null;
+      updatePanHints(pendingBoundsRef.current);
+    });
+  }
+
+  function buildGraphSignature(nextNodes, nextLinks, theme) {
+    const nodeSig = nextNodes
+      .map((n) => `${n.id}:${n.value}:${n.type}`)
+      .join("|");
+    const linkSig = nextLinks
+      .map((l) => {
+        const src = typeof l.source === "object" ? l.source?.id : l.source;
+        const tgt = typeof l.target === "object" ? l.target?.id : l.target;
+        return `${src}>${tgt}`;
+      })
+      .join("|");
+    return `${nodeSig}__${linkSig}__${theme}`;
+  }
+
   // ── Fit all nodes into the current viewport ─────────────────────────────
   function fitToView() {
     if (!svgRef.current || !boundsRef.current || !zoomRef.current) return;
@@ -79,7 +112,10 @@ export default function BubbleMap({
     const ty = (h - k * (b.minY + b.maxY)) / 2;
     const fitTransform = d3.zoomIdentity.translate(tx, ty).scale(k);
 
-    d3.select(el).transition().duration(FIT_DURATION_MS).call(zoomRef.current.transform, fitTransform);
+    d3.select(el)
+      .transition()
+      .duration(FIT_DURATION_MS)
+      .call(zoomRef.current.transform, fitTransform);
   }
 
   // Expose fitToView to parent without forwardRef
@@ -101,7 +137,7 @@ export default function BubbleMap({
         const { width, height } = entry.contentRect;
         if (!width || !height) continue;
         viewportRef.current = { width, height };
-        updatePanHints();
+        schedulePanHintUpdate();
       }
     });
 
@@ -109,9 +145,23 @@ export default function BubbleMap({
     return () => observer.disconnect();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  useEffect(() => {
+    return () => {
+      if (panHintFrameRef.current !== null) {
+        window.cancelAnimationFrame(panHintFrameRef.current);
+      }
+    };
+  }, []);
+
   // ── Main effect: rebuild simulation when nodes/links change ──────────────
   useEffect(() => {
     if (!nodes.length || !svgRef.current) return;
+
+    const graphSignature = buildGraphSignature(nodes, links, colorTheme);
+    if (prevGraphSignatureRef.current === graphSignature) {
+      return;
+    }
+    prevGraphSignatureRef.current = graphSignature;
 
     const el = svgRef.current;
     const width = el.clientWidth || 900;
@@ -122,24 +172,7 @@ export default function BubbleMap({
     const svg = d3.select(el);
     svg.selectAll("*").remove();
 
-    // ── Defs: glow filter ─────────────────────────────────────────────────
-    const defs = svg.append("defs");
-    const filter = defs
-      .append("filter")
-      .attr("id", "bubble-glow")
-      .attr("x", "-50%")
-      .attr("y", "-50%")
-      .attr("width", "200%")
-      .attr("height", "200%");
-    filter
-      .append("feGaussianBlur")
-      .attr("stdDeviation", "5")
-      .attr("result", "blur");
-    const merge = filter.append("feMerge");
-    merge.append("feMergeNode").attr("in", "blur");
-    merge.append("feMergeNode").attr("in", "SourceGraphic");
-
-    const container = svg.append("g");
+    const container = svg.append("g").style("will-change", "transform");
 
     // ── Scales ────────────────────────────────────────────────────────────
     const maxVal = d3.max(nodes, (d) => d.value);
@@ -155,6 +188,8 @@ export default function BubbleMap({
     // ── Force simulation ──────────────────────────────────────────────────
     const simulation = d3
       .forceSimulation(simNodes)
+      .alphaDecay(0.04)
+      .alphaMin(0.02)
       .force(
         "link",
         d3
@@ -178,8 +213,14 @@ export default function BubbleMap({
         d3
           .forceCollide()
           .radius((d) => rScale(d.value) + 3)
-          .strength(0.72),
+          .strength(0.5)
+          .iterations(1),
       );
+
+    simulation.stop();
+    for (let i = 0; i < PREWARM_TICKS; i += 1) {
+      simulation.tick();
+    }
 
     // ── Links ─────────────────────────────────────────────────────────────
     const linkSel = container
@@ -190,8 +231,8 @@ export default function BubbleMap({
       .enter()
       .append("line")
       .attr("class", "bubble-link")
-      .attr("stroke", "rgba(100,160,255,0.12)")
-      .attr("stroke-width", 1);
+      .attr("stroke", graphThemeStyle.linkBase)
+      .attr("stroke-width", graphThemeStyle.linkWidthBase ?? 1);
 
     // ── Node groups ───────────────────────────────────────────────────────
     const nodeSel = container
@@ -204,23 +245,26 @@ export default function BubbleMap({
       .attr("class", "bubble-node")
       .style("cursor", "pointer")
       .on("mouseenter", function () {
+        const nodeData = d3.select(this).datum();
+        if (onNodeHover && nodeData) onNodeHover(nodeData);
         d3.select(this)
           .select(".bubble-glow")
           .interrupt()
           .transition()
           .duration(140)
-          .attr("fill-opacity", 0.2)
-          .attr("stroke", "rgba(255,255,255,0.55)")
-          .attr("stroke-width", 1.5)
-          .attr("stroke-opacity", 0.65);
+          .attr("fill-opacity", graphThemeStyle.hoverGlowOpacity ?? 0.2)
+          .attr("stroke", graphThemeStyle.hoverStroke ?? "rgba(255,255,255,0.55)")
+          .attr("stroke-width", graphThemeStyle.hoverStrokeWidth ?? 1.5)
+          .attr("stroke-opacity", graphThemeStyle.hoverStrokeOpacity ?? 0.65);
       })
       .on("mouseleave", function () {
+        if (onNodeHover) onNodeHover(null);
         d3.select(this)
           .select(".bubble-glow")
           .interrupt()
           .transition()
           .duration(160)
-          .attr("fill-opacity", 0.08)
+          .attr("fill-opacity", graphThemeStyle.baseGlowOpacity ?? 0.08)
           .attr("stroke", null)
           .attr("stroke-width", 0)
           .attr("stroke-opacity", 0);
@@ -233,7 +277,7 @@ export default function BubbleMap({
         d3
           .drag()
           .on("start", (event, d) => {
-            if (!event.active) simulation.alphaTarget(0.3).restart();
+            if (!event.active) simulation.alphaTarget(0.18).restart();
             d.fx = d.x;
             d.fy = d.y;
           })
@@ -253,11 +297,10 @@ export default function BubbleMap({
       .append("circle")
       .attr("class", "bubble-glow")
       .attr("r", (d) => rScale(d.value) + 8)
-      .attr("fill", (d) => TYPE_COLOR[d.type] || "#74b9ff")
-      .attr("fill-opacity", 0.08)
+      .attr("fill", (d) => holderPalette[d.type] || "#74b9ff")
+      .attr("fill-opacity", graphThemeStyle.baseGlowOpacity ?? 0.08)
       .attr("stroke-width", 0)
       .attr("stroke-opacity", 0)
-      .attr("filter", "url(#bubble-glow)")
       .style("pointer-events", "none");
 
     // Main bubble
@@ -265,9 +308,9 @@ export default function BubbleMap({
       .append("circle")
       .attr("class", "bubble-circle")
       .attr("r", (d) => rScale(d.value))
-      .attr("fill", (d) => TYPE_COLOR[d.type] || "#74b9ff")
+      .attr("fill", (d) => holderPalette[d.type] || "#74b9ff")
       .attr("fill-opacity", 0.72)
-      .attr("stroke", (d) => TYPE_COLOR[d.type] || "#74b9ff")
+      .attr("stroke", (d) => holderPalette[d.type] || "#74b9ff")
       .attr("stroke-width", 1.5)
       .attr("stroke-opacity", 0.85);
 
@@ -279,7 +322,7 @@ export default function BubbleMap({
       .text((d) => (d.label.length > 13 ? d.label.slice(0, 11) + "…" : d.label))
       .attr("text-anchor", "middle")
       .attr("dy", (d) => (rScale(d.value) > 36 ? "-0.3em" : "0.35em"))
-      .attr("fill", "white")
+      .attr("fill", bubbleLabelColor)
       .attr("font-size", (d) => Math.min(rScale(d.value) / 4.2, 13))
       .attr("font-weight", "600")
       .style("pointer-events", "none");
@@ -292,20 +335,42 @@ export default function BubbleMap({
       .text((d) => `${d.pct}%`)
       .attr("text-anchor", "middle")
       .attr("dy", "1.1em")
-      .attr("fill", "rgba(255,255,255,0.7)")
+      .attr("fill", bubblePctColor)
       .attr("font-size", (d) => Math.min(rScale(d.value) / 5.5, 11))
       .style("pointer-events", "none");
 
+    linkSel
+      .attr("x1", (d) => d.source.x)
+      .attr("y1", (d) => d.source.y)
+      .attr("x2", (d) => d.target.x)
+      .attr("y2", (d) => d.target.y);
+    nodeSel.attr("transform", (d) => `translate(${d.x ?? 0},${d.y ?? 0})`);
+
+    const initialBounds = {
+      minX: d3.min(
+        simNodes,
+        (d) => (d.x ?? width / 2) - (rScale(d.value) + 10),
+      ),
+      maxX: d3.max(
+        simNodes,
+        (d) => (d.x ?? width / 2) + (rScale(d.value) + 10),
+      ),
+      minY: d3.min(
+        simNodes,
+        (d) => (d.y ?? height / 2) - (rScale(d.value) + 10),
+      ),
+      maxY: d3.max(
+        simNodes,
+        (d) => (d.y ?? height / 2) + (rScale(d.value) + 10),
+      ),
+    };
+    boundsRef.current = initialBounds;
+    schedulePanHintUpdate(initialBounds);
+
     // ── Tick ──────────────────────────────────────────────────────────────
+    let tickCount = 0;
     simulation.on("tick", () => {
-      const bounds = {
-        minX: d3.min(simNodes, (d) => (d.x ?? width / 2) - (rScale(d.value) + 10)),
-        maxX: d3.max(simNodes, (d) => (d.x ?? width / 2) + (rScale(d.value) + 10)),
-        minY: d3.min(simNodes, (d) => (d.y ?? height / 2) - (rScale(d.value) + 10)),
-        maxY: d3.max(simNodes, (d) => (d.y ?? height / 2) + (rScale(d.value) + 10)),
-      };
-      boundsRef.current = bounds;
-      updatePanHints(bounds);
+      tickCount += 1;
 
       linkSel
         .attr("x1", (d) => d.source.x)
@@ -313,6 +378,29 @@ export default function BubbleMap({
         .attr("x2", (d) => d.target.x)
         .attr("y2", (d) => d.target.y);
       nodeSel.attr("transform", (d) => `translate(${d.x ?? 0},${d.y ?? 0})`);
+
+      if (tickCount % BOUNDS_UPDATE_EVERY === 0) {
+        const bounds = {
+          minX: d3.min(
+            simNodes,
+            (d) => (d.x ?? width / 2) - (rScale(d.value) + 10),
+          ),
+          maxX: d3.max(
+            simNodes,
+            (d) => (d.x ?? width / 2) + (rScale(d.value) + 10),
+          ),
+          minY: d3.min(
+            simNodes,
+            (d) => (d.y ?? height / 2) - (rScale(d.value) + 10),
+          ),
+          maxY: d3.max(
+            simNodes,
+            (d) => (d.y ?? height / 2) + (rScale(d.value) + 10),
+          ),
+        };
+        boundsRef.current = bounds;
+        schedulePanHintUpdate(bounds);
+      }
     });
 
     // ── Zoom / pan ────────────────────────────────────────────────────────
@@ -322,45 +410,88 @@ export default function BubbleMap({
       .on("zoom", (event) => {
         transformRef.current = event.transform;
         container.attr("transform", event.transform);
-        updatePanHints();
+        schedulePanHintUpdate();
       });
 
     zoomRef.current = zoom;
     svg.call(zoom).on("dblclick.zoom", null);
     svg.on("click", () => onNodeClick && onNodeClick(null));
+    simulation.alpha(0.14).restart();
 
     return () => {
+      if (onNodeHover) onNodeHover(null);
+      if (panHintFrameRef.current !== null) {
+        window.cancelAnimationFrame(panHintFrameRef.current);
+        panHintFrameRef.current = null;
+      }
       simulation.stop();
     };
-  }, [nodes, links]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [nodes, links, colorTheme]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Selection effect: update visuals only, no simulation restart ─────────
   useEffect(() => {
     if (!svgRef.current) return;
     const svg = d3.select(svgRef.current);
+    const connectedNodeIds = new Set();
+
+    if (selectedNodeId) {
+      connectedNodeIds.add(selectedNodeId);
+      svg.selectAll(".bubble-link").each((d) => {
+        const srcId = d.source?.id ?? d.source;
+        const tgtId = d.target?.id ?? d.target;
+        if (srcId === selectedNodeId || tgtId === selectedNodeId) {
+          connectedNodeIds.add(srcId);
+          connectedNodeIds.add(tgtId);
+        }
+      });
+    }
+
+    svg
+      .selectAll(".bubble-node")
+      .style("display", (d) =>
+        !selectedNodeId || connectedNodeIds.has(d.id) ? null : "none",
+      )
+      .style("pointer-events", (d) =>
+        !selectedNodeId || connectedNodeIds.has(d.id) ? null : "none",
+      );
 
     svg
       .selectAll(".bubble-circle")
       .attr("fill-opacity", (d) =>
-        !selectedNodeId || d.id === selectedNodeId ? 0.82 : 0.35,
+        !selectedNodeId || d.id === selectedNodeId
+          ? graphThemeStyle.selectedFillOpacity
+          : graphThemeStyle.fadedFillOpacity,
       )
-      .attr("stroke-width", (d) => (d.id === selectedNodeId ? 3 : 1.5));
+      .attr("stroke-width", (d) =>
+        d.id === selectedNodeId
+          ? graphThemeStyle.selectedStrokeWidth
+          : graphThemeStyle.defaultStrokeWidth,
+      );
 
     svg
       .selectAll(".bubble-link")
+      .style("display", (d) => {
+        const srcId = d.source?.id ?? d.source;
+        const tgtId = d.target?.id ?? d.target;
+        return !selectedNodeId || srcId === selectedNodeId || tgtId === selectedNodeId
+          ? null
+          : "none";
+      })
       .attr("stroke", (d) => {
         const srcId = d.source?.id ?? d.source;
         const tgtId = d.target?.id ?? d.target;
         return srcId === selectedNodeId || tgtId === selectedNodeId
-          ? "rgba(120,220,255,0.55)"
-          : "rgba(100,160,255,0.12)";
+          ? graphThemeStyle.linkActive
+          : graphThemeStyle.linkBase;
       })
       .attr("stroke-width", (d) => {
         const srcId = d.source?.id ?? d.source;
         const tgtId = d.target?.id ?? d.target;
-        return srcId === selectedNodeId || tgtId === selectedNodeId ? 2 : 1;
+        return srcId === selectedNodeId || tgtId === selectedNodeId
+          ? (graphThemeStyle.linkWidthActive ?? 2)
+          : (graphThemeStyle.linkWidthBase ?? 1);
       });
-  }, [selectedNodeId]);
+  }, [selectedNodeId, colorTheme]);
 
   return (
     <div className="bubble-map-shell">
@@ -373,18 +504,26 @@ export default function BubbleMap({
           background: "transparent",
         }}
       />
-      <div className={`map-pan-indicator map-pan-indicator-left ${panHints.left ? "is-visible" : ""}`}>
+      <div
+        className={`map-pan-indicator map-pan-indicator-left ${panHints.left ? "is-visible" : ""}`}
+      >
         <span>◀</span>
       </div>
-      <div className={`map-pan-indicator map-pan-indicator-right ${panHints.right ? "is-visible" : ""}`}>
+      <div
+        className={`map-pan-indicator map-pan-indicator-right ${panHints.right ? "is-visible" : ""}`}
+      >
         <span>▶</span>
       </div>
-      <div className={`map-pan-indicator map-pan-indicator-up ${panHints.up ? "is-visible" : ""}`}>
+      <div
+        className={`map-pan-indicator map-pan-indicator-up ${panHints.up ? "is-visible" : ""}`}
+      >
         <span>▲</span>
       </div>
-      <div className={`map-pan-indicator map-pan-indicator-down ${panHints.down ? "is-visible" : ""}`}>
+      <div
+        className={`map-pan-indicator map-pan-indicator-down ${panHints.down ? "is-visible" : ""}`}
+      >
         <span>▼</span>
-        </div>
       </div>
-    );
-  }
+    </div>
+  );
+}
