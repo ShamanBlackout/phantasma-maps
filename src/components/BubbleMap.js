@@ -1,18 +1,113 @@
-import React, { useEffect, useRef } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import * as d3 from "d3";
 import { HOLDER_TYPES } from "../data/mockData";
 
 const TYPE_COLOR = Object.fromEntries(
   Object.entries(HOLDER_TYPES).map(([k, v]) => [k, v.color]),
 );
+const PAN_HINT_THRESHOLD = 20;
+
+const FIT_DURATION_MS = 220;
 
 export default function BubbleMap({
   nodes,
   links,
   onNodeClick,
   selectedNodeId,
+  onReady,
 }) {
   const svgRef = useRef(null);
+  const boundsRef = useRef(null);
+  const transformRef = useRef(d3.zoomIdentity);
+  const viewportRef = useRef({ width: 0, height: 0 });
+  const zoomRef = useRef(null);
+  const [panHints, setPanHints] = useState({
+    left: false,
+    right: false,
+    up: false,
+    down: false,
+  });
+
+  function updatePanHints(nextBounds = boundsRef.current) {
+    const transform = transformRef.current;
+    const { width, height } = viewportRef.current;
+
+    if (!nextBounds || !width || !height) {
+      setPanHints({ left: false, right: false, up: false, down: false });
+      return;
+    }
+
+    const visibleLeft = (0 - transform.x) / transform.k;
+    const visibleRight = (width - transform.x) / transform.k;
+    const visibleTop = (0 - transform.y) / transform.k;
+    const visibleBottom = (height - transform.y) / transform.k;
+
+    const nextHints = {
+      left: nextBounds.minX < visibleLeft - PAN_HINT_THRESHOLD,
+      right: nextBounds.maxX > visibleRight + PAN_HINT_THRESHOLD,
+      up: nextBounds.minY < visibleTop - PAN_HINT_THRESHOLD,
+      down: nextBounds.maxY > visibleBottom + PAN_HINT_THRESHOLD,
+    };
+
+    setPanHints((current) => {
+      if (
+        current.left === nextHints.left &&
+        current.right === nextHints.right &&
+        current.up === nextHints.up &&
+        current.down === nextHints.down
+      ) {
+        return current;
+      }
+      return nextHints;
+    });
+  }
+
+  // ── Fit all nodes into the current viewport ─────────────────────────────
+  function fitToView() {
+    if (!svgRef.current || !boundsRef.current || !zoomRef.current) return;
+    const el = svgRef.current;
+    const w = el.clientWidth;
+    const h = el.clientHeight;
+    if (!w || !h) return;
+
+    const b = boundsRef.current;
+    const pad = 48;
+    const bw = b.maxX - b.minX + pad * 2;
+    const bh = b.maxY - b.minY + pad * 2;
+    const k = Math.min(w / bw, h / bh, 1);
+    const tx = (w - k * (b.minX + b.maxX)) / 2;
+    const ty = (h - k * (b.minY + b.maxY)) / 2;
+    const fitTransform = d3.zoomIdentity.translate(tx, ty).scale(k);
+
+    d3.select(el).transition().duration(FIT_DURATION_MS).call(zoomRef.current.transform, fitTransform);
+  }
+
+  // Expose fitToView to parent without forwardRef
+  const fitToViewRef = useRef(fitToView);
+  fitToViewRef.current = fitToView;
+  useEffect(() => {
+    if (!onReady) return undefined;
+    onReady({ fitToView: () => fitToViewRef.current() });
+    return () => onReady(null);
+  }, [onReady]);
+
+  // ── ResizeObserver: keep viewport ref in sync ─────────────────────────────
+  useEffect(() => {
+    const el = svgRef.current;
+    if (!el) return;
+
+    const observer = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        const { width, height } = entry.contentRect;
+        if (!width || !height) continue;
+        viewportRef.current = { width, height };
+        updatePanHints();
+      }
+    });
+
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Main effect: rebuild simulation when nodes/links change ──────────────
   useEffect(() => {
@@ -21,6 +116,8 @@ export default function BubbleMap({
     const el = svgRef.current;
     const width = el.clientWidth || 900;
     const height = el.clientHeight || 650;
+    viewportRef.current = { width, height };
+    transformRef.current = d3.zoomIdentity;
 
     const svg = d3.select(el);
     svg.selectAll("*").remove();
@@ -41,22 +138,6 @@ export default function BubbleMap({
     const merge = filter.append("feMerge");
     merge.append("feMergeNode").attr("in", "blur");
     merge.append("feMergeNode").attr("in", "SourceGraphic");
-
-    // Radial gradient background
-    const grad = defs
-      .append("radialGradient")
-      .attr("id", "bg-grad")
-      .attr("cx", "50%")
-      .attr("cy", "50%")
-      .attr("r", "70%");
-    grad.append("stop").attr("offset", "0%").attr("stop-color", "#0d0d2b");
-    grad.append("stop").attr("offset", "100%").attr("stop-color", "#070714");
-
-    svg
-      .append("rect")
-      .attr("width", width)
-      .attr("height", height)
-      .attr("fill", "url(#bg-grad)");
 
     const container = svg.append("g");
 
@@ -81,21 +162,23 @@ export default function BubbleMap({
           .id((d) => d.id)
           .distance(
             (l) =>
-              rScale(l.source.value || 0) + rScale(l.target.value || 0) + 28,
+              rScale(l.source.value || 0) + rScale(l.target.value || 0) + 18,
           )
           .strength(0.25),
       )
       .force(
         "charge",
-        d3.forceManyBody().strength((d) => -rScale(d.value) * 9),
+        d3.forceManyBody().strength((d) => -rScale(d.value) * 5.5),
       )
       .force("center", d3.forceCenter(width / 2, height / 2))
+      .force("x", d3.forceX(width / 2).strength(0.035))
+      .force("y", d3.forceY(height / 2).strength(0.035))
       .force(
         "collision",
         d3
           .forceCollide()
-          .radius((d) => rScale(d.value) + 6)
-          .strength(0.8),
+          .radius((d) => rScale(d.value) + 3)
+          .strength(0.72),
       );
 
     // ── Links ─────────────────────────────────────────────────────────────
@@ -120,6 +203,28 @@ export default function BubbleMap({
       .append("g")
       .attr("class", "bubble-node")
       .style("cursor", "pointer")
+      .on("mouseenter", function () {
+        d3.select(this)
+          .select(".bubble-glow")
+          .interrupt()
+          .transition()
+          .duration(140)
+          .attr("fill-opacity", 0.2)
+          .attr("stroke", "rgba(255,255,255,0.55)")
+          .attr("stroke-width", 1.5)
+          .attr("stroke-opacity", 0.65);
+      })
+      .on("mouseleave", function () {
+        d3.select(this)
+          .select(".bubble-glow")
+          .interrupt()
+          .transition()
+          .duration(160)
+          .attr("fill-opacity", 0.08)
+          .attr("stroke", null)
+          .attr("stroke-width", 0)
+          .attr("stroke-opacity", 0);
+      })
       .on("click", (event, d) => {
         event.stopPropagation();
         onNodeClick && onNodeClick(d);
@@ -150,6 +255,8 @@ export default function BubbleMap({
       .attr("r", (d) => rScale(d.value) + 8)
       .attr("fill", (d) => TYPE_COLOR[d.type] || "#74b9ff")
       .attr("fill-opacity", 0.08)
+      .attr("stroke-width", 0)
+      .attr("stroke-opacity", 0)
       .attr("filter", "url(#bubble-glow)")
       .style("pointer-events", "none");
 
@@ -191,6 +298,15 @@ export default function BubbleMap({
 
     // ── Tick ──────────────────────────────────────────────────────────────
     simulation.on("tick", () => {
+      const bounds = {
+        minX: d3.min(simNodes, (d) => (d.x ?? width / 2) - (rScale(d.value) + 10)),
+        maxX: d3.max(simNodes, (d) => (d.x ?? width / 2) + (rScale(d.value) + 10)),
+        minY: d3.min(simNodes, (d) => (d.y ?? height / 2) - (rScale(d.value) + 10)),
+        maxY: d3.max(simNodes, (d) => (d.y ?? height / 2) + (rScale(d.value) + 10)),
+      };
+      boundsRef.current = bounds;
+      updatePanHints(bounds);
+
       linkSel
         .attr("x1", (d) => d.source.x)
         .attr("y1", (d) => d.source.y)
@@ -203,8 +319,13 @@ export default function BubbleMap({
     const zoom = d3
       .zoom()
       .scaleExtent([0.2, 8])
-      .on("zoom", (event) => container.attr("transform", event.transform));
+      .on("zoom", (event) => {
+        transformRef.current = event.transform;
+        container.attr("transform", event.transform);
+        updatePanHints();
+      });
 
+    zoomRef.current = zoom;
     svg.call(zoom).on("dblclick.zoom", null);
     svg.on("click", () => onNodeClick && onNodeClick(null));
 
@@ -242,14 +363,28 @@ export default function BubbleMap({
   }, [selectedNodeId]);
 
   return (
-    <svg
-      ref={svgRef}
-      style={{
-        width: "100%",
-        height: "100%",
-        display: "block",
-        background: "#070714",
-      }}
-    />
-  );
-}
+    <div className="bubble-map-shell">
+      <svg
+        ref={svgRef}
+        style={{
+          width: "100%",
+          height: "100%",
+          display: "block",
+          background: "transparent",
+        }}
+      />
+      <div className={`map-pan-indicator map-pan-indicator-left ${panHints.left ? "is-visible" : ""}`}>
+        <span>◀</span>
+      </div>
+      <div className={`map-pan-indicator map-pan-indicator-right ${panHints.right ? "is-visible" : ""}`}>
+        <span>▶</span>
+      </div>
+      <div className={`map-pan-indicator map-pan-indicator-up ${panHints.up ? "is-visible" : ""}`}>
+        <span>▲</span>
+      </div>
+      <div className={`map-pan-indicator map-pan-indicator-down ${panHints.down ? "is-visible" : ""}`}>
+        <span>▼</span>
+        </div>
+      </div>
+    );
+  }
