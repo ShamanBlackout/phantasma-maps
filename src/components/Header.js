@@ -19,7 +19,8 @@ export default function Header({
     onSearch("");
   }
 
-  const priceUp = tokenInfo.priceChange24h >= 0;
+  const priceChange24h = Number(tokenInfo.priceChange24h) || 0;
+  const priceUp = priceChange24h >= 0;
   const priceUpdatedLabel = priceUpdatedAt
     ? new Date(priceUpdatedAt).toLocaleTimeString([], {
         hour: "2-digit",
@@ -85,10 +86,10 @@ export default function Header({
         <div className="header-price">
           <span className="header-price-symbol">{tokenInfo.name}</span>
           <span className="header-price-value">
-            ${tokenInfo.price.toFixed(3)}
+            ${tokenInfo.price.toFixed(5)}
           </span>
           <span className={`header-price-change ${priceUp ? "up" : "down"}`}>
-            {priceUp ? "▲" : "▼"} {Math.abs(tokenInfo.priceChange24h)}%
+            {priceUp ? "▲" : "▼"} {Math.abs(priceChange24h).toFixed(2)}%
           </span>
           <span className="header-price-updated">
             Updated {priceUpdatedLabel}

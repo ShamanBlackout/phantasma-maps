@@ -19,6 +19,16 @@ export default function BubbleMap({
 }) {
   const holderPalette = getHolderPalette(colorTheme);
   const graphThemeStyle = getGraphThemeStyle(colorTheme);
+  const {
+    selectedFillOpacity,
+    fadedFillOpacity,
+    selectedStrokeWidth,
+    defaultStrokeWidth,
+    linkActive,
+    linkBase,
+    linkWidthActive,
+    linkWidthBase,
+  } = graphThemeStyle;
   const bubbleLabelColor = colorTheme === "light" ? "#1f3248" : "white";
   const bubblePctColor =
     colorTheme === "light" ? "rgba(31,50,72,0.72)" : "rgba(255,255,255,0.7)";
@@ -473,13 +483,11 @@ export default function BubbleMap({
       .selectAll(".bubble-circle")
       .attr("fill-opacity", (d) =>
         !activeNodeId || d.id === activeNodeId
-          ? graphThemeStyle.selectedFillOpacity
-          : graphThemeStyle.fadedFillOpacity,
+          ? selectedFillOpacity
+          : fadedFillOpacity,
       )
       .attr("stroke-width", (d) =>
-        d.id === activeNodeId
-          ? graphThemeStyle.selectedStrokeWidth
-          : graphThemeStyle.defaultStrokeWidth,
+        d.id === activeNodeId ? selectedStrokeWidth : defaultStrokeWidth,
       );
 
     svg
@@ -497,15 +505,15 @@ export default function BubbleMap({
         const srcId = d.source?.id ?? d.source;
         const tgtId = d.target?.id ?? d.target;
         return srcId === activeNodeId || tgtId === activeNodeId
-          ? graphThemeStyle.linkActive
-          : graphThemeStyle.linkBase;
+          ? linkActive
+          : linkBase;
       })
       .attr("stroke-width", (d) => {
         const srcId = d.source?.id ?? d.source;
         const tgtId = d.target?.id ?? d.target;
         return srcId === activeNodeId || tgtId === activeNodeId
-          ? (graphThemeStyle.linkWidthActive ?? 2)
-          : (graphThemeStyle.linkWidthBase ?? 1);
+          ? (linkWidthActive ?? 2)
+          : (linkWidthBase ?? 1);
       })
       .attr("stroke-opacity", (d) => {
         if (!isHoverMode) return 1;
@@ -513,7 +521,18 @@ export default function BubbleMap({
         const tgtId = d.target?.id ?? d.target;
         return srcId === activeNodeId || tgtId === activeNodeId ? 1 : 0.2;
       });
-  }, [selectedNodeId, hoveredNodeId, colorTheme]);
+  }, [
+    selectedNodeId,
+    hoveredNodeId,
+    selectedFillOpacity,
+    fadedFillOpacity,
+    selectedStrokeWidth,
+    defaultStrokeWidth,
+    linkActive,
+    linkBase,
+    linkWidthActive,
+    linkWidthBase,
+  ]);
 
   return (
     <div className="bubble-map-shell">
