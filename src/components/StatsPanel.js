@@ -74,7 +74,7 @@ export default function StatsPanel({
             </div>
             <div className="stats-token-row">
               <span className="stats-label">Price</span>
-              <span className="stats-value">${tokenInfo.price.toFixed(3)}</span>
+              <span className="stats-value">${tokenInfo.price.toFixed(5)}</span>
             </div>
             <div className="stats-token-row">
               <span className="stats-label">Top 10 Hold</span>

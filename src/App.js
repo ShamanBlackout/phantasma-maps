@@ -20,20 +20,37 @@ function parseEnvMs(key, fallbackMs) {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallbackMs;
 }
 
+function parseEnvString(key, fallbackValue = "") {
+  const raw = process.env[key];
+  if (typeof raw !== "string") return fallbackValue;
+  const trimmed = raw.trim();
+  if (!trimmed) return fallbackValue;
+
+  // .env values are sometimes copied with wrapping quotes.
+  if (
+    (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+    (trimmed.startsWith("'") && trimmed.endsWith("'"))
+  ) {
+    return trimmed.slice(1, -1).trim() || fallbackValue;
+  }
+
+  return trimmed;
+}
+
 const PHANTASMA_EXPLORER_BASE =
-  process.env.REACT_APP_PHANTASMA_EXPLORER_BASE ||
+  parseEnvString("REACT_APP_PHANTASMA_EXPLORER_BASE") ||
   "https://explorer.phantasma.info/address/";
 const PHANTASMA_TX_EXPLORER_BASE =
-  process.env.REACT_APP_PHANTASMA_TX_EXPLORER_BASE ||
+  parseEnvString("REACT_APP_PHANTASMA_TX_EXPLORER_BASE") ||
   "https://explorer.phantasma.info/tx/";
 const SOUL_PRICE_API_URL =
-  process.env.REACT_APP_SOUL_PRICE_API_URL ||
+  parseEnvString("REACT_APP_SOUL_PRICE_API_URL") ||
   "https://api.coingecko.com/api/v3/simple/price?ids=phantasma&vs_currencies=usd&include_24hr_change=true";
 const CMC_SOUL_QUOTES_API_URL =
-  process.env.REACT_APP_CMC_SOUL_QUOTES_API_URL ||
+  parseEnvString("REACT_APP_CMC_SOUL_QUOTES_API_URL") ||
   "https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest?symbol=SOUL&convert=USD";
 const CMC_SOUL_SYMBOL =
-  (process.env.REACT_APP_CMC_SOUL_SYMBOL || "SOUL").toUpperCase();
+  (parseEnvString("REACT_APP_CMC_SOUL_SYMBOL", "SOUL") || "SOUL").toUpperCase();
 const SOUL_PRICE_BASE_POLL_INTERVAL_MS = parseEnvMs(
   "REACT_APP_SOUL_PRICE_BASE_POLL_INTERVAL_MS",
   5 * 60 * 1000,
@@ -46,10 +63,10 @@ const SOUL_PRICE_REQUEST_TIMEOUT_MS = parseEnvMs(
   "REACT_APP_SOUL_PRICE_REQUEST_TIMEOUT_MS",
   7000,
 );
-const CMC_API_KEY = process.env.REACT_APP_CMC_API_KEY;
-const CMC_PROXY_URL = process.env.REACT_APP_CMC_PROXY_URL;
+const CMC_API_KEY = parseEnvString("REACT_APP_CMC_API_KEY");
+const CMC_PROXY_URL = parseEnvString("REACT_APP_CMC_PROXY_URL");
 const CMC_ALLOW_BROWSER_DIRECT =
-  String(process.env.REACT_APP_CMC_ALLOW_BROWSER_DIRECT || "").toLowerCase() ===
+  String(parseEnvString("REACT_APP_CMC_ALLOW_BROWSER_DIRECT") || "").toLowerCase() ===
   "true";
 
 function parseRetryAfterMs(response) {
@@ -103,14 +120,18 @@ async function fetchJsonWithTimeout(url, options = {}) {
 }
 
 function parseCoinGeckoQuote(payload) {
-  const usdPrice = Number(payload?.phantasma?.usd);
-  const usdChange24h = Number(payload?.phantasma?.usd_24h_change);
+  const coinData =
+    payload?.phantasma ||
+    payload?.soul ||
+    (payload && typeof payload === "object" ? Object.values(payload)[0] : null);
+  const usdPrice = Number(coinData?.usd);
+  const usdChange24h = Number(coinData?.usd_24h_change);
   if (!Number.isFinite(usdPrice) || !Number.isFinite(usdChange24h)) {
     return null;
   }
   return {
     price: usdPrice,
-    priceChange24h: Number(usdChange24h.toFixed(2)),
+    priceChange24h: usdChange24h,
   };
 }
 
@@ -123,7 +144,7 @@ function parseCoinMarketCapQuote(payload) {
   }
   return {
     price: usdPrice,
-    priceChange24h: Number(usdChange24h.toFixed(2)),
+    priceChange24h: usdChange24h,
   };
 }
 
@@ -294,6 +315,7 @@ export default function App() {
   useEffect(() => {
     let isActive = true;
     let timeoutId;
+    let hasSuccessfulQuote = false;
     let nextPollDelayMs = 5000;
 
     function scheduleNextPoll(delayMs) {
@@ -322,8 +344,12 @@ export default function App() {
           if (hitRateLimit) {
             nextPollDelayMs = retryAfterMs || Math.min(nextPollDelayMs * 2, SOUL_PRICE_MAX_BACKOFF_MS);
           } else {
+            const bootstrapRetryFloorMs = 30000;
+            const retryFloorMs = hasSuccessfulQuote
+              ? SOUL_PRICE_BASE_POLL_INTERVAL_MS
+              : bootstrapRetryFloorMs;
             nextPollDelayMs = Math.min(
-              Math.max(nextPollDelayMs * 2, SOUL_PRICE_BASE_POLL_INTERVAL_MS),
+              Math.max(nextPollDelayMs * 2, retryFloorMs),
               SOUL_PRICE_MAX_BACKOFF_MS,
             );
           }
@@ -343,12 +369,20 @@ export default function App() {
           price: winner.quote.price,
           priceChange24h: winner.quote.priceChange24h,
         }));
+        hasSuccessfulQuote = true;
         setPriceLastUpdatedAt(Date.now());
         nextPollDelayMs = SOUL_PRICE_BASE_POLL_INTERVAL_MS;
         scheduleNextPoll(nextPollDelayMs);
       } catch {
         // Keep last successful price if the API is unreachable.
-        nextPollDelayMs = Math.min(Math.max(nextPollDelayMs * 2, SOUL_PRICE_BASE_POLL_INTERVAL_MS), SOUL_PRICE_MAX_BACKOFF_MS);
+        const bootstrapRetryFloorMs = 30000;
+        const retryFloorMs = hasSuccessfulQuote
+          ? SOUL_PRICE_BASE_POLL_INTERVAL_MS
+          : bootstrapRetryFloorMs;
+        nextPollDelayMs = Math.min(
+          Math.max(nextPollDelayMs * 2, retryFloorMs),
+          SOUL_PRICE_MAX_BACKOFF_MS,
+        );
         scheduleNextPoll(nextPollDelayMs);
       }
     }
