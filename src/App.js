@@ -48,6 +48,9 @@ const SOUL_PRICE_REQUEST_TIMEOUT_MS = parseEnvMs(
 );
 const CMC_API_KEY = process.env.REACT_APP_CMC_API_KEY;
 const CMC_PROXY_URL = process.env.REACT_APP_CMC_PROXY_URL;
+const CMC_ALLOW_BROWSER_DIRECT =
+  String(process.env.REACT_APP_CMC_ALLOW_BROWSER_DIRECT || "").toLowerCase() ===
+  "true";
 
 function parseRetryAfterMs(response) {
   const rawValue = response.headers.get("retry-after");
@@ -145,7 +148,19 @@ async function fetchSoulQuoteFromCoinGecko() {
 }
 
 async function fetchSoulQuoteFromCoinMarketCap() {
-  const endpoint = CMC_PROXY_URL || CMC_SOUL_QUOTES_API_URL;
+  const hasProxy = Boolean(CMC_PROXY_URL);
+
+  // CoinMarketCap Pro typically blocks browser-origin requests (CORS).
+  // Prefer a server-side proxy unless direct browser mode is explicitly enabled.
+  if (!hasProxy && !CMC_ALLOW_BROWSER_DIRECT) {
+    return {
+      ok: false,
+      status: 0,
+      retryAfterMs: null,
+    };
+  }
+
+  const endpoint = hasProxy ? CMC_PROXY_URL : CMC_SOUL_QUOTES_API_URL;
   const headers = {
     Accept: "application/json",
   };
@@ -154,8 +169,8 @@ async function fetchSoulQuoteFromCoinMarketCap() {
     headers["X-CMC_PRO_API_KEY"] = CMC_API_KEY;
   }
 
-  // Without an API key, fallback via CoinMarketCap is expected to be unavailable unless a proxy is configured.
-  if (!CMC_API_KEY && !CMC_PROXY_URL) {
+  // Direct browser mode requires a key; proxy mode can authenticate server-side.
+  if (!CMC_API_KEY && !hasProxy) {
     return {
       ok: false,
       status: 401,
