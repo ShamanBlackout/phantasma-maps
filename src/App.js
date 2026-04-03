@@ -4,8 +4,6 @@ import BubbleMap from "./components/BubbleMap";
 import StatsPanel from "./components/StatsPanel";
 import {
   HOLDER_TYPES,
-  holders,
-  links,
   MOCK_TOKEN_DATA_BY_SYMBOL,
   MOCK_TOKEN_SYMBOLS,
   TOKEN_INFO,
@@ -276,20 +274,97 @@ function buildGraphDataFromApi(graphPayload, totalSupply) {
   };
 }
 
+function buildNeighborFocusedGraph(graphData, rootAddress) {
+  const normalizedRoot = String(rootAddress || "").trim();
+  if (!normalizedRoot) return graphData;
+
+  const rootNode = graphData.nodes.find((node) => node.id === normalizedRoot);
+  if (!rootNode) return null;
+
+  const neighboringLinks = graphData.links.filter(
+    (link) => link.source === normalizedRoot || link.target === normalizedRoot,
+  );
+
+  if (!neighboringLinks.length) {
+    return {
+      nodes: [
+        {
+          ...rootNode,
+          isSearchRoot: true,
+          visualValue: Math.max(rootNode.value || 1, 10),
+        },
+      ],
+      links: [],
+      totalValue: rootNode.value || 0,
+      rootNodeId: normalizedRoot,
+    };
+  }
+
+  const visibleNodeIds = new Set([normalizedRoot]);
+  neighboringLinks.forEach((link) => {
+    visibleNodeIds.add(link.source);
+    visibleNodeIds.add(link.target);
+  });
+
+  const scopedNodes = graphData.nodes.filter((node) =>
+    visibleNodeIds.has(node.id),
+  );
+  const scopedLinks = neighboringLinks;
+
+  const neighborVisualValues = scopedNodes
+    .filter((node) => node.id !== normalizedRoot)
+    .map((node) => Math.max((node.value || 1) * 0.35, 1));
+  const maxNeighborVisual = neighborVisualValues.length
+    ? Math.max(...neighborVisualValues)
+    : 1;
+
+  const emphasizedNodes = scopedNodes.map((node) => {
+    if (node.id === normalizedRoot) {
+      return {
+        ...node,
+        isSearchRoot: true,
+        visualValue: Math.max(node.value || 1, maxNeighborVisual * 2.1),
+      };
+    }
+
+    return {
+      ...node,
+      isSearchRoot: false,
+      visualValue: Math.max((node.value || 1) * 0.35, 1),
+    };
+  });
+
+  const scopedTotal = emphasizedNodes.reduce(
+    (sum, node) => sum + Number(node.value || 0),
+    0,
+  );
+
+  return {
+    nodes: emphasizedNodes,
+    links: scopedLinks,
+    totalValue: scopedTotal,
+    rootNodeId: normalizedRoot,
+  };
+}
+
 function createTokensEndpoint() {
   const base = MAPS_API_BASE_URL.replace(/\/+$/, "");
   return `${base}/tokens`;
 }
 
-function createGraphEndpoint(tokenSymbol) {
+function createGraphEndpoint(tokenSymbol, rootAddress = "") {
   const base = MAPS_API_BASE_URL.replace(/\/+$/, "");
-  if (MAPS_API_ROOT_ADDRESS) {
+  const activeRootAddress = String(
+    rootAddress || MAPS_API_ROOT_ADDRESS || "",
+  ).trim();
+
+  if (activeRootAddress) {
     const params = new URLSearchParams({
       token: tokenSymbol,
       depth: String(MAPS_API_GRAPH_DEPTH),
       edgeLimit: String(MAPS_API_GRAPH_EDGE_LIMIT),
     });
-    return `${base}/graph/address/${encodeURIComponent(MAPS_API_ROOT_ADDRESS)}?${params.toString()}`;
+    return `${base}/graph/address/${encodeURIComponent(activeRootAddress)}?${params.toString()}`;
   }
 
   return `${base}/graph/token/${encodeURIComponent(tokenSymbol)}`;
@@ -478,23 +553,14 @@ export default function App() {
       return DEFAULT_MAPS_API_TOKEN_SYMBOL;
     }
   });
-  const [availableTokenSymbols, setAvailableTokenSymbols] = useState([
-    ...MOCK_TOKEN_SYMBOLS,
-  ]);
-  const [trackedTokenSupply, setTrackedTokenSupply] = useState(
-    getMockTokenData(selectedTokenSymbol)?.tokenInfo?.totalSupply ||
-      getMockTokenData(DEFAULT_MAPS_API_TOKEN_SYMBOL)?.tokenInfo?.totalSupply ||
-      TOKEN_INFO.totalSupply,
-  );
+  const [apiTokenSymbols, setApiTokenSymbols] = useState([]);
+  const [trackedTokenSupply, setTrackedTokenSupply] = useState(0);
   const [tokenSelectorStatus, setTokenSelectorStatus] = useState("");
-  const [mapNodes, setMapNodes] = useState(
-    getMockTokenData(selectedTokenSymbol)?.holders || holders,
-  );
-  const [mapLinks, setMapLinks] = useState(
-    getMockTokenData(selectedTokenSymbol)?.links || links,
-  );
+  const [mapNodes, setMapNodes] = useState([]);
+  const [mapLinks, setMapLinks] = useState([]);
   const [isMapLoading, setIsMapLoading] = useState(false);
   const [mapDataStatus, setMapDataStatus] = useState("");
+  const [isUsingMockApiFallback, setIsUsingMockApiFallback] = useState(false);
   const [selectedNodeApiTransactions, setSelectedNodeApiTransactions] =
     useState([]);
   const [
@@ -507,6 +573,9 @@ export default function App() {
   ] = useState(false);
   const [priceLastUpdatedAt, setPriceLastUpdatedAt] = useState(null);
   const [searchQuery, setSearchQuery] = useState("");
+  const [searchedRootAddress, setSearchedRootAddress] = useState(
+    MAPS_API_ROOT_ADDRESS || "",
+  );
   const [colorTheme, setColorTheme] = useState(() => {
     try {
       const stored = window.localStorage.getItem(COLOR_THEME_STORAGE_KEY);
@@ -553,6 +622,30 @@ export default function App() {
     }
   }, [selectedTokenSymbol]);
 
+  function isPotentialAddress(rawValue) {
+    const value = String(rawValue || "").trim();
+    return /^P[a-zA-Z0-9]{20,}$/.test(value);
+  }
+
+  function handleHeaderSearch(rawValue) {
+    const value = String(rawValue || "").trim();
+
+    if (!value) {
+      setSearchQuery("");
+      setSearchedRootAddress(MAPS_API_ROOT_ADDRESS || "");
+      return;
+    }
+
+    if (isPotentialAddress(value)) {
+      setSearchQuery("");
+      setSearchedRootAddress(value);
+      return;
+    }
+
+    setSearchedRootAddress(MAPS_API_ROOT_ADDRESS || "");
+    setSearchQuery(value);
+  }
+
   useEffect(() => {
     let isMounted = true;
 
@@ -566,13 +659,12 @@ export default function App() {
       if (!isMounted) return;
 
       if (!result.ok) {
-        const fallbackTokens = [
-          ...new Set([selectedTokenSymbol, ...MOCK_TOKEN_SYMBOLS]),
-        ];
-        setAvailableTokenSymbols(fallbackTokens);
         setTokenSelectorStatus(
-          "API token list unavailable; showing mock tokens",
+          result.status === 0
+            ? "API token list unavailable"
+            : `API token list request failed (${result.status})`,
         );
+        setApiTokenSymbols([]);
         return;
       }
 
@@ -580,38 +672,36 @@ export default function App() {
         ? result.payload.items
         : [];
       const nextTokens = [
-        ...new Set([
-          ...apiItems
+        ...new Set(
+          apiItems
             .map((token) =>
               String(token || "")
                 .trim()
                 .toUpperCase(),
             )
             .filter(Boolean),
-          ...MOCK_TOKEN_SYMBOLS,
-        ]),
+        ),
       ];
 
       if (!nextTokens.length) {
-        setAvailableTokenSymbols(MOCK_TOKEN_SYMBOLS);
-        setTokenSelectorStatus("No API tokens available; showing mock tokens");
+        setApiTokenSymbols([]);
+        setTokenSelectorStatus("No API tokens available");
         return;
       }
 
+      setApiTokenSymbols(nextTokens);
+
       if (!nextTokens.includes(selectedTokenSymbol)) {
-        nextTokens.unshift(selectedTokenSymbol);
+        setSelectedTokenSymbol(nextTokens[0]);
       }
 
-      setAvailableTokenSymbols(nextTokens);
       setTokenSelectorStatus(`Showing ${nextTokens.length} tracked tokens`);
     }
 
     fetchAvailableTokens().catch(() => {
       if (!isMounted) return;
-      setAvailableTokenSymbols([
-        ...new Set([selectedTokenSymbol, ...MOCK_TOKEN_SYMBOLS]),
-      ]);
-      setTokenSelectorStatus("API token list unavailable; showing mock tokens");
+      setApiTokenSymbols([]);
+      setTokenSelectorStatus("API token list unavailable");
     });
 
     return () => {
@@ -624,26 +714,52 @@ export default function App() {
     [selectedTokenSymbol],
   );
 
+  const activeGraphRootAddress = useMemo(
+    () => String(searchedRootAddress || MAPS_API_ROOT_ADDRESS || "").trim(),
+    [searchedRootAddress],
+  );
+
+  const availableTokenSymbols = useMemo(() => {
+    if (isUsingMockApiFallback) {
+      return [...new Set([selectedTokenSymbol, ...MOCK_TOKEN_SYMBOLS])];
+    }
+
+    if (apiTokenSymbols.length) {
+      return apiTokenSymbols;
+    }
+
+    return selectedTokenSymbol ? [selectedTokenSymbol] : [];
+  }, [apiTokenSymbols, isUsingMockApiFallback, selectedTokenSymbol]);
+
   const activeTokenInfo = useMemo(() => {
     const fallbackTokenInfo = selectedMockTokenData?.tokenInfo;
     const isSoul = selectedTokenSymbol === TOKEN_INFO.name;
     return {
-      ...(fallbackTokenInfo || TOKEN_INFO),
       name: selectedTokenSymbol,
       fullName:
-        fallbackTokenInfo?.fullName ||
+        (isUsingMockApiFallback ? fallbackTokenInfo?.fullName : null) ||
         (isSoul ? TOKEN_INFO.fullName : `${selectedTokenSymbol} Token`),
+      chain: TOKEN_INFO.chain,
       totalSupply:
         trackedTokenSupply > 0
           ? trackedTokenSupply
-          : (fallbackTokenInfo?.totalSupply ??
-            (isSoul ? TOKEN_INFO.totalSupply : 0)),
-      price: isSoul ? liveTokenInfo.price : (fallbackTokenInfo?.price ?? null),
+          : isUsingMockApiFallback
+            ? (fallbackTokenInfo?.totalSupply ??
+              (isSoul ? TOKEN_INFO.totalSupply : 0))
+            : 0,
+      price: isSoul
+        ? liveTokenInfo.price
+        : isUsingMockApiFallback
+          ? (fallbackTokenInfo?.price ?? null)
+          : null,
       priceChange24h: isSoul
         ? liveTokenInfo.priceChange24h
-        : (fallbackTokenInfo?.priceChange24h ?? null),
+        : isUsingMockApiFallback
+          ? (fallbackTokenInfo?.priceChange24h ?? null)
+          : null,
     };
   }, [
+    isUsingMockApiFallback,
     selectedMockTokenData,
     selectedTokenSymbol,
     trackedTokenSupply,
@@ -660,9 +776,16 @@ export default function App() {
       setHoveredNode(null);
       setMapNodes([]);
       setMapLinks([]);
-      setMapDataStatus(`Generating maps for ${selectedTokenSymbol}...`);
+      setMapDataStatus(
+        activeGraphRootAddress
+          ? `Generating maps for ${selectedTokenSymbol} around ${shortenAddress(activeGraphRootAddress)}...`
+          : `Generating maps for ${selectedTokenSymbol}...`,
+      );
 
-      const graphEndpoint = createGraphEndpoint(selectedTokenSymbol);
+      const graphEndpoint = createGraphEndpoint(
+        selectedTokenSymbol,
+        activeGraphRootAddress,
+      );
       const result = await fetchJsonWithTimeout(
         graphEndpoint,
         { cache: "no-store" },
@@ -672,58 +795,92 @@ export default function App() {
       if (!isMounted) return;
 
       if (!result.ok) {
-        setTrackedTokenSupply(
-          selectedMockTokenData?.tokenInfo?.totalSupply || 0,
-        );
-        setMapNodes(selectedMockTokenData?.holders || []);
-        setMapLinks(selectedMockTokenData?.links || []);
-        setMapDataStatus("Using fallback map data (API unavailable).");
+        if (result.status === 0) {
+          setIsUsingMockApiFallback(true);
+          setTrackedTokenSupply(
+            selectedMockTokenData?.tokenInfo?.totalSupply || 0,
+          );
+          setMapNodes(selectedMockTokenData?.holders || []);
+          setMapLinks(selectedMockTokenData?.links || []);
+          setTokenSelectorStatus("API unavailable; showing mock tokens");
+          setMapDataStatus("Using fallback map data (API unavailable).");
+        } else {
+          setIsUsingMockApiFallback(false);
+          setTrackedTokenSupply(0);
+          setMapNodes([]);
+          setMapLinks([]);
+          setMapDataStatus(`Graph request failed (${result.status}).`);
+        }
         setIsMapLoading(false);
         return;
       }
 
-      const mappedGraph = buildGraphDataFromApi(
-        result.payload,
-        selectedMockTokenData?.tokenInfo?.totalSupply || 0,
-      );
+      setIsUsingMockApiFallback(false);
+
+      const mappedGraph = buildGraphDataFromApi(result.payload, 0);
 
       if (
         !mappedGraph ||
         !mappedGraph.nodes.length ||
         !mappedGraph.links.length
       ) {
-        setTrackedTokenSupply(
-          selectedMockTokenData?.tokenInfo?.totalSupply || 0,
-        );
-        setMapNodes(selectedMockTokenData?.holders || []);
-        setMapLinks(selectedMockTokenData?.links || []);
-        setMapDataStatus(
-          "Using fallback map data (API returned no graph edges).",
-        );
+        setTrackedTokenSupply(0);
+        setMapNodes([]);
+        setMapLinks([]);
+        setMapDataStatus("API returned no graph data.");
         setIsMapLoading(false);
         return;
       }
 
-      setMapNodes(mappedGraph.nodes);
-      setMapLinks(mappedGraph.links);
-      setTrackedTokenSupply(mappedGraph.totalValue || 0);
-      setMapDataStatus(`Live graph loaded from ${graphEndpoint}`);
+      const focusedGraph = searchedRootAddress
+        ? buildNeighborFocusedGraph(mappedGraph, activeGraphRootAddress)
+        : mappedGraph;
+
+      if (!focusedGraph || !focusedGraph.nodes.length) {
+        setTrackedTokenSupply(0);
+        setMapNodes([]);
+        setMapLinks([]);
+        setMapDataStatus("Searched address not found in graph data.");
+        setIsMapLoading(false);
+        return;
+      }
+
+      setMapNodes(focusedGraph.nodes);
+      setMapLinks(focusedGraph.links);
+      setTrackedTokenSupply(focusedGraph.totalValue || 0);
+      if (focusedGraph.rootNodeId) {
+        const focusedRootNode = focusedGraph.nodes.find(
+          (node) => node.id === focusedGraph.rootNodeId,
+        );
+        setSelectedNode(focusedRootNode || null);
+      }
+      setMapDataStatus(
+        activeGraphRootAddress
+          ? `Live graph loaded for ${shortenAddress(activeGraphRootAddress)}`
+          : `Live graph loaded from ${graphEndpoint}`,
+      );
       setIsMapLoading(false);
     }
 
     fetchMapGraph().catch(() => {
       if (!isMounted) return;
-      setTrackedTokenSupply(selectedMockTokenData?.tokenInfo?.totalSupply || 0);
-      setMapNodes(selectedMockTokenData?.holders || []);
-      setMapLinks(selectedMockTokenData?.links || []);
-      setMapDataStatus("Using fallback map data (graph fetch failed).");
+      setIsUsingMockApiFallback(false);
+      setTrackedTokenSupply(0);
+      setMapNodes([]);
+      setMapLinks([]);
+      setMapDataStatus("Unable to process graph data.");
       setIsMapLoading(false);
     });
 
     return () => {
       isMounted = false;
     };
-  }, [selectedMockTokenData, selectedTokenSymbol]);
+  }, [
+    activeGraphRootAddress,
+    searchedRootAddress,
+    selectedMockTokenData,
+    selectedTokenSymbol,
+  ]);
 
   useEffect(() => {
     let isActive = true;
@@ -1279,7 +1436,7 @@ export default function App() {
   return (
     <div className={`app-root theme-${colorTheme}`}>
       <Header
-        onSearch={setSearchQuery}
+        onSearch={handleHeaderSearch}
         tokenInfo={activeTokenInfo}
         priceUpdatedAt={priceLastUpdatedAt}
         colorTheme={colorTheme}
