@@ -526,3 +526,183 @@ export const links = [
     transactionHash,
   };
 });
+
+function makeShortAddress(address) {
+  if (typeof address !== "string" || address.length <= 10) return address;
+  return `${address.slice(0, 4)}...${address.slice(-3)}`;
+}
+
+function buildVariantAddress(symbol, type, index) {
+  const typeCode = String(type || "holder")
+    .slice(0, 3)
+    .toUpperCase();
+  const serial = String(index + 1).padStart(2, "0");
+  return `P2${symbol}${typeCode}${serial}FsuWcY9JeGKdVXnZ4kQ7Rmj6${symbol}${serial}`;
+}
+
+function buildVariantDataset(config) {
+  const {
+    symbol,
+    fullName,
+    totalSupply,
+    price,
+    priceChange24h,
+    holderMultiplier,
+    txMultiplier,
+    labelsByType,
+  } = config;
+
+  const addressMap = new Map();
+  const typeCounters = new Map();
+
+  const variantHolders = holders.map((holder, index) => {
+    const nextTypeIndex = typeCounters.get(holder.type) || 0;
+    typeCounters.set(holder.type, nextTypeIndex + 1);
+
+    const id = buildVariantAddress(symbol, holder.type, index);
+    const value = Math.max(1, Math.round(holder.value * holderMultiplier));
+    const pct = ((value / totalSupply) * 100).toFixed(2);
+    const label =
+      labelsByType?.[holder.type]?.[nextTypeIndex] ||
+      `${symbol} ${holder.label}`;
+
+    addressMap.set(holder.id, id);
+
+    return {
+      ...holder,
+      id,
+      label,
+      shortAddr: makeShortAddress(id),
+      value,
+      pct,
+      sentTransactions: Math.max(
+        6,
+        Math.round(holder.sentTransactions * txMultiplier),
+      ),
+      receivedTransactions: Math.max(
+        5,
+        Math.round(holder.receivedTransactions * txMultiplier),
+      ),
+    };
+  });
+
+  const variantLinks = links.map((link, index) => {
+    const source = addressMap.get(link.source);
+    const target = addressMap.get(link.target);
+
+    return {
+      ...link,
+      source,
+      target,
+      sentTransactions: Math.max(
+        4,
+        Math.round(link.sentTransactions * txMultiplier),
+      ),
+      receivedTransactions: Math.max(
+        4,
+        Math.round(link.receivedTransactions * txMultiplier),
+      ),
+      transactionVolume: Math.max(
+        25,
+        Math.round(link.transactionVolume * holderMultiplier * txMultiplier),
+      ),
+      transactionHash: buildFakeTransactionHash(
+        `${symbol}:${source}`,
+        `${symbol}:${target}`,
+        index,
+      ),
+    };
+  });
+
+  return {
+    tokenInfo: {
+      name: symbol,
+      fullName,
+      chain: TOKEN_INFO.chain,
+      totalSupply,
+      price,
+      priceChange24h,
+    },
+    holders: variantHolders,
+    links: variantLinks,
+  };
+}
+
+const AURA_DATA = buildVariantDataset({
+  symbol: "AURA",
+  fullName: "Aura Flux",
+  totalSupply: 41200000,
+  price: 1.184,
+  priceChange24h: 7.8,
+  holderMultiplier: 0.44,
+  txMultiplier: 0.82,
+  labelsByType: {
+    team: ["Aura Treasury", "Flux Growth Fund"],
+    contract: ["Aura Vault", "Prism Router"],
+    exchange: ["Sunset Exchange", "Horizon Desk", "SignalX"],
+    whale: [
+      "Orbit Whale",
+      "Comet Whale",
+      "Beacon Whale",
+      "Northwind Whale",
+      "Quartz Whale",
+    ],
+  },
+});
+
+const NOVA_DATA = buildVariantDataset({
+  symbol: "NOVA",
+  fullName: "Nova Circuit",
+  totalSupply: 275000000,
+  price: 0.0724,
+  priceChange24h: -2.3,
+  holderMultiplier: 1.28,
+  txMultiplier: 1.36,
+  labelsByType: {
+    team: ["Nova Core Treasury", "Ignition Reserve"],
+    contract: ["Nova Staking Core", "Nova LP Nexus"],
+    exchange: ["Cinder Market", "Atlas Exchange", "DeepSpace CEX"],
+    whale: [
+      "Helios Fund",
+      "Apex Whale",
+      "Meteor Whale",
+      "Vector Whale",
+      "Relay Whale",
+    ],
+  },
+});
+
+const GLINT_DATA = buildVariantDataset({
+  symbol: "GLINT",
+  fullName: "Glint Alloy",
+  totalSupply: 9800000,
+  price: 3.61,
+  priceChange24h: 14.9,
+  holderMultiplier: 0.16,
+  txMultiplier: 0.58,
+  labelsByType: {
+    team: ["Glint Treasury", "Alloy Reserve"],
+    contract: ["Glint Forge", "Alloy Pool"],
+    exchange: ["Mint Harbor", "Auric Exchange", "Glassbook"],
+    whale: [
+      "Foundry Whale",
+      "Lattice Whale",
+      "Pulse Whale",
+      "Mirror Whale",
+      "Arc Whale",
+    ],
+  },
+});
+
+export const MOCK_TOKEN_DATA_BY_SYMBOL = {
+  [TOKEN_INFO.name]: {
+    tokenInfo: TOKEN_INFO,
+    holders,
+    links,
+  },
+  AURA: AURA_DATA,
+  NOVA: NOVA_DATA,
+  GLINT: GLINT_DATA,
+};
+
+export const MOCK_TOKEN_SYMBOLS = Object.keys(MOCK_TOKEN_DATA_BY_SYMBOL);

@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { HOLDER_TYPES } from "../data/mockData";
 import { getHolderPalette } from "../theme/holderPalettes";
 
@@ -11,6 +11,10 @@ function fmt(n) {
 export default function StatsPanel({
   holders,
   tokenInfo,
+  availableTokens,
+  selectedTokenSymbol,
+  onTokenChange,
+  tokenSelectorStatus,
   selectedNode,
   onNodeSelect,
   copiedAddress,
@@ -21,15 +25,77 @@ export default function StatsPanel({
   onToggleCollapse,
 }) {
   const holderPalette = getHolderPalette(colorTheme);
+  const totalSupply = Number(tokenInfo.totalSupply) || 0;
+  const hasPrice = Number.isFinite(tokenInfo.price);
+  const [isTokenMenuOpen, setIsTokenMenuOpen] = useState(false);
+  const [tokenSearchQuery, setTokenSearchQuery] = useState("");
+  const [tokenMenuOffset, setTokenMenuOffset] = useState({ x: 0, y: 0 });
+  const tokenSearchInputRef = useRef(null);
 
   const top10pct = holders
     .slice()
     .sort((a, b) => b.value - a.value)
     .slice(0, 10)
     .reduce((sum, h) => sum + h.value, 0);
-  const top10share = ((top10pct / tokenInfo.totalSupply) * 100).toFixed(1);
+  const top10share =
+    totalSupply > 0 ? ((top10pct / totalSupply) * 100).toFixed(1) : "0.0";
 
   const sorted = holders.slice().sort((a, b) => b.value - a.value);
+  const normalizedTokenSearch = tokenSearchQuery.trim().toLowerCase();
+  const filteredTokenSymbols = (availableTokens || []).filter((tokenSymbol) =>
+    String(tokenSymbol || "")
+      .toLowerCase()
+      .includes(normalizedTokenSearch),
+  );
+
+  useEffect(() => {
+    if (!isTokenMenuOpen) return undefined;
+
+    function onKeyDown(event) {
+      if (event.key === "Escape") {
+        setIsTokenMenuOpen(false);
+      }
+    }
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [isTokenMenuOpen]);
+
+  useEffect(() => {
+    if (!isTokenMenuOpen) {
+      setTokenSearchQuery("");
+      return;
+    }
+
+    window.requestAnimationFrame(() => {
+      tokenSearchInputRef.current?.focus();
+      tokenSearchInputRef.current?.select();
+    });
+  }, [isTokenMenuOpen]);
+
+  function handleTokenPick(tokenSymbol) {
+    onTokenChange?.(tokenSymbol);
+    setIsTokenMenuOpen(false);
+  }
+
+  function handleTokenMenuToggle(event) {
+    if (isTokenMenuOpen) {
+      setIsTokenMenuOpen(false);
+      return;
+    }
+
+    const rect = event.currentTarget.getBoundingClientRect();
+    const triggerCenterX = rect.left + rect.width / 2;
+    const triggerCenterY = rect.top + rect.height / 2;
+    const viewportCenterX = window.innerWidth / 2;
+    const viewportCenterY = window.innerHeight / 2;
+
+    setTokenMenuOffset({
+      x: triggerCenterX - viewportCenterX,
+      y: triggerCenterY - viewportCenterY,
+    });
+    setIsTokenMenuOpen(true);
+  }
 
   return (
     <aside className={`stats-panel ${isCollapsed ? "is-collapsed" : ""}`}>
@@ -59,22 +125,46 @@ export default function StatsPanel({
           <div className="stats-card">
             <div className="stats-token-header">
               <div className="stats-token-icon">◈</div>
-              <div>
+              <div className="stats-token-meta">
                 <div className="stats-token-name">{tokenInfo.name}</div>
                 <div className="stats-token-fullname">{tokenInfo.fullName}</div>
               </div>
             </div>
+            <div className="stats-token-select-row">
+              <span className="stats-label">Tracked Token</span>
+              <button
+                type="button"
+                className={`map-selected-show-transfers stats-token-picker-trigger ${isTokenMenuOpen ? "is-open" : ""}`}
+                onClick={handleTokenMenuToggle}
+                aria-haspopup="listbox"
+                aria-expanded={isTokenMenuOpen}
+                aria-label="Open tracked token list"
+              >
+                <span className="stats-token-picker-label">Tracked Token</span>
+                <span>{selectedTokenSymbol || "Select Token"}</span>
+                <span className="stats-token-picker-caret">▾</span>
+              </button>
+            </div>
+            {tokenSelectorStatus ? (
+              <div className="stats-token-select-status">
+                {tokenSelectorStatus}
+              </div>
+            ) : null}
             <div className="stats-token-row">
               <span className="stats-label">Chain</span>
               <span className="stats-value">{tokenInfo.chain}</span>
             </div>
             <div className="stats-token-row">
               <span className="stats-label">Total Supply</span>
-              <span className="stats-value">{fmt(tokenInfo.totalSupply)}</span>
+              <span className="stats-value">
+                {totalSupply > 0 ? fmt(totalSupply) : "N/A"}
+              </span>
             </div>
             <div className="stats-token-row">
               <span className="stats-label">Price</span>
-              <span className="stats-value">${tokenInfo.price.toFixed(5)}</span>
+              <span className="stats-value">
+                {hasPrice ? `$${tokenInfo.price.toFixed(5)}` : "N/A"}
+              </span>
             </div>
             <div className="stats-token-row">
               <span className="stats-label">Top 10 Hold</span>
@@ -209,6 +299,74 @@ export default function StatsPanel({
           </div>
         </div>
       )}
+      {isTokenMenuOpen ? (
+        <div
+          className="token-picker-backdrop"
+          onClick={() => setIsTokenMenuOpen(false)}
+        >
+          <div
+            className="token-picker-modal"
+            onClick={(event) => event.stopPropagation()}
+            style={{
+              "--token-picker-offset-x": `${tokenMenuOffset.x}px`,
+              "--token-picker-offset-y": `${tokenMenuOffset.y}px`,
+            }}
+          >
+            <div className="token-picker-modal-head">
+              <div>
+                <h3>Select Token</h3>
+                <p>Search and switch tracked tokens</p>
+              </div>
+              <button
+                type="button"
+                className="token-picker-close"
+                onClick={() => setIsTokenMenuOpen(false)}
+                aria-label="Close token picker"
+              >
+                ×
+              </button>
+            </div>
+            <div className="token-picker-modal-body">
+              <div className="stats-token-picker-search-wrap">
+                <input
+                  ref={tokenSearchInputRef}
+                  className="stats-token-picker-search"
+                  type="text"
+                  value={tokenSearchQuery}
+                  onChange={(event) => setTokenSearchQuery(event.target.value)}
+                  placeholder="Search all tokens"
+                  aria-label="Search tokens"
+                />
+              </div>
+              <div className="stats-token-picker-list" role="listbox">
+                {filteredTokenSymbols.length ? (
+                  filteredTokenSymbols.map((tokenSymbol) => (
+                    <button
+                      key={tokenSymbol}
+                      type="button"
+                      className={`stats-token-picker-item ${tokenSymbol === selectedTokenSymbol ? "is-active" : ""}`}
+                      onClick={() => handleTokenPick(tokenSymbol)}
+                      role="option"
+                      aria-selected={tokenSymbol === selectedTokenSymbol}
+                    >
+                      <span>{tokenSymbol}</span>
+                      {tokenSymbol === selectedTokenSymbol ? (
+                        <span className="token-picker-item-selected">
+                          Selected
+                        </span>
+                      ) : null}
+                    </button>
+                  ))
+                ) : (
+                  <div className="stats-token-picker-empty">
+                    No tokens found
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </aside>
   );
 }

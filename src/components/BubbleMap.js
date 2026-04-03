@@ -166,7 +166,18 @@ export default function BubbleMap({
 
   // ── Main effect: rebuild simulation when nodes/links change ──────────────
   useEffect(() => {
-    if (!nodes.length || !svgRef.current) return;
+    if (!svgRef.current) return;
+
+    if (!nodes.length) {
+      prevGraphSignatureRef.current = "";
+      boundsRef.current = null;
+      transformRef.current = d3.zoomIdentity;
+      d3.select(svgRef.current).selectAll("*").remove();
+      setHoveredNodeId(null);
+      if (onNodeHover) onNodeHover(null);
+      setPanHints({ left: false, right: false, up: false, down: false });
+      return;
+    }
 
     const graphSignature = buildGraphSignature(nodes, links, colorTheme);
     if (prevGraphSignatureRef.current === graphSignature) {
