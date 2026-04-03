@@ -94,7 +94,7 @@ export default function BubbleMap({
 
   function buildGraphSignature(nextNodes, nextLinks, theme) {
     const nodeSig = nextNodes
-      .map((n) => `${n.id}:${n.value}:${n.type}`)
+      .map((n) => `${n.id}:${n.value}:${n.visualValue ?? ""}:${n.type}`)
       .join("|");
     const linkSig = nextLinks
       .map((l) => {
@@ -197,7 +197,11 @@ export default function BubbleMap({
     const container = svg.append("g").style("will-change", "transform");
 
     // ── Scales ────────────────────────────────────────────────────────────
-    const maxVal = d3.max(nodes, (d) => d.value);
+    const getRenderValue = (node) =>
+      Number.isFinite(Number(node.visualValue))
+        ? Number(node.visualValue)
+        : Number(node.value) || 0;
+    const maxVal = d3.max(nodes, (d) => getRenderValue(d));
     const rScale = d3.scaleSqrt().domain([0, maxVal]).range([7, 68]);
 
     // ── Deep-copy data so D3 can mutate freely ────────────────────────────
@@ -219,13 +223,15 @@ export default function BubbleMap({
           .id((d) => d.id)
           .distance(
             (l) =>
-              rScale(l.source.value || 0) + rScale(l.target.value || 0) + 18,
+              rScale(getRenderValue(l.source)) +
+              rScale(getRenderValue(l.target)) +
+              18,
           )
           .strength(0.25),
       )
       .force(
         "charge",
-        d3.forceManyBody().strength((d) => -rScale(d.value) * 5.5),
+        d3.forceManyBody().strength((d) => -rScale(getRenderValue(d)) * 5.5),
       )
       .force("center", d3.forceCenter(width / 2, height / 2))
       .force("x", d3.forceX(width / 2).strength(0.035))
@@ -234,7 +240,7 @@ export default function BubbleMap({
         "collision",
         d3
           .forceCollide()
-          .radius((d) => rScale(d.value) + 3)
+          .radius((d) => rScale(getRenderValue(d)) + 3)
           .strength(0.5)
           .iterations(1),
       );
@@ -323,47 +329,61 @@ export default function BubbleMap({
     nodeSel
       .append("circle")
       .attr("class", "bubble-glow")
-      .attr("r", (d) => rScale(d.value) + 8)
+      .attr("r", (d) => rScale(getRenderValue(d)) + 8)
       .attr("fill", (d) => holderPalette[d.type] || "#74b9ff")
       .attr("fill-opacity", graphThemeStyle.baseGlowOpacity ?? 0.08)
       .attr("stroke-width", 0)
       .attr("stroke-opacity", 0)
       .style("pointer-events", "none");
 
+    // Explicit ring for searched root node, so it remains visually distinct.
+    nodeSel
+      .filter((d) => d.isSearchRoot)
+      .append("circle")
+      .attr("class", "bubble-root-ring")
+      .attr("r", (d) => rScale(getRenderValue(d)) + 14)
+      .attr("fill", "none")
+      .attr("stroke", "#ffe08a")
+      .attr("stroke-width", 2.8)
+      .attr("stroke-opacity", 0.95)
+      .style("pointer-events", "none");
+
     // Main bubble
     nodeSel
       .append("circle")
       .attr("class", "bubble-circle")
-      .attr("r", (d) => rScale(d.value))
+      .attr("r", (d) => rScale(getRenderValue(d)))
       .attr("fill", (d) => holderPalette[d.type] || "#74b9ff")
       .attr("fill-opacity", 0.72)
-      .attr("stroke", (d) => holderPalette[d.type] || "#74b9ff")
-      .attr("stroke-width", 1.5)
-      .attr("stroke-opacity", 0.85);
+      .attr("stroke", (d) =>
+        d.isSearchRoot ? "#fff3bf" : holderPalette[d.type] || "#74b9ff",
+      )
+      .attr("stroke-width", (d) => (d.isSearchRoot ? 3.2 : 1.5))
+      .attr("stroke-opacity", (d) => (d.isSearchRoot ? 1 : 0.85));
 
     // Primary label (for bubbles large enough)
     nodeSel
-      .filter((d) => rScale(d.value) > 22)
+      .filter((d) => rScale(getRenderValue(d)) > 22)
       .append("text")
       .attr("class", "bubble-label")
       .text((d) => (d.label.length > 13 ? d.label.slice(0, 11) + "…" : d.label))
       .attr("text-anchor", "middle")
-      .attr("dy", (d) => (rScale(d.value) > 36 ? "-0.3em" : "0.35em"))
+      .attr("dy", (d) => (rScale(getRenderValue(d)) > 36 ? "-0.3em" : "0.35em"))
       .attr("fill", bubbleLabelColor)
-      .attr("font-size", (d) => Math.min(rScale(d.value) / 4.2, 13))
+      .attr("font-size", (d) => Math.min(rScale(getRenderValue(d)) / 4.2, 13))
       .attr("font-weight", "600")
       .style("pointer-events", "none");
 
     // Percentage sub-label (only for large bubbles)
     nodeSel
-      .filter((d) => rScale(d.value) > 36)
+      .filter((d) => rScale(getRenderValue(d)) > 36)
       .append("text")
       .attr("class", "bubble-pct")
       .text((d) => `${d.pct}%`)
       .attr("text-anchor", "middle")
       .attr("dy", "1.1em")
       .attr("fill", bubblePctColor)
-      .attr("font-size", (d) => Math.min(rScale(d.value) / 5.5, 11))
+      .attr("font-size", (d) => Math.min(rScale(getRenderValue(d)) / 5.5, 11))
       .style("pointer-events", "none");
 
     linkSel
@@ -376,19 +396,19 @@ export default function BubbleMap({
     const initialBounds = {
       minX: d3.min(
         simNodes,
-        (d) => (d.x ?? width / 2) - (rScale(d.value) + 10),
+        (d) => (d.x ?? width / 2) - (rScale(getRenderValue(d)) + 10),
       ),
       maxX: d3.max(
         simNodes,
-        (d) => (d.x ?? width / 2) + (rScale(d.value) + 10),
+        (d) => (d.x ?? width / 2) + (rScale(getRenderValue(d)) + 10),
       ),
       minY: d3.min(
         simNodes,
-        (d) => (d.y ?? height / 2) - (rScale(d.value) + 10),
+        (d) => (d.y ?? height / 2) - (rScale(getRenderValue(d)) + 10),
       ),
       maxY: d3.max(
         simNodes,
-        (d) => (d.y ?? height / 2) + (rScale(d.value) + 10),
+        (d) => (d.y ?? height / 2) + (rScale(getRenderValue(d)) + 10),
       ),
     };
     boundsRef.current = initialBounds;
@@ -410,19 +430,19 @@ export default function BubbleMap({
         const bounds = {
           minX: d3.min(
             simNodes,
-            (d) => (d.x ?? width / 2) - (rScale(d.value) + 10),
+            (d) => (d.x ?? width / 2) - (rScale(getRenderValue(d)) + 10),
           ),
           maxX: d3.max(
             simNodes,
-            (d) => (d.x ?? width / 2) + (rScale(d.value) + 10),
+            (d) => (d.x ?? width / 2) + (rScale(getRenderValue(d)) + 10),
           ),
           minY: d3.min(
             simNodes,
-            (d) => (d.y ?? height / 2) - (rScale(d.value) + 10),
+            (d) => (d.y ?? height / 2) - (rScale(getRenderValue(d)) + 10),
           ),
           maxY: d3.max(
             simNodes,
-            (d) => (d.y ?? height / 2) + (rScale(d.value) + 10),
+            (d) => (d.y ?? height / 2) + (rScale(getRenderValue(d)) + 10),
           ),
         };
         boundsRef.current = bounds;
