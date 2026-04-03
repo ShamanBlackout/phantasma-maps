@@ -2,11 +2,19 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import Header from "./components/Header";
 import BubbleMap from "./components/BubbleMap";
 import StatsPanel from "./components/StatsPanel";
-import { HOLDER_TYPES, holders, links, TOKEN_INFO } from "./data/mockData";
+import {
+  HOLDER_TYPES,
+  holders,
+  links,
+  MOCK_TOKEN_DATA_BY_SYMBOL,
+  MOCK_TOKEN_SYMBOLS,
+  TOKEN_INFO,
+} from "./data/mockData";
 import "./App.css";
 
 const STATS_PANEL_STORAGE_KEY = "phantasma-maps:stats-panel-collapsed";
 const COLOR_THEME_STORAGE_KEY = "phantasma-maps:color-theme";
+const TOKEN_SYMBOL_STORAGE_KEY = "phantasma-maps:selected-token-symbol";
 const ALLOWED_COLOR_THEMES = new Set([
   "dark",
   "light",
@@ -18,6 +26,14 @@ function parseEnvMs(key, fallbackMs) {
   const raw = process.env[key];
   const parsed = Number(raw);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallbackMs;
+}
+
+function parseEnvInt(key, fallbackValue) {
+  const raw = process.env[key];
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed > 0
+    ? Math.floor(parsed)
+    : fallbackValue;
 }
 
 function parseEnvString(key, fallbackValue = "") {
@@ -49,8 +65,9 @@ const SOUL_PRICE_API_URL =
 const CMC_SOUL_QUOTES_API_URL =
   parseEnvString("REACT_APP_CMC_SOUL_QUOTES_API_URL") ||
   "https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest?symbol=SOUL&convert=USD";
-const CMC_SOUL_SYMBOL =
-  (parseEnvString("REACT_APP_CMC_SOUL_SYMBOL", "SOUL") || "SOUL").toUpperCase();
+const CMC_SOUL_SYMBOL = (
+  parseEnvString("REACT_APP_CMC_SOUL_SYMBOL", "SOUL") || "SOUL"
+).toUpperCase();
 const SOUL_PRICE_BASE_POLL_INTERVAL_MS = parseEnvMs(
   "REACT_APP_SOUL_PRICE_BASE_POLL_INTERVAL_MS",
   5 * 60 * 1000,
@@ -66,8 +83,29 @@ const SOUL_PRICE_REQUEST_TIMEOUT_MS = parseEnvMs(
 const CMC_API_KEY = parseEnvString("REACT_APP_CMC_API_KEY");
 const CMC_PROXY_URL = parseEnvString("REACT_APP_CMC_PROXY_URL");
 const CMC_ALLOW_BROWSER_DIRECT =
-  String(parseEnvString("REACT_APP_CMC_ALLOW_BROWSER_DIRECT") || "").toLowerCase() ===
-  "true";
+  String(
+    parseEnvString("REACT_APP_CMC_ALLOW_BROWSER_DIRECT") || "",
+  ).toLowerCase() === "true";
+const MAPS_API_BASE_URL =
+  parseEnvString("REACT_APP_MAPS_API_BASE_URL") || "http://localhost:3000";
+const DEFAULT_MAPS_API_TOKEN_SYMBOL = (
+  parseEnvString("REACT_APP_MAPS_API_TOKEN_SYMBOL", "SOUL") || "SOUL"
+).toUpperCase();
+const MAPS_API_ROOT_ADDRESS = parseEnvString("REACT_APP_MAPS_API_ROOT_ADDRESS");
+const MAPS_API_GRAPH_DEPTH = parseEnvInt("REACT_APP_MAPS_API_GRAPH_DEPTH", 2);
+const MAPS_API_GRAPH_EDGE_LIMIT = parseEnvInt(
+  "REACT_APP_MAPS_API_GRAPH_EDGE_LIMIT",
+  1200,
+);
+const MAPS_API_REQUEST_TIMEOUT_MS = parseEnvMs(
+  "REACT_APP_MAPS_API_REQUEST_TIMEOUT_MS",
+  12000,
+);
+const MAPS_API_TX_PAGE_SIZE = parseEnvInt(
+  "REACT_APP_MAPS_API_TX_PAGE_SIZE",
+  250,
+);
+const MAPS_API_TX_MAX_PAGES = parseEnvInt("REACT_APP_MAPS_API_TX_MAX_PAGES", 8);
 
 function parseRetryAfterMs(response) {
   const rawValue = response.headers.get("retry-after");
@@ -79,12 +117,13 @@ function parseRetryAfterMs(response) {
   return null;
 }
 
-async function fetchJsonWithTimeout(url, options = {}) {
+async function fetchJsonWithTimeout(
+  url,
+  options = {},
+  timeoutMs = SOUL_PRICE_REQUEST_TIMEOUT_MS,
+) {
   const controller = new AbortController();
-  const timeoutId = window.setTimeout(
-    () => controller.abort(),
-    SOUL_PRICE_REQUEST_TIMEOUT_MS,
-  );
+  const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
 
   try {
     const response = await fetch(url, {
@@ -117,6 +156,168 @@ async function fetchJsonWithTimeout(url, options = {}) {
   } finally {
     window.clearTimeout(timeoutId);
   }
+}
+
+function shortenAddress(address) {
+  if (typeof address !== "string" || address.length <= 10)
+    return address || "Unknown";
+  return `${address.slice(0, 4)}...${address.slice(-3)}`;
+}
+
+function inferHolderType(label, pct) {
+  const normalized = String(label || "").toLowerCase();
+  if (/team|foundation|treasury|ecosystem/.test(normalized)) return "team";
+  if (/exchange|binance|kucoin|gate|okx|mexc|bybit/.test(normalized))
+    return "exchange";
+  if (/contract|staking|pool|bridge|router|swap|vault|farm/.test(normalized)) {
+    return "contract";
+  }
+  if (Number.isFinite(pct) && pct >= 1) return "whale";
+  return "regular";
+}
+
+function normalizeAmount(rawAmount) {
+  const parsed = Number(rawAmount);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
+}
+
+function buildGraphDataFromApi(graphPayload, totalSupply) {
+  const apiNodes = Array.isArray(graphPayload?.nodes) ? graphPayload.nodes : [];
+  const apiEdges = Array.isArray(graphPayload?.edges) ? graphPayload.edges : [];
+
+  if (!apiNodes.length || !apiEdges.length) {
+    return null;
+  }
+
+  const nodeStats = new Map();
+
+  for (const edge of apiEdges) {
+    const from = String(edge?.fromAddress || "").trim();
+    const to = String(edge?.toAddress || "").trim();
+
+    if (!from || !to) continue;
+
+    nodeStats.set(from, {
+      sentTransactions: (nodeStats.get(from)?.sentTransactions || 0) + 1,
+      receivedTransactions: nodeStats.get(from)?.receivedTransactions || 0,
+    });
+    nodeStats.set(to, {
+      sentTransactions: nodeStats.get(to)?.sentTransactions || 0,
+      receivedTransactions: (nodeStats.get(to)?.receivedTransactions || 0) + 1,
+    });
+  }
+
+  const discoveredTotal = apiNodes.reduce(
+    (sum, node) => sum + normalizeAmount(node?.balance),
+    0,
+  );
+  const shareBase = totalSupply > 0 ? totalSupply : discoveredTotal || 1;
+
+  const mappedNodes = apiNodes
+    .map((node) => {
+      const id = String(node?.address || "").trim();
+      if (!id) return null;
+
+      const value = normalizeAmount(node?.balance);
+      const pct = (value / shareBase) * 100;
+      const label = String(node?.label || "").trim() || shortenAddress(id);
+      const type = inferHolderType(label, pct);
+      const stats = nodeStats.get(id) || {
+        sentTransactions: 0,
+        receivedTransactions: 0,
+      };
+
+      return {
+        id,
+        label,
+        shortAddr: shortenAddress(id),
+        value,
+        pct: pct.toFixed(2),
+        type,
+        sentTransactions: stats.sentTransactions,
+        receivedTransactions: stats.receivedTransactions,
+      };
+    })
+    .filter(Boolean);
+
+  const validNodeIds = new Set(mappedNodes.map((node) => node.id));
+  const edgeMap = new Map();
+
+  for (const edge of apiEdges) {
+    const source = String(edge?.fromAddress || "").trim();
+    const target = String(edge?.toAddress || "").trim();
+
+    if (!validNodeIds.has(source) || !validNodeIds.has(target)) continue;
+
+    const key = `${source}->${target}`;
+    const prev = edgeMap.get(key);
+
+    if (!prev) {
+      edgeMap.set(key, {
+        source,
+        target,
+        transactionVolume: normalizeAmount(edge?.amount),
+        sentTransactions: 1,
+        receivedTransactions: 1,
+        transactionHash: String(edge?.txHash || ""),
+      });
+      continue;
+    }
+
+    prev.transactionVolume += normalizeAmount(edge?.amount);
+    prev.sentTransactions += 1;
+    prev.receivedTransactions += 1;
+  }
+
+  return {
+    nodes: mappedNodes,
+    links: [...edgeMap.values()],
+    totalValue: discoveredTotal,
+  };
+}
+
+function createTokensEndpoint() {
+  const base = MAPS_API_BASE_URL.replace(/\/+$/, "");
+  return `${base}/tokens`;
+}
+
+function createGraphEndpoint(tokenSymbol) {
+  const base = MAPS_API_BASE_URL.replace(/\/+$/, "");
+  if (MAPS_API_ROOT_ADDRESS) {
+    const params = new URLSearchParams({
+      token: tokenSymbol,
+      depth: String(MAPS_API_GRAPH_DEPTH),
+      edgeLimit: String(MAPS_API_GRAPH_EDGE_LIMIT),
+    });
+    return `${base}/graph/address/${encodeURIComponent(MAPS_API_ROOT_ADDRESS)}?${params.toString()}`;
+  }
+
+  return `${base}/graph/token/${encodeURIComponent(tokenSymbol)}`;
+}
+
+function createTransactionsEndpoint(
+  address,
+  tokenSymbol,
+  page = 1,
+  pageSize = MAPS_API_TX_PAGE_SIZE,
+) {
+  const base = MAPS_API_BASE_URL.replace(/\/+$/, "");
+  const params = new URLSearchParams({
+    token: tokenSymbol,
+    address,
+    page: String(page),
+    pageSize: String(pageSize),
+  });
+  return `${base}/transactions?${params.toString()}`;
+}
+
+function parseTimestampMs(rawTimestamp) {
+  const ms = new Date(rawTimestamp).getTime();
+  return Number.isFinite(ms) ? ms : Date.now();
+}
+
+function getMockTokenData(tokenSymbol) {
+  return MOCK_TOKEN_DATA_BY_SYMBOL[tokenSymbol] || null;
 }
 
 function parseCoinGeckoQuote(payload) {
@@ -232,12 +433,6 @@ function fmtUsdAmount(n) {
   return `$${n.toFixed(2)}`;
 }
 
-function buildTransferTime(index) {
-  const ts = Date.now() - index * 11 * 60 * 1000;
-  const dt = new Date(ts);
-  return dt.toLocaleString();
-}
-
 function toDateTimeLocalValue(timestamp) {
   const date = new Date(timestamp);
   const pad = (value) => String(value).padStart(2, "0");
@@ -275,6 +470,41 @@ export default function App() {
   const [transactionMinUsd, setTransactionMinUsd] = useState("");
   const [transactionMaxUsd, setTransactionMaxUsd] = useState("");
   const [liveTokenInfo, setLiveTokenInfo] = useState(TOKEN_INFO);
+  const [selectedTokenSymbol, setSelectedTokenSymbol] = useState(() => {
+    try {
+      const stored = window.localStorage.getItem(TOKEN_SYMBOL_STORAGE_KEY);
+      return stored || DEFAULT_MAPS_API_TOKEN_SYMBOL;
+    } catch {
+      return DEFAULT_MAPS_API_TOKEN_SYMBOL;
+    }
+  });
+  const [availableTokenSymbols, setAvailableTokenSymbols] = useState([
+    ...MOCK_TOKEN_SYMBOLS,
+  ]);
+  const [trackedTokenSupply, setTrackedTokenSupply] = useState(
+    getMockTokenData(selectedTokenSymbol)?.tokenInfo?.totalSupply ||
+      getMockTokenData(DEFAULT_MAPS_API_TOKEN_SYMBOL)?.tokenInfo?.totalSupply ||
+      TOKEN_INFO.totalSupply,
+  );
+  const [tokenSelectorStatus, setTokenSelectorStatus] = useState("");
+  const [mapNodes, setMapNodes] = useState(
+    getMockTokenData(selectedTokenSymbol)?.holders || holders,
+  );
+  const [mapLinks, setMapLinks] = useState(
+    getMockTokenData(selectedTokenSymbol)?.links || links,
+  );
+  const [isMapLoading, setIsMapLoading] = useState(false);
+  const [mapDataStatus, setMapDataStatus] = useState("");
+  const [selectedNodeApiTransactions, setSelectedNodeApiTransactions] =
+    useState([]);
+  const [
+    selectedNodeApiTransactionsError,
+    setSelectedNodeApiTransactionsError,
+  ] = useState("");
+  const [
+    isSelectedNodeTransactionsLoading,
+    setIsSelectedNodeTransactionsLoading,
+  ] = useState(false);
   const [priceLastUpdatedAt, setPriceLastUpdatedAt] = useState(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [colorTheme, setColorTheme] = useState(() => {
@@ -313,6 +543,189 @@ export default function App() {
   }, [colorTheme]);
 
   useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        TOKEN_SYMBOL_STORAGE_KEY,
+        selectedTokenSymbol,
+      );
+    } catch {
+      // Ignore storage access issues and keep token selection in memory.
+    }
+  }, [selectedTokenSymbol]);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    async function fetchAvailableTokens() {
+      const result = await fetchJsonWithTimeout(
+        createTokensEndpoint(),
+        { cache: "no-store" },
+        MAPS_API_REQUEST_TIMEOUT_MS,
+      );
+
+      if (!isMounted) return;
+
+      if (!result.ok) {
+        const fallbackTokens = [
+          ...new Set([selectedTokenSymbol, ...MOCK_TOKEN_SYMBOLS]),
+        ];
+        setAvailableTokenSymbols(fallbackTokens);
+        setTokenSelectorStatus(
+          "API token list unavailable; showing mock tokens",
+        );
+        return;
+      }
+
+      const apiItems = Array.isArray(result.payload?.items)
+        ? result.payload.items
+        : [];
+      const nextTokens = [
+        ...new Set([
+          ...apiItems
+            .map((token) =>
+              String(token || "")
+                .trim()
+                .toUpperCase(),
+            )
+            .filter(Boolean),
+          ...MOCK_TOKEN_SYMBOLS,
+        ]),
+      ];
+
+      if (!nextTokens.length) {
+        setAvailableTokenSymbols(MOCK_TOKEN_SYMBOLS);
+        setTokenSelectorStatus("No API tokens available; showing mock tokens");
+        return;
+      }
+
+      if (!nextTokens.includes(selectedTokenSymbol)) {
+        nextTokens.unshift(selectedTokenSymbol);
+      }
+
+      setAvailableTokenSymbols(nextTokens);
+      setTokenSelectorStatus(`Showing ${nextTokens.length} tracked tokens`);
+    }
+
+    fetchAvailableTokens().catch(() => {
+      if (!isMounted) return;
+      setAvailableTokenSymbols([
+        ...new Set([selectedTokenSymbol, ...MOCK_TOKEN_SYMBOLS]),
+      ]);
+      setTokenSelectorStatus("API token list unavailable; showing mock tokens");
+    });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [selectedTokenSymbol]);
+
+  const selectedMockTokenData = useMemo(
+    () => getMockTokenData(selectedTokenSymbol),
+    [selectedTokenSymbol],
+  );
+
+  const activeTokenInfo = useMemo(() => {
+    const fallbackTokenInfo = selectedMockTokenData?.tokenInfo;
+    const isSoul = selectedTokenSymbol === TOKEN_INFO.name;
+    return {
+      ...(fallbackTokenInfo || TOKEN_INFO),
+      name: selectedTokenSymbol,
+      fullName:
+        fallbackTokenInfo?.fullName ||
+        (isSoul ? TOKEN_INFO.fullName : `${selectedTokenSymbol} Token`),
+      totalSupply:
+        trackedTokenSupply > 0
+          ? trackedTokenSupply
+          : (fallbackTokenInfo?.totalSupply ??
+            (isSoul ? TOKEN_INFO.totalSupply : 0)),
+      price: isSoul ? liveTokenInfo.price : (fallbackTokenInfo?.price ?? null),
+      priceChange24h: isSoul
+        ? liveTokenInfo.priceChange24h
+        : (fallbackTokenInfo?.priceChange24h ?? null),
+    };
+  }, [
+    selectedMockTokenData,
+    selectedTokenSymbol,
+    trackedTokenSupply,
+    liveTokenInfo.price,
+    liveTokenInfo.priceChange24h,
+  ]);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    async function fetchMapGraph() {
+      setIsMapLoading(true);
+      setSelectedNode(null);
+      setHoveredNode(null);
+      setMapNodes([]);
+      setMapLinks([]);
+      setMapDataStatus(`Generating maps for ${selectedTokenSymbol}...`);
+
+      const graphEndpoint = createGraphEndpoint(selectedTokenSymbol);
+      const result = await fetchJsonWithTimeout(
+        graphEndpoint,
+        { cache: "no-store" },
+        MAPS_API_REQUEST_TIMEOUT_MS,
+      );
+
+      if (!isMounted) return;
+
+      if (!result.ok) {
+        setTrackedTokenSupply(
+          selectedMockTokenData?.tokenInfo?.totalSupply || 0,
+        );
+        setMapNodes(selectedMockTokenData?.holders || []);
+        setMapLinks(selectedMockTokenData?.links || []);
+        setMapDataStatus("Using fallback map data (API unavailable).");
+        setIsMapLoading(false);
+        return;
+      }
+
+      const mappedGraph = buildGraphDataFromApi(
+        result.payload,
+        selectedMockTokenData?.tokenInfo?.totalSupply || 0,
+      );
+
+      if (
+        !mappedGraph ||
+        !mappedGraph.nodes.length ||
+        !mappedGraph.links.length
+      ) {
+        setTrackedTokenSupply(
+          selectedMockTokenData?.tokenInfo?.totalSupply || 0,
+        );
+        setMapNodes(selectedMockTokenData?.holders || []);
+        setMapLinks(selectedMockTokenData?.links || []);
+        setMapDataStatus(
+          "Using fallback map data (API returned no graph edges).",
+        );
+        setIsMapLoading(false);
+        return;
+      }
+
+      setMapNodes(mappedGraph.nodes);
+      setMapLinks(mappedGraph.links);
+      setTrackedTokenSupply(mappedGraph.totalValue || 0);
+      setMapDataStatus(`Live graph loaded from ${graphEndpoint}`);
+      setIsMapLoading(false);
+    }
+
+    fetchMapGraph().catch(() => {
+      if (!isMounted) return;
+      setTrackedTokenSupply(selectedMockTokenData?.tokenInfo?.totalSupply || 0);
+      setMapNodes(selectedMockTokenData?.holders || []);
+      setMapLinks(selectedMockTokenData?.links || []);
+      setMapDataStatus("Using fallback map data (graph fetch failed).");
+      setIsMapLoading(false);
+    });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [selectedMockTokenData, selectedTokenSymbol]);
+
+  useEffect(() => {
     let isActive = true;
     let timeoutId;
     let hasSuccessfulQuote = false;
@@ -342,7 +755,9 @@ export default function App() {
             primaryResult?.status === 429 || fallbackResult?.status === 429;
 
           if (hitRateLimit) {
-            nextPollDelayMs = retryAfterMs || Math.min(nextPollDelayMs * 2, SOUL_PRICE_MAX_BACKOFF_MS);
+            nextPollDelayMs =
+              retryAfterMs ||
+              Math.min(nextPollDelayMs * 2, SOUL_PRICE_MAX_BACKOFF_MS);
           } else {
             const bootstrapRetryFloorMs = 30000;
             const retryFloorMs = hasSuccessfulQuote
@@ -359,7 +774,10 @@ export default function App() {
         }
 
         if (!isActive) {
-          nextPollDelayMs = Math.max(SOUL_PRICE_BASE_POLL_INTERVAL_MS, nextPollDelayMs);
+          nextPollDelayMs = Math.max(
+            SOUL_PRICE_BASE_POLL_INTERVAL_MS,
+            nextPollDelayMs,
+          );
           scheduleNextPoll(nextPollDelayMs);
           return;
         }
@@ -398,33 +816,110 @@ export default function App() {
   }, []);
 
   const filteredNodes = useMemo(() => {
-    if (!searchQuery) return holders;
+    if (!searchQuery) return mapNodes;
     const q = searchQuery.toLowerCase();
-    return holders.filter(
+    return mapNodes.filter(
       (h) =>
         h.id.toLowerCase().includes(q) ||
         h.label.toLowerCase().includes(q) ||
         h.shortAddr.toLowerCase().includes(q),
     );
-  }, [searchQuery]);
+  }, [searchQuery, mapNodes]);
 
   const filteredLinks = useMemo(() => {
     const ids = new Set(filteredNodes.map((n) => n.id));
-    return links.filter((l) => ids.has(l.source) && ids.has(l.target));
-  }, [filteredNodes]);
+    return mapLinks.filter((l) => ids.has(l.source) && ids.has(l.target));
+  }, [filteredNodes, mapLinks]);
 
   const nodeById = useMemo(
-    () => new Map(holders.map((holder) => [holder.id, holder])),
-    [],
+    () => new Map(mapNodes.map((holder) => [holder.id, holder])),
+    [mapNodes],
   );
 
-  const selectedNodeTransfers = useMemo(() => {
+  useEffect(() => {
+    if (!selectedNode) return;
+    const stillExists = mapNodes.some((node) => node.id === selectedNode.id);
+    if (!stillExists) {
+      setSelectedNode(null);
+    }
+  }, [mapNodes, selectedNode]);
+
+  useEffect(() => {
+    if (!selectedNode?.id) {
+      setSelectedNodeApiTransactions([]);
+      setSelectedNodeApiTransactionsError("");
+      setIsSelectedNodeTransactionsLoading(false);
+      return;
+    }
+
+    let isMounted = true;
+
+    async function fetchSelectedNodeTransactions() {
+      setIsSelectedNodeTransactionsLoading(true);
+      setSelectedNodeApiTransactionsError("");
+
+      try {
+        const allItems = [];
+        let page = 1;
+        let total = Infinity;
+
+        while (page <= MAPS_API_TX_MAX_PAGES && allItems.length < total) {
+          const endpoint = createTransactionsEndpoint(
+            selectedNode.id,
+            selectedTokenSymbol,
+            page,
+            MAPS_API_TX_PAGE_SIZE,
+          );
+          const result = await fetchJsonWithTimeout(
+            endpoint,
+            { cache: "no-store" },
+            MAPS_API_REQUEST_TIMEOUT_MS,
+          );
+
+          if (!result.ok) {
+            throw new Error(
+              `transactions request failed with status ${result.status}`,
+            );
+          }
+
+          const items = Array.isArray(result.payload?.items)
+            ? result.payload.items
+            : [];
+          total = Number(result.payload?.total ?? items.length);
+          allItems.push(...items);
+
+          if (!items.length) break;
+          page += 1;
+        }
+
+        if (!isMounted) return;
+        setSelectedNodeApiTransactions(allItems);
+        setSelectedNodeApiTransactionsError("");
+      } catch {
+        if (!isMounted) return;
+        setSelectedNodeApiTransactions([]);
+        setSelectedNodeApiTransactionsError(
+          "Using graph-derived transfers (transactions API unavailable).",
+        );
+      } finally {
+        if (!isMounted) return;
+        setIsSelectedNodeTransactionsLoading(false);
+      }
+    }
+
+    fetchSelectedNodeTransactions();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [selectedNode, selectedTokenSymbol]);
+
+  const fallbackSelectedNodeTransfers = useMemo(() => {
     if (!selectedNode) return [];
-    return links
+    return mapLinks
       .filter(
         (link) =>
-          link.source === selectedNode.id ||
-          link.target === selectedNode.id,
+          link.source === selectedNode.id || link.target === selectedNode.id,
       )
       .map((link, index) => {
         const isOutgoing = link.source === selectedNode.id;
@@ -440,37 +935,118 @@ export default function App() {
           id: `${link.source}-${link.target}-${index}`,
           direction: isOutgoing ? "To" : "From",
           counterpartLabel:
-            counterpartNode?.label || counterpartNode?.shortAddr || counterpartId,
+            counterpartNode?.label ||
+            counterpartNode?.shortAddr ||
+            counterpartId,
           counterpartAddr: counterpartNode?.shortAddr || counterpartId,
-          token: liveTokenInfo.name,
+          token: activeTokenInfo.name,
           amount,
-          usd: amount * liveTokenInfo.price,
+          usd: amount * Number(activeTokenInfo.price),
           sentTransactions: Number(link.sentTransactions ?? 0),
           receivedTransactions: Number(link.receivedTransactions ?? 0),
           transactionHash: link.transactionHash || "N/A",
           timestamp,
-          timeUtc: buildTransferTime(index),
+          timeUtc: new Date(timestamp).toLocaleString(),
           timeInputValue: toDateTimeLocalValue(timestamp),
         };
       })
       .sort((a, b) => b.timestamp - a.timestamp);
-  }, [selectedNode, nodeById, liveTokenInfo.name, liveTokenInfo.price]);
+  }, [
+    selectedNode,
+    mapLinks,
+    nodeById,
+    activeTokenInfo.name,
+    activeTokenInfo.price,
+  ]);
+
+  const selectedNodeTransfers = useMemo(() => {
+    if (!selectedNode) return [];
+
+    if (!selectedNodeApiTransactionsError) {
+      return selectedNodeApiTransactions
+        .map((transaction, index) => {
+          const fromAddress = String(
+            transaction.from_address ?? transaction.fromAddress ?? "",
+          );
+          const toAddress = String(
+            transaction.to_address ?? transaction.toAddress ?? "",
+          );
+          const txHash = String(
+            transaction.tx_hash ?? transaction.txHash ?? "",
+          );
+          const token = String(
+            transaction.token_symbol ??
+              transaction.tokenSymbol ??
+              activeTokenInfo.name,
+          );
+          const amount = normalizeAmount(transaction.amount);
+          const timestamp = parseTimestampMs(transaction.timestamp);
+          const isOutgoing = fromAddress === selectedNode.id;
+          const counterpartId = isOutgoing ? toAddress : fromAddress;
+          const counterpartNode = nodeById.get(counterpartId);
+
+          return {
+            id: String(
+              transaction.id ||
+                `${txHash}-${transaction.event_index ?? transaction.eventIndex ?? index}`,
+            ),
+            direction: isOutgoing ? "To" : "From",
+            counterpartLabel:
+              counterpartNode?.label ||
+              counterpartNode?.shortAddr ||
+              shortenAddress(counterpartId),
+            counterpartAddr:
+              counterpartNode?.shortAddr || shortenAddress(counterpartId),
+            token,
+            amount,
+            usd: amount * Number(activeTokenInfo.price),
+            sentTransactions: isOutgoing ? 1 : 0,
+            receivedTransactions: isOutgoing ? 0 : 1,
+            transactionHash: txHash || "N/A",
+            timestamp,
+            timeUtc: new Date(timestamp).toLocaleString(),
+            timeInputValue: toDateTimeLocalValue(timestamp),
+          };
+        })
+        .sort((a, b) => b.timestamp - a.timestamp);
+    }
+
+    return fallbackSelectedNodeTransfers;
+  }, [
+    selectedNode,
+    selectedNodeApiTransactions,
+    selectedNodeApiTransactionsError,
+    fallbackSelectedNodeTransfers,
+    nodeById,
+    activeTokenInfo.name,
+    activeTokenInfo.price,
+  ]);
 
   const filteredTransactions = useMemo(() => {
-    const startTs = transactionStartTime ? new Date(transactionStartTime).getTime() : null;
-    const endTs = transactionEndTime ? new Date(transactionEndTime).getTime() : null;
-    const minAmount = transactionMinAmount === "" ? null : Number(transactionMinAmount);
-    const maxAmount = transactionMaxAmount === "" ? null : Number(transactionMaxAmount);
+    const startTs = transactionStartTime
+      ? new Date(transactionStartTime).getTime()
+      : null;
+    const endTs = transactionEndTime
+      ? new Date(transactionEndTime).getTime()
+      : null;
+    const minAmount =
+      transactionMinAmount === "" ? null : Number(transactionMinAmount);
+    const maxAmount =
+      transactionMaxAmount === "" ? null : Number(transactionMaxAmount);
     const minUsd = transactionMinUsd === "" ? null : Number(transactionMinUsd);
     const maxUsd = transactionMaxUsd === "" ? null : Number(transactionMaxUsd);
-    const counterpartyQuery = transactionCounterpartyFilter.trim().toLowerCase();
+    const counterpartyQuery = transactionCounterpartyFilter
+      .trim()
+      .toLowerCase();
 
     return selectedNodeTransfers.filter((transaction) => {
       if (transactionDirFilter !== "all") {
-        if (transaction.direction.toLowerCase() !== transactionDirFilter) return false;
+        if (transaction.direction.toLowerCase() !== transactionDirFilter)
+          return false;
       }
       if (counterpartyQuery) {
-        const haystack = `${transaction.counterpartLabel} ${transaction.counterpartAddr}`.toLowerCase();
+        const haystack =
+          `${transaction.counterpartLabel} ${transaction.counterpartAddr}`.toLowerCase();
         if (!haystack.includes(counterpartyQuery)) return false;
       }
       if (startTs !== null && transaction.timestamp < startTs) return false;
@@ -543,7 +1119,11 @@ export default function App() {
 
     if (format === "json") {
       const json = JSON.stringify(rows, null, 2);
-      downloadBlobFile(json, "application/json;charset=utf-8", makeExportFileName(selectedNode, "json"));
+      downloadBlobFile(
+        json,
+        "application/json;charset=utf-8",
+        makeExportFileName(selectedNode, "json"),
+      );
       setIsExportMenuOpen(false);
       return;
     }
@@ -573,11 +1153,16 @@ export default function App() {
         row.sentTransactions,
         row.receivedTransactions,
       ]);
-      const escapeCsv = (value) => `"${String(value ?? "").replace(/"/g, '""')}"`;
+      const escapeCsv = (value) =>
+        `"${String(value ?? "").replace(/"/g, '""')}"`;
       const csv = [headers, ...csvRows]
         .map((line) => line.map(escapeCsv).join(","))
         .join("\n");
-      downloadBlobFile(`\uFEFF${csv}`, "text/csv;charset=utf-8", makeExportFileName(selectedNode, "csv"));
+      downloadBlobFile(
+        `\uFEFF${csv}`,
+        "text/csv;charset=utf-8",
+        makeExportFileName(selectedNode, "csv"),
+      );
       setIsExportMenuOpen(false);
       return;
     }
@@ -695,7 +1280,7 @@ export default function App() {
     <div className={`app-root theme-${colorTheme}`}>
       <Header
         onSearch={setSearchQuery}
-        tokenInfo={liveTokenInfo}
+        tokenInfo={activeTokenInfo}
         priceUpdatedAt={priceLastUpdatedAt}
         colorTheme={colorTheme}
         onThemeChange={setColorTheme}
@@ -713,6 +1298,14 @@ export default function App() {
               bubbleMapActionsRef.current = actions;
             }}
           />
+          {isMapLoading ? (
+            <div className="map-loading-overlay" aria-live="polite">
+              <div className="map-loading-spinner" aria-hidden="true" />
+              <div className="map-loading-title">
+                Generating Maps for {selectedTokenSymbol}...
+              </div>
+            </div>
+          ) : null}
           {infoNode && (
             <div className="map-hover-info is-active">
               <div className="map-hover-title">{infoNode.label}</div>
@@ -723,19 +1316,27 @@ export default function App() {
               </div>
               <div className="map-hover-row">
                 <span>Amount</span>
-                <strong>{infoNode.value.toLocaleString()} {liveTokenInfo.name}</strong>
+                <strong>
+                  {infoNode.value.toLocaleString()} {activeTokenInfo.name}
+                </strong>
               </div>
               <div className="map-hover-row">
                 <span>Sent Tx</span>
-                <strong>{(infoNode.sentTransactions ?? 0).toLocaleString()}</strong>
+                <strong>
+                  {(infoNode.sentTransactions ?? 0).toLocaleString()}
+                </strong>
               </div>
               <div className="map-hover-row">
                 <span>Received Tx</span>
-                <strong>{(infoNode.receivedTransactions ?? 0).toLocaleString()}</strong>
+                <strong>
+                  {(infoNode.receivedTransactions ?? 0).toLocaleString()}
+                </strong>
               </div>
               <div className="map-hover-row">
                 <span>Type</span>
-                <strong>{HOLDER_TYPES[infoNode.type]?.label || infoNode.type}</strong>
+                <strong>
+                  {HOLDER_TYPES[infoNode.type]?.label || infoNode.type}
+                </strong>
               </div>
             </div>
           )}
@@ -745,7 +1346,9 @@ export default function App() {
                 <div>
                   <div className="map-selected-title">{selectedNode.label}</div>
                   <div className="map-selected-addr-row">
-                    <div className="map-selected-addr">{selectedNode.shortAddr}</div>
+                    <div className="map-selected-addr">
+                      {selectedNode.shortAddr}
+                    </div>
                     <button
                       type="button"
                       className="map-selected-action"
@@ -783,11 +1386,17 @@ export default function App() {
                 </div>
                 <div className="map-selected-stat">
                   <span>Amount</span>
-                  <strong>{fmtTokenAmount(selectedNode.value)} {liveTokenInfo.name}</strong>
+                  <strong>
+                    {fmtTokenAmount(selectedNode.value)} {activeTokenInfo.name}
+                  </strong>
                 </div>
                 <div className="map-selected-stat">
                   <span>USD Value</span>
-                  <strong>{fmtUsdAmount(selectedNode.value * liveTokenInfo.price)}</strong>
+                  <strong>
+                    {fmtUsdAmount(
+                      selectedNode.value * Number(activeTokenInfo.price),
+                    )}
+                  </strong>
                 </div>
                 <div className="map-selected-stat">
                   <span>Transactions</span>
@@ -795,8 +1404,13 @@ export default function App() {
                 </div>
               </div>
               <div className="map-selected-tx-row">
-                <span>Sent {selectedNode.sentTransactions?.toLocaleString() ?? "0"}</span>
-                <span>Received {selectedNode.receivedTransactions?.toLocaleString() ?? "0"}</span>
+                <span>
+                  Sent {selectedNode.sentTransactions?.toLocaleString() ?? "0"}
+                </span>
+                <span>
+                  Received{" "}
+                  {selectedNode.receivedTransactions?.toLocaleString() ?? "0"}
+                </span>
               </div>
               <button
                 type="button"
@@ -811,6 +1425,9 @@ export default function App() {
             <span className="map-hint-text">
               Scroll to zoom · Drag to pan · Click a bubble for details
             </span>
+            {mapDataStatus ? (
+              <span className="map-hint-text">{mapDataStatus}</span>
+            ) : null}
             <button
               type="button"
               className="map-hint-fit-btn"
@@ -822,8 +1439,12 @@ export default function App() {
           </div>
         </div>
         <StatsPanel
-          holders={holders}
-          tokenInfo={liveTokenInfo}
+          holders={mapNodes}
+          tokenInfo={activeTokenInfo}
+          availableTokens={availableTokenSymbols}
+          selectedTokenSymbol={selectedTokenSymbol}
+          onTokenChange={setSelectedTokenSymbol}
+          tokenSelectorStatus={tokenSelectorStatus}
           selectedNode={selectedNode}
           onNodeSelect={setSelectedNode}
           copiedAddress={copiedAddress}
@@ -849,6 +1470,12 @@ export default function App() {
               <div>
                 <h3>All Transactions</h3>
                 <p>For {selectedNode.shortAddr}</p>
+                {isSelectedNodeTransactionsLoading ? (
+                  <p>Loading from API...</p>
+                ) : null}
+                {selectedNodeApiTransactionsError ? (
+                  <p>{selectedNodeApiTransactionsError}</p>
+                ) : null}
               </div>
               <div className="transactions-export" ref={exportMenuRef}>
                 <button
@@ -897,7 +1524,10 @@ export default function App() {
               <table className="transfers-table">
                 <thead>
                   <tr>
-                    <th className="transactions-th-filterable" ref={dirFilterRef}>
+                    <th
+                      className="transactions-th-filterable"
+                      ref={dirFilterRef}
+                    >
                       <div className="transactions-th-content">
                         <span>Dir</span>
                         <button
@@ -912,7 +1542,10 @@ export default function App() {
                           title="Filter direction"
                         >
                           <svg viewBox="0 0 16 16" aria-hidden="true">
-                            <path d="M2 3h12l-4.5 5v4l-3-1.8V8z" fill="currentColor" />
+                            <path
+                              d="M2 3h12l-4.5 5v4l-3-1.8V8z"
+                              fill="currentColor"
+                            />
                           </svg>
                         </button>
                       </div>
@@ -942,7 +1575,10 @@ export default function App() {
                         </div>
                       )}
                     </th>
-                    <th className="transactions-th-filterable" ref={counterpartyFilterRef}>
+                    <th
+                      className="transactions-th-filterable"
+                      ref={counterpartyFilterRef}
+                    >
                       <div className="transactions-th-content">
                         <span>Counterparty</span>
                         <button
@@ -950,14 +1586,19 @@ export default function App() {
                           className={`transactions-th-filter-btn ${activeTransactionFilter === "counterparty" ? "is-active" : ""} ${hasCounterpartyFilter ? "has-value" : ""}`}
                           onClick={() =>
                             setActiveTransactionFilter((current) =>
-                              current === "counterparty" ? null : "counterparty",
+                              current === "counterparty"
+                                ? null
+                                : "counterparty",
                             )
                           }
                           aria-label="Filter counterparty column"
                           title="Filter counterparty"
                         >
                           <svg viewBox="0 0 16 16" aria-hidden="true">
-                            <path d="M2 3h12l-4.5 5v4l-3-1.8V8z" fill="currentColor" />
+                            <path
+                              d="M2 3h12l-4.5 5v4l-3-1.8V8z"
+                              fill="currentColor"
+                            />
                           </svg>
                         </button>
                       </div>
@@ -969,7 +1610,9 @@ export default function App() {
                               type="text"
                               value={transactionCounterpartyFilter}
                               onChange={(event) =>
-                                setTransactionCounterpartyFilter(event.target.value)
+                                setTransactionCounterpartyFilter(
+                                  event.target.value,
+                                )
                               }
                               placeholder="Search by address or name"
                             />
@@ -984,7 +1627,10 @@ export default function App() {
                         </div>
                       )}
                     </th>
-                    <th className="transactions-th-filterable" ref={timeFilterRef}>
+                    <th
+                      className="transactions-th-filterable"
+                      ref={timeFilterRef}
+                    >
                       <div className="transactions-th-content">
                         <span>Time</span>
                         <button
@@ -999,7 +1645,10 @@ export default function App() {
                           title="Filter time"
                         >
                           <svg viewBox="0 0 16 16" aria-hidden="true">
-                            <path d="M2 3h12l-4.5 5v4l-3-1.8V8z" fill="currentColor" />
+                            <path
+                              d="M2 3h12l-4.5 5v4l-3-1.8V8z"
+                              fill="currentColor"
+                            />
                           </svg>
                         </button>
                       </div>
@@ -1010,7 +1659,9 @@ export default function App() {
                             <input
                               type="datetime-local"
                               value={transactionStartTime}
-                              onChange={(event) => setTransactionStartTime(event.target.value)}
+                              onChange={(event) =>
+                                setTransactionStartTime(event.target.value)
+                              }
                             />
                           </label>
                           <label className="transactions-filter-field">
@@ -1018,7 +1669,9 @@ export default function App() {
                             <input
                               type="datetime-local"
                               value={transactionEndTime}
-                              onChange={(event) => setTransactionEndTime(event.target.value)}
+                              onChange={(event) =>
+                                setTransactionEndTime(event.target.value)
+                              }
                             />
                           </label>
                           <button
@@ -1035,7 +1688,10 @@ export default function App() {
                       )}
                     </th>
                     <th>Token</th>
-                    <th className="transactions-th-filterable" ref={amountFilterRef}>
+                    <th
+                      className="transactions-th-filterable"
+                      ref={amountFilterRef}
+                    >
                       <div className="transactions-th-content">
                         <span>Amount</span>
                         <button
@@ -1050,7 +1706,10 @@ export default function App() {
                           title="Filter amount"
                         >
                           <svg viewBox="0 0 16 16" aria-hidden="true">
-                            <path d="M2 3h12l-4.5 5v4l-3-1.8V8z" fill="currentColor" />
+                            <path
+                              d="M2 3h12l-4.5 5v4l-3-1.8V8z"
+                              fill="currentColor"
+                            />
                           </svg>
                         </button>
                       </div>
@@ -1063,7 +1722,9 @@ export default function App() {
                               min="0"
                               step="100"
                               value={transactionMinAmount}
-                              onChange={(event) => setTransactionMinAmount(event.target.value)}
+                              onChange={(event) =>
+                                setTransactionMinAmount(event.target.value)
+                              }
                               placeholder="0"
                             />
                           </label>
@@ -1074,7 +1735,9 @@ export default function App() {
                               min="0"
                               step="100"
                               value={transactionMaxAmount}
-                              onChange={(event) => setTransactionMaxAmount(event.target.value)}
+                              onChange={(event) =>
+                                setTransactionMaxAmount(event.target.value)
+                              }
                               placeholder="No limit"
                             />
                           </label>
@@ -1091,7 +1754,10 @@ export default function App() {
                         </div>
                       )}
                     </th>
-                    <th className="transactions-th-filterable" ref={usdFilterRef}>
+                    <th
+                      className="transactions-th-filterable"
+                      ref={usdFilterRef}
+                    >
                       <div className="transactions-th-content">
                         <span>USD (Now)</span>
                         <button
@@ -1106,7 +1772,10 @@ export default function App() {
                           title="Filter USD"
                         >
                           <svg viewBox="0 0 16 16" aria-hidden="true">
-                            <path d="M2 3h12l-4.5 5v4l-3-1.8V8z" fill="currentColor" />
+                            <path
+                              d="M2 3h12l-4.5 5v4l-3-1.8V8z"
+                              fill="currentColor"
+                            />
                           </svg>
                         </button>
                       </div>
@@ -1119,7 +1788,9 @@ export default function App() {
                               min="0"
                               step="100"
                               value={transactionMinUsd}
-                              onChange={(event) => setTransactionMinUsd(event.target.value)}
+                              onChange={(event) =>
+                                setTransactionMinUsd(event.target.value)
+                              }
                               placeholder="0"
                             />
                           </label>
@@ -1130,7 +1801,9 @@ export default function App() {
                               min="0"
                               step="100"
                               value={transactionMaxUsd}
-                              onChange={(event) => setTransactionMaxUsd(event.target.value)}
+                              onChange={(event) =>
+                                setTransactionMaxUsd(event.target.value)
+                              }
                               placeholder="No limit"
                             />
                           </label>
@@ -1155,28 +1828,45 @@ export default function App() {
                   {filteredTransactions.length ? (
                     filteredTransactions.map((transfer) => (
                       <tr key={transfer.id}>
-                        <td className={`transfer-dir ${transfer.direction === "From" ? "from" : "to"}`}>
+                        <td
+                          className={`transfer-dir ${transfer.direction === "From" ? "from" : "to"}`}
+                        >
                           {transfer.direction}
                         </td>
                         <td>
-                          <div className="transfer-counterparty">{transfer.counterpartLabel}</div>
-                          <div className="transfer-addr">{transfer.counterpartAddr}</div>
+                          <div className="transfer-counterparty">
+                            {transfer.counterpartLabel}
+                          </div>
+                          <div className="transfer-addr">
+                            {transfer.counterpartAddr}
+                          </div>
                         </td>
                         <td>{transfer.timeUtc}</td>
                         <td>{transfer.token}</td>
                         <td>{fmtTokenAmount(transfer.amount)}</td>
                         <td>{fmtUsdAmount(transfer.usd)}</td>
                         <td>
-                          <div className="transfer-hash-cell" title={transfer.transactionHash}>
-                            <span className="transfer-hash">{transfer.transactionHash}</span>
+                          <div
+                            className="transfer-hash-cell"
+                            title={transfer.transactionHash}
+                          >
+                            <span className="transfer-hash">
+                              {transfer.transactionHash}
+                            </span>
                             <button
                               type="button"
                               className="transfer-hash-action"
-                              onClick={() => handleCopyTransactionHash(transfer.transactionHash)}
+                              onClick={() =>
+                                handleCopyTransactionHash(
+                                  transfer.transactionHash,
+                                )
+                              }
                               aria-label="Copy transaction hash"
                               title="Copy transaction hash"
                             >
-                              {copiedTxHash === transfer.transactionHash ? "Copied" : "Copy"}
+                              {copiedTxHash === transfer.transactionHash
+                                ? "Copied"
+                                : "Copy"}
                             </button>
                             <a
                               className="transfer-hash-action"
@@ -1191,7 +1881,8 @@ export default function App() {
                           </div>
                         </td>
                         <td>
-                          S {transfer.sentTransactions.toLocaleString()} · R {transfer.receivedTransactions.toLocaleString()}
+                          S {transfer.sentTransactions.toLocaleString()} · R{" "}
+                          {transfer.receivedTransactions.toLocaleString()}
                         </td>
                       </tr>
                     ))

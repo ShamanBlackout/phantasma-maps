@@ -20,6 +20,7 @@ export default function Header({
   }
 
   const priceChange24h = Number(tokenInfo.priceChange24h) || 0;
+  const hasPrice = Number.isFinite(tokenInfo.price);
   const priceUp = priceChange24h >= 0;
   const priceUpdatedLabel = priceUpdatedAt
     ? new Date(priceUpdatedAt).toLocaleTimeString([], {
@@ -27,7 +28,9 @@ export default function Header({
         minute: "2-digit",
         second: "2-digit",
       })
-    : "Syncing...";
+    : hasPrice
+      ? "Syncing..."
+      : "No market feed";
 
   return (
     <header className="header">
@@ -86,11 +89,13 @@ export default function Header({
         <div className="header-price">
           <span className="header-price-symbol">{tokenInfo.name}</span>
           <span className="header-price-value">
-            ${tokenInfo.price.toFixed(5)}
+            {hasPrice ? `$${tokenInfo.price.toFixed(5)}` : "N/A"}
           </span>
-          <span className={`header-price-change ${priceUp ? "up" : "down"}`}>
-            {priceUp ? "▲" : "▼"} {Math.abs(priceChange24h).toFixed(2)}%
-          </span>
+          {hasPrice ? (
+            <span className={`header-price-change ${priceUp ? "up" : "down"}`}>
+              {priceUp ? "▲" : "▼"} {Math.abs(priceChange24h).toFixed(2)}%
+            </span>
+          ) : null}
           <span className="header-price-updated">
             Updated {priceUpdatedLabel}
           </span>
