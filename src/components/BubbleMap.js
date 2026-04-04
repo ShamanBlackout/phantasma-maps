@@ -14,6 +14,7 @@ export default function BubbleMap({
   onNodeClick,
   onNodeHover,
   selectedNodeId,
+  currentSupply,
   colorTheme,
   onReady,
 }) {
@@ -32,6 +33,16 @@ export default function BubbleMap({
   const bubbleLabelColor = colorTheme === "light" ? "#1f3248" : "white";
   const bubblePctColor =
     colorTheme === "light" ? "rgba(31,50,72,0.72)" : "rgba(255,255,255,0.7)";
+
+  function formatSharePct(node) {
+    const parsedValue = Number(node?.value);
+    if (Number.isFinite(currentSupply) && currentSupply > 0) {
+      return `${(((Number.isFinite(parsedValue) ? parsedValue : 0) / currentSupply) * 100).toFixed(2)}%`;
+    }
+
+    const fallbackPct = Number(node?.pct);
+    return `${(Number.isFinite(fallbackPct) ? fallbackPct : 0).toFixed(2)}%`;
+  }
 
   const svgRef = useRef(null);
   const boundsRef = useRef(null);
@@ -379,7 +390,7 @@ export default function BubbleMap({
       .filter((d) => rScale(getRenderValue(d)) > 36)
       .append("text")
       .attr("class", "bubble-pct")
-      .text((d) => `${d.pct}%`)
+      .text((d) => formatSharePct(d))
       .attr("text-anchor", "middle")
       .attr("dy", "1.1em")
       .attr("fill", bubblePctColor)

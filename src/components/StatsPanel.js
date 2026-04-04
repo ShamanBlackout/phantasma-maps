@@ -2,10 +2,15 @@ import React, { useEffect, useRef, useState } from "react";
 import { HOLDER_TYPES } from "../data/mockData";
 import { getHolderPalette } from "../theme/holderPalettes";
 
+const LEGEND_ORDER = ["minor", "medium", "large", "major", "dominant"];
+
 function fmt(n) {
+  if (!Number.isFinite(n)) return "0";
   if (n >= 1_000_000) return (n / 1_000_000).toFixed(2) + "M";
-  if (n >= 1_000) return (n / 1_000).toFixed(1) + "K";
-  return n.toString();
+  if (n >= 1_000) return (n / 1_000).toFixed(2) + "K";
+  if (n >= 1) return n.toFixed(2);
+  if (n > 0) return n.toFixed(8).replace(/\.?0+$/, "");
+  return "0";
 }
 
 export default function StatsPanel({
@@ -26,6 +31,8 @@ export default function StatsPanel({
 }) {
   const holderPalette = getHolderPalette(colorTheme);
   const totalSupply = Number(tokenInfo.totalSupply) || 0;
+  const currentSupply = Number(tokenInfo.currentSupply) || 0;
+  const hasMetadataTotalSupply = Boolean(tokenInfo.hasMetadataTotalSupply);
   const hasPrice = Number.isFinite(tokenInfo.price);
   const [isTokenMenuOpen, setIsTokenMenuOpen] = useState(false);
   const [tokenSearchQuery, setTokenSearchQuery] = useState("");
@@ -38,9 +45,24 @@ export default function StatsPanel({
     .slice(0, 10)
     .reduce((sum, h) => sum + h.value, 0);
   const top10share =
-    totalSupply > 0 ? ((top10pct / totalSupply) * 100).toFixed(1) : "0.0";
+    currentSupply > 0 ? ((top10pct / currentSupply) * 100).toFixed(1) : "0.0";
+  const selectedNodeShare = selectedNode
+    ? currentSupply > 0
+      ? (((Number(selectedNode.value) || 0) / currentSupply) * 100).toFixed(2)
+      : (Number(selectedNode.pct) || 0).toFixed(2)
+    : "0.00";
 
   const sorted = holders.slice().sort((a, b) => b.value - a.value);
+  const legendCounts = holders.reduce((counts, holder) => {
+    const key = String(holder?.type || "minor");
+    counts[key] = (counts[key] || 0) + 1;
+    return counts;
+  }, {});
+  const orderedLegendItems = LEGEND_ORDER.map((key) => ({
+    key,
+    label: HOLDER_TYPES[key]?.label || key,
+    count: legendCounts[key] || 0,
+  }));
   const normalizedTokenSearch = tokenSearchQuery.trim().toLowerCase();
   const filteredTokenSymbols = (availableTokens || []).filter((tokenSymbol) =>
     String(tokenSymbol || "")
@@ -157,7 +179,19 @@ export default function StatsPanel({
             <div className="stats-token-row">
               <span className="stats-label">Total Supply</span>
               <span className="stats-value">
-                {totalSupply > 0 ? fmt(totalSupply) : "N/A"}
+                {hasMetadataTotalSupply
+                  ? totalSupply > 0
+                    ? fmt(totalSupply)
+                    : "∞"
+                  : totalSupply > 0
+                    ? fmt(totalSupply)
+                    : "N/A"}
+              </span>
+            </div>
+            <div className="stats-token-row">
+              <span className="stats-label">Current Supply</span>
+              <span className="stats-value">
+                {currentSupply > 0 ? fmt(currentSupply) : "N/A"}
               </span>
             </div>
             <div className="stats-token-row">
@@ -177,13 +211,16 @@ export default function StatsPanel({
           {/* Legend */}
           <div className="stats-card">
             <div className="stats-section-title">Legend</div>
-            {Object.entries(HOLDER_TYPES).map(([key, { label }]) => (
+            {orderedLegendItems.map(({ key, label, count }) => (
               <div className="legend-row" key={key}>
                 <span
                   className="legend-dot"
                   style={{ background: holderPalette[key] || "#74b9ff" }}
                 />
                 <span className="legend-label">{label}</span>
+                <span className="legend-count">
+                  {count.toLocaleString()} {count === 1 ? "wallet" : "wallets"}
+                </span>
               </div>
             ))}
           </div>
@@ -240,7 +277,7 @@ export default function StatsPanel({
               <div className="stats-token-row">
                 <span className="stats-label">Share</span>
                 <span className="stats-value stats-value-highlight">
-                  {selectedNode.pct}%
+                  {selectedNodeShare}%
                 </span>
               </div>
               <div className="stats-token-row">
@@ -280,21 +317,30 @@ export default function StatsPanel({
           <div className="stats-card stats-card-holders">
             <div className="stats-section-title">Top Holders</div>
             <div className="holders-list">
-              {sorted.slice(0, 15).map((h, i) => (
-                <div
-                  key={h.id}
-                  className={`holder-row ${selectedNode?.id === h.id ? "holder-row-active" : ""}`}
-                  onClick={() => onNodeSelect(h)}
-                >
-                  <span className="holder-rank">#{i + 1}</span>
-                  <span
-                    className="holder-dot"
-                    style={{ background: holderPalette[h.type] || "#74b9ff" }}
-                  />
-                  <span className="holder-addr">{h.shortAddr}</span>
-                  <span className="holder-pct">{h.pct}%</span>
-                </div>
-              ))}
+              {sorted.slice(0, 15).map((h, i) => {
+                const holderShare =
+                  currentSupply > 0
+                    ? ((Number(h.value) || 0) / currentSupply) * 100
+                    : Number(h.pct) || 0;
+
+                return (
+                  <div
+                    key={h.id}
+                    className={`holder-row ${selectedNode?.id === h.id ? "holder-row-active" : ""}`}
+                    onClick={() => onNodeSelect(h)}
+                  >
+                    <span className="holder-rank">#{i + 1}</span>
+                    <span
+                      className="holder-dot"
+                      style={{ background: holderPalette[h.type] || "#74b9ff" }}
+                    />
+                    <span className="holder-addr">{h.shortAddr}</span>
+                    <span className="holder-pct">
+                      {holderShare.toFixed(2)}%
+                    </span>
+                  </div>
+                );
+              })}
             </div>
           </div>
         </div>

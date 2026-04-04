@@ -8,11 +8,11 @@ export const TOKEN_INFO = {
 };
 
 export const HOLDER_TYPES = {
-  team: { label: "Team / Foundation", color: "#ff6b6b" },
-  exchange: { label: "Exchange", color: "#ffa502" },
-  contract: { label: "Smart Contract", color: "#a29bfe" },
-  whale: { label: "Whale", color: "#00cec9" },
-  regular: { label: "Holder", color: "#74b9ff" },
+  dominant: { label: "> 10% held", color: "#ff6b6b" },
+  major: { label: "5% - 10% held", color: "#ff9f43" },
+  large: { label: "1% - 5% held", color: "#feca57" },
+  medium: { label: "0.1% - 1% held", color: "#48dbfb" },
+  minor: { label: "< 0.1% held", color: "#74b9ff" },
 };
 
 const BASE_TX_BY_TYPE = {

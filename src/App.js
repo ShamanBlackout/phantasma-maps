@@ -163,15 +163,11 @@ function shortenAddress(address) {
 }
 
 function inferHolderType(label, pct) {
-  const normalized = String(label || "").toLowerCase();
-  if (/team|foundation|treasury|ecosystem/.test(normalized)) return "team";
-  if (/exchange|binance|kucoin|gate|okx|mexc|bybit/.test(normalized))
-    return "exchange";
-  if (/contract|staking|pool|bridge|router|swap|vault|farm/.test(normalized)) {
-    return "contract";
-  }
-  if (Number.isFinite(pct) && pct >= 1) return "whale";
-  return "regular";
+  if (!Number.isFinite(pct) || pct < 0.1) return "minor";
+  if (pct < 1) return "medium";
+  if (pct < 5) return "large";
+  if (pct < 10) return "major";
+  return "dominant";
 }
 
 function normalizeAmount(rawAmount) {
@@ -179,13 +175,42 @@ function normalizeAmount(rawAmount) {
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
 }
 
-function buildGraphDataFromApi(graphPayload, totalSupply) {
+function applyCurrentSupplyToNodes(nodes, currentSupply) {
+  if (!Array.isArray(nodes) || !nodes.length) return [];
+
+  const supplyBase = Number(currentSupply);
+  if (!Number.isFinite(supplyBase) || supplyBase <= 0) {
+    return nodes;
+  }
+
+  return nodes.map((node) => {
+    const value = Number(node?.value) || 0;
+    const pct = (value / supplyBase) * 100;
+
+    return {
+      ...node,
+      pct: pct.toFixed(2),
+      type: inferHolderType(node?.label, pct),
+    };
+  });
+}
+
+function buildGraphDataFromApi(graphPayload, decimals = 0) {
   const apiNodes = Array.isArray(graphPayload?.nodes) ? graphPayload.nodes : [];
   const apiEdges = Array.isArray(graphPayload?.edges) ? graphPayload.edges : [];
 
   if (!apiNodes.length || !apiEdges.length) {
     return null;
   }
+
+  // Apply on-chain decimal normalization if the API provides raw amounts.
+  const divisor =
+    Number.isFinite(decimals) && decimals > 0 ? Math.pow(10, decimals) : 1;
+
+  // Read explicitly-provided totalSupply from the graph payload (already
+  // normalized by the API, or raw if decimals are provided here).
+  const payloadTotalSupply =
+    normalizeAmount(graphPayload?.totalSupply) / divisor;
 
   const nodeStats = new Map();
 
@@ -206,17 +231,19 @@ function buildGraphDataFromApi(graphPayload, totalSupply) {
   }
 
   const discoveredTotal = apiNodes.reduce(
-    (sum, node) => sum + normalizeAmount(node?.balance),
+    (sum, node) => sum + normalizeAmount(node?.balance) / divisor,
     0,
   );
-  const shareBase = totalSupply > 0 ? totalSupply : discoveredTotal || 1;
+  // Prefer the explicitly-supplied totalSupply, fall back to sum of nodes.
+  const shareBase =
+    payloadTotalSupply > 0 ? payloadTotalSupply : discoveredTotal || 1;
 
   const mappedNodes = apiNodes
     .map((node) => {
       const id = String(node?.address || "").trim();
       if (!id) return null;
 
-      const value = normalizeAmount(node?.balance);
+      const value = normalizeAmount(node?.balance) / divisor;
       const pct = (value / shareBase) * 100;
       const label = String(node?.label || "").trim() || shortenAddress(id);
       const type = inferHolderType(label, pct);
@@ -254,7 +281,7 @@ function buildGraphDataFromApi(graphPayload, totalSupply) {
       edgeMap.set(key, {
         source,
         target,
-        transactionVolume: normalizeAmount(edge?.amount),
+        transactionVolume: normalizeAmount(edge?.amount) / divisor,
         sentTransactions: 1,
         receivedTransactions: 1,
         transactionHash: String(edge?.txHash || ""),
@@ -262,7 +289,7 @@ function buildGraphDataFromApi(graphPayload, totalSupply) {
       continue;
     }
 
-    prev.transactionVolume += normalizeAmount(edge?.amount);
+    prev.transactionVolume += normalizeAmount(edge?.amount) / divisor;
     prev.sentTransactions += 1;
     prev.receivedTransactions += 1;
   }
@@ -271,6 +298,7 @@ function buildGraphDataFromApi(graphPayload, totalSupply) {
     nodes: mappedNodes,
     links: [...edgeMap.values()],
     totalValue: discoveredTotal,
+    totalSupply: payloadTotalSupply > 0 ? payloadTotalSupply : 0,
   };
 }
 
@@ -352,6 +380,11 @@ function createTokensEndpoint() {
   return `${base}/tokens`;
 }
 
+function createTokenInfoEndpoint(tokenSymbol) {
+  const base = MAPS_API_BASE_URL.replace(/\/+$/, "");
+  return `${base}/tokens/${encodeURIComponent(tokenSymbol)}/metadata`;
+}
+
 function createGraphEndpoint(tokenSymbol, rootAddress = "") {
   const base = MAPS_API_BASE_URL.replace(/\/+$/, "");
   const activeRootAddress = String(
@@ -392,7 +425,18 @@ function parseTimestampMs(rawTimestamp) {
 }
 
 function getMockTokenData(tokenSymbol) {
-  return MOCK_TOKEN_DATA_BY_SYMBOL[tokenSymbol] || null;
+  const mockTokenData = MOCK_TOKEN_DATA_BY_SYMBOL[tokenSymbol] || null;
+  if (!mockTokenData) return null;
+
+  return {
+    ...mockTokenData,
+    holders: Array.isArray(mockTokenData.holders)
+      ? mockTokenData.holders.map((holder) => ({
+          ...holder,
+          type: inferHolderType(holder.label, Number(holder.pct)),
+        }))
+      : [],
+  };
 }
 
 function parseCoinGeckoQuote(payload) {
@@ -508,6 +552,15 @@ function fmtUsdAmount(n) {
   return `$${n.toFixed(2)}`;
 }
 
+function fmtSharePct(value, currentSupply, fallbackPct = 0) {
+  if (Number.isFinite(currentSupply) && currentSupply > 0) {
+    return `${(((Number(value) || 0) / currentSupply) * 100).toFixed(2)}%`;
+  }
+
+  const parsedFallback = Number(fallbackPct);
+  return `${(Number.isFinite(parsedFallback) ? parsedFallback : 0).toFixed(2)}%`;
+}
+
 function toDateTimeLocalValue(timestamp) {
   const date = new Date(timestamp);
   const pad = (value) => String(value).padStart(2, "0");
@@ -554,6 +607,7 @@ export default function App() {
     }
   });
   const [apiTokenSymbols, setApiTokenSymbols] = useState([]);
+  const [apiTokenInfo, setApiTokenInfo] = useState(null);
   const [trackedTokenSupply, setTrackedTokenSupply] = useState(0);
   const [tokenSelectorStatus, setTokenSelectorStatus] = useState("");
   const [mapNodes, setMapNodes] = useState([]);
@@ -620,6 +674,57 @@ export default function App() {
     } catch {
       // Ignore storage access issues and keep token selection in memory.
     }
+  }, [selectedTokenSymbol]);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    async function fetchTokenInfo() {
+      const result = await fetchJsonWithTimeout(
+        createTokenInfoEndpoint(selectedTokenSymbol),
+        { cache: "no-store" },
+        MAPS_API_REQUEST_TIMEOUT_MS,
+      );
+
+      if (!isMounted) return;
+
+      if (!result.ok) {
+        setApiTokenInfo(null);
+        return;
+      }
+
+      const payload = result.payload;
+      const metadataMaxSupplyRaw =
+        payload?.maxSupplyNormalized ?? payload?.max_supply_normalized;
+      const hasMetadataTotalSupply =
+        metadataMaxSupplyRaw !== undefined && metadataMaxSupplyRaw !== null;
+      const parsedMetadataTotalSupply = Number(metadataMaxSupplyRaw);
+      const parsedCurrentSupply = Number(
+        payload?.currentSupplyNormalized ?? payload?.current_supply_normalized,
+      );
+
+      setApiTokenInfo({
+        fullName: String(payload?.name || "").trim(),
+        totalSupply: Number.isFinite(parsedMetadataTotalSupply)
+          ? parsedMetadataTotalSupply
+          : null,
+        currentSupply: Number.isFinite(parsedCurrentSupply)
+          ? parsedCurrentSupply
+          : 0,
+        hasMetadataTotalSupply,
+        decimals: Number(payload?.decimals ?? 0) || 0,
+        chain: String(TOKEN_INFO.chain).trim(),
+      });
+    }
+
+    fetchTokenInfo().catch(() => {
+      if (!isMounted) return;
+      setApiTokenInfo(null);
+    });
+
+    return () => {
+      isMounted = false;
+    };
   }, [selectedTokenSymbol]);
 
   function isPotentialAddress(rawValue) {
@@ -734,19 +839,50 @@ export default function App() {
   const activeTokenInfo = useMemo(() => {
     const fallbackTokenInfo = selectedMockTokenData?.tokenInfo;
     const isSoul = selectedTokenSymbol === TOKEN_INFO.name;
+
+    // Prefer API-sourced token metadata, then mock fallback, then defaults.
+    const resolvedFullName =
+      apiTokenInfo?.fullName ||
+      null ||
+      (isUsingMockApiFallback ? fallbackTokenInfo?.fullName : null) ||
+      (isSoul ? TOKEN_INFO.fullName : `${selectedTokenSymbol} Token`);
+
+    const resolvedChain = apiTokenInfo?.chain || null || TOKEN_INFO.chain;
+
+    const hasMetadataTotalSupply = Boolean(
+      apiTokenInfo?.hasMetadataTotalSupply,
+    );
+
+    // totalSupply: use token_metadata.max_supply_normalized when provided,
+    // including explicit 0 (infinite supply). Otherwise fall back to
+    // graph-derived supply, then mock/default data.
+    const resolvedTotalSupply = hasMetadataTotalSupply
+      ? Number.isFinite(apiTokenInfo?.totalSupply)
+        ? apiTokenInfo.totalSupply
+        : 0
+      : (trackedTokenSupply > 0 ? trackedTokenSupply : 0) ||
+        (isUsingMockApiFallback
+          ? (fallbackTokenInfo?.totalSupply ??
+            (isSoul ? TOKEN_INFO.totalSupply : 0))
+          : 0);
+
+    const resolvedCurrentSupply =
+      (Number.isFinite(apiTokenInfo?.currentSupply)
+        ? apiTokenInfo.currentSupply
+        : null) ??
+      ((trackedTokenSupply > 0 ? trackedTokenSupply : 0) ||
+        (isUsingMockApiFallback
+          ? (fallbackTokenInfo?.totalSupply ??
+            (isSoul ? TOKEN_INFO.totalSupply : 0))
+          : 0));
+
     return {
       name: selectedTokenSymbol,
-      fullName:
-        (isUsingMockApiFallback ? fallbackTokenInfo?.fullName : null) ||
-        (isSoul ? TOKEN_INFO.fullName : `${selectedTokenSymbol} Token`),
-      chain: TOKEN_INFO.chain,
-      totalSupply:
-        trackedTokenSupply > 0
-          ? trackedTokenSupply
-          : isUsingMockApiFallback
-            ? (fallbackTokenInfo?.totalSupply ??
-              (isSoul ? TOKEN_INFO.totalSupply : 0))
-            : 0,
+      fullName: resolvedFullName,
+      chain: resolvedChain,
+      totalSupply: resolvedTotalSupply,
+      currentSupply: resolvedCurrentSupply,
+      hasMetadataTotalSupply,
       price: isSoul
         ? liveTokenInfo.price
         : isUsingMockApiFallback
@@ -759,6 +895,7 @@ export default function App() {
           : null,
     };
   }, [
+    apiTokenInfo,
     isUsingMockApiFallback,
     selectedMockTokenData,
     selectedTokenSymbol,
@@ -817,7 +954,8 @@ export default function App() {
 
       setIsUsingMockApiFallback(false);
 
-      const mappedGraph = buildGraphDataFromApi(result.payload, 0);
+      const graphDecimals = apiTokenInfo?.decimals ?? 0;
+      const mappedGraph = buildGraphDataFromApi(result.payload, graphDecimals);
 
       if (
         !mappedGraph ||
@@ -847,7 +985,12 @@ export default function App() {
 
       setMapNodes(focusedGraph.nodes);
       setMapLinks(focusedGraph.links);
-      setTrackedTokenSupply(focusedGraph.totalValue || 0);
+      // Prefer the API's explicit totalSupply; fall back to discovered sum.
+      setTrackedTokenSupply(
+        mappedGraph.totalSupply > 0
+          ? mappedGraph.totalSupply
+          : focusedGraph.totalValue || 0,
+      );
       if (focusedGraph.rootNodeId) {
         const focusedRootNode = focusedGraph.nodes.find(
           (node) => node.id === focusedGraph.rootNodeId,
@@ -877,6 +1020,7 @@ export default function App() {
     };
   }, [
     activeGraphRootAddress,
+    apiTokenInfo,
     searchedRootAddress,
     selectedMockTokenData,
     selectedTokenSymbol,
@@ -972,16 +1116,21 @@ export default function App() {
     };
   }, []);
 
+  const displayNodes = useMemo(
+    () => applyCurrentSupplyToNodes(mapNodes, activeTokenInfo.currentSupply),
+    [mapNodes, activeTokenInfo.currentSupply],
+  );
+
   const filteredNodes = useMemo(() => {
-    if (!searchQuery) return mapNodes;
+    if (!searchQuery) return displayNodes;
     const q = searchQuery.toLowerCase();
-    return mapNodes.filter(
+    return displayNodes.filter(
       (h) =>
         h.id.toLowerCase().includes(q) ||
         h.label.toLowerCase().includes(q) ||
         h.shortAddr.toLowerCase().includes(q),
     );
-  }, [searchQuery, mapNodes]);
+  }, [searchQuery, displayNodes]);
 
   const filteredLinks = useMemo(() => {
     const ids = new Set(filteredNodes.map((n) => n.id));
@@ -989,17 +1138,26 @@ export default function App() {
   }, [filteredNodes, mapLinks]);
 
   const nodeById = useMemo(
-    () => new Map(mapNodes.map((holder) => [holder.id, holder])),
-    [mapNodes],
+    () => new Map(displayNodes.map((holder) => [holder.id, holder])),
+    [displayNodes],
   );
+
+  const resolvedSelectedNode = selectedNode
+    ? nodeById.get(selectedNode.id) || selectedNode
+    : null;
+  const resolvedHoveredNode = hoveredNode
+    ? nodeById.get(hoveredNode.id) || hoveredNode
+    : null;
 
   useEffect(() => {
     if (!selectedNode) return;
-    const stillExists = mapNodes.some((node) => node.id === selectedNode.id);
+    const stillExists = displayNodes.some(
+      (node) => node.id === selectedNode.id,
+    );
     if (!stillExists) {
       setSelectedNode(null);
     }
-  }, [mapNodes, selectedNode]);
+  }, [displayNodes, selectedNode]);
 
   useEffect(() => {
     if (!selectedNode?.id) {
@@ -1136,7 +1294,11 @@ export default function App() {
               transaction.tokenSymbol ??
               activeTokenInfo.name,
           );
-          const amount = normalizeAmount(transaction.amount);
+          const amount = normalizeAmount(
+            transaction.amountNormalized ??
+              transaction.amount_normalized ??
+              transaction.amount,
+          );
           const timestamp = parseTimestampMs(transaction.timestamp);
           const isOutgoing = fromAddress === selectedNode.id;
           const counterpartId = isOutgoing ? toAddress : fromAddress;
@@ -1325,7 +1487,8 @@ export default function App() {
     }
   }
 
-  const infoNode = hoveredNode || selectedNode;
+  const infoNode = resolvedHoveredNode || resolvedSelectedNode;
+  const currentSupplyBase = Number(activeTokenInfo.currentSupply) || 0;
 
   useEffect(() => {
     if (!selectedNode) {
@@ -1450,6 +1613,7 @@ export default function App() {
             onNodeClick={setSelectedNode}
             onNodeHover={setHoveredNode}
             selectedNodeId={selectedNode?.id}
+            currentSupply={currentSupplyBase}
             colorTheme={colorTheme}
             onReady={(actions) => {
               bubbleMapActionsRef.current = actions;
@@ -1466,10 +1630,12 @@ export default function App() {
           {infoNode && (
             <div className="map-hover-info is-active">
               <div className="map-hover-title">{infoNode.label}</div>
-              <div className="map-hover-addr">{infoNode.shortAddr}</div>
+              <div className="map-hover-addr-full">{infoNode.id}</div>
               <div className="map-hover-row">
                 <span>Share</span>
-                <strong>{infoNode.pct}%</strong>
+                <strong>
+                  {fmtSharePct(infoNode.value, currentSupplyBase, infoNode.pct)}
+                </strong>
               </div>
               <div className="map-hover-row">
                 <span>Amount</span>
@@ -1497,27 +1663,31 @@ export default function App() {
               </div>
             </div>
           )}
-          {selectedNode && (
+          {resolvedSelectedNode && (
             <div className="map-selected-info is-active">
               <div className="map-selected-head">
                 <div>
-                  <div className="map-selected-title">{selectedNode.label}</div>
+                  <div className="map-selected-title">
+                    {resolvedSelectedNode.label}
+                  </div>
                   <div className="map-selected-addr-row">
                     <div className="map-selected-addr">
-                      {selectedNode.shortAddr}
+                      {resolvedSelectedNode.shortAddr}
                     </div>
                     <button
                       type="button"
                       className="map-selected-action"
-                      onClick={() => handleCopyAddress(selectedNode.id)}
+                      onClick={() => handleCopyAddress(resolvedSelectedNode.id)}
                       aria-label="Copy address"
                       title="Copy address"
                     >
-                      {copiedAddress === selectedNode.id ? "Copied" : "Copy"}
+                      {copiedAddress === resolvedSelectedNode.id
+                        ? "Copied"
+                        : "Copy"}
                     </button>
                     <a
                       className="map-selected-action"
-                      href={`${PHANTASMA_EXPLORER_BASE}${encodeURIComponent(selectedNode.id)}`}
+                      href={`${PHANTASMA_EXPLORER_BASE}${encodeURIComponent(resolvedSelectedNode.id)}`}
                       target="_blank"
                       rel="noreferrer noopener"
                       aria-label="Open address on Phantasma Explorer"
@@ -1539,19 +1709,27 @@ export default function App() {
               <div className="map-selected-grid">
                 <div className="map-selected-stat">
                   <span>Share</span>
-                  <strong>{selectedNode.pct}%</strong>
+                  <strong>
+                    {fmtSharePct(
+                      resolvedSelectedNode.value,
+                      currentSupplyBase,
+                      resolvedSelectedNode.pct,
+                    )}
+                  </strong>
                 </div>
                 <div className="map-selected-stat">
                   <span>Amount</span>
                   <strong>
-                    {fmtTokenAmount(selectedNode.value)} {activeTokenInfo.name}
+                    {fmtTokenAmount(resolvedSelectedNode.value)}{" "}
+                    {activeTokenInfo.name}
                   </strong>
                 </div>
                 <div className="map-selected-stat">
                   <span>USD Value</span>
                   <strong>
                     {fmtUsdAmount(
-                      selectedNode.value * Number(activeTokenInfo.price),
+                      resolvedSelectedNode.value *
+                        Number(activeTokenInfo.price),
                     )}
                   </strong>
                 </div>
@@ -1562,11 +1740,14 @@ export default function App() {
               </div>
               <div className="map-selected-tx-row">
                 <span>
-                  Sent {selectedNode.sentTransactions?.toLocaleString() ?? "0"}
+                  Sent{" "}
+                  {resolvedSelectedNode.sentTransactions?.toLocaleString() ??
+                    "0"}
                 </span>
                 <span>
                   Received{" "}
-                  {selectedNode.receivedTransactions?.toLocaleString() ?? "0"}
+                  {resolvedSelectedNode.receivedTransactions?.toLocaleString() ??
+                    "0"}
                 </span>
               </div>
               <button
@@ -1596,13 +1777,13 @@ export default function App() {
           </div>
         </div>
         <StatsPanel
-          holders={mapNodes}
+          holders={displayNodes}
           tokenInfo={activeTokenInfo}
           availableTokens={availableTokenSymbols}
           selectedTokenSymbol={selectedTokenSymbol}
           onTokenChange={setSelectedTokenSymbol}
           tokenSelectorStatus={tokenSelectorStatus}
-          selectedNode={selectedNode}
+          selectedNode={resolvedSelectedNode}
           onNodeSelect={setSelectedNode}
           copiedAddress={copiedAddress}
           onCopyAddress={handleCopyAddress}
