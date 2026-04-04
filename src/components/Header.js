@@ -7,6 +7,12 @@ export default function Header({
   colorTheme,
   onThemeChange,
 }) {
+  const themeOptions = [
+    { value: "dark", label: "Dark" },
+    { value: "light", label: "Light" },
+    { value: "ghost-blue", label: "Ghost Blue" },
+    { value: "kcal-red", label: "Kcal Red" },
+  ];
   const [input, setInput] = useState("");
 
   function handleSubmit(e) {
@@ -76,10 +82,11 @@ export default function Header({
             value={colorTheme}
             onChange={(e) => onThemeChange && onThemeChange(e.target.value)}
           >
-            <option value="dark">Dark</option>
-            <option value="light">Light</option>
-            <option value="ghost-blue">Ghost Blue</option>
-            <option value="kcal-red">Kcal Red</option>
+            {themeOptions.map((themeOption) => (
+              <option key={themeOption.value} value={themeOption.value}>
+                {themeOption.label}
+              </option>
+            ))}
           </select>
         </label>
         <div className="header-chain">
