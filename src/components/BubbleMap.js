@@ -326,6 +326,7 @@ export default function BubbleMap({
             d.fy = d.y;
           })
           .on("drag", (event, d) => {
+            event.sourceEvent?.preventDefault?.();
             d.fx = event.x;
             d.fy = event.y;
           })
@@ -580,6 +581,7 @@ export default function BubbleMap({
     <div className="bubble-map-shell">
       <svg
         ref={svgRef}
+        draggable={false}
         style={{
           width: "100%",
           height: "100%",
