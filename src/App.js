@@ -13,6 +13,7 @@ import "./App.css";
 const STATS_PANEL_STORAGE_KEY = "phantasma-maps:stats-panel-collapsed";
 const COLOR_THEME_STORAGE_KEY = "phantasma-maps:color-theme";
 const TOKEN_SYMBOL_STORAGE_KEY = "phantasma-maps:selected-token-symbol";
+const MOBILE_MEDIA_QUERY = "(max-width: 768px)";
 const ALLOWED_COLOR_THEMES = new Set([
   "dark",
   "light",
@@ -575,6 +576,7 @@ function makeExportFileName(selectedNode, ext) {
 
 export default function App() {
   const bubbleMapActionsRef = useRef(null);
+  const pendingMobileFitKeyRef = useRef(null);
   const exportMenuRef = useRef(null);
   const dirFilterRef = useRef(null);
   const counterpartyFilterRef = useRef(null);
@@ -630,6 +632,10 @@ export default function App() {
   const [searchedRootAddress, setSearchedRootAddress] = useState(
     MAPS_API_ROOT_ADDRESS || "",
   );
+  const activeGraphRootAddress = useMemo(
+    () => String(searchedRootAddress || MAPS_API_ROOT_ADDRESS || "").trim(),
+    [searchedRootAddress],
+  );
   const [colorTheme, setColorTheme] = useState(() => {
     try {
       const stored = window.localStorage.getItem(COLOR_THEME_STORAGE_KEY);
@@ -645,6 +651,34 @@ export default function App() {
       return false;
     }
   });
+  const [isMobileViewport, setIsMobileViewport] = useState(() => {
+    if (typeof window === "undefined" || !window.matchMedia) {
+      return false;
+    }
+
+    return window.matchMedia(MOBILE_MEDIA_QUERY).matches;
+  });
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.matchMedia) {
+      return undefined;
+    }
+
+    const mediaQuery = window.matchMedia(MOBILE_MEDIA_QUERY);
+    const handleChange = (event) => {
+      setIsMobileViewport(event.matches);
+    };
+
+    setIsMobileViewport(mediaQuery.matches);
+
+    if (typeof mediaQuery.addEventListener === "function") {
+      mediaQuery.addEventListener("change", handleChange);
+      return () => mediaQuery.removeEventListener("change", handleChange);
+    }
+
+    mediaQuery.addListener(handleChange);
+    return () => mediaQuery.removeListener(handleChange);
+  }, []);
 
   useEffect(() => {
     try {
@@ -752,6 +786,23 @@ export default function App() {
   }
 
   useEffect(() => {
+    if (!isMobileViewport) {
+      pendingMobileFitKeyRef.current = null;
+      return;
+    }
+
+    const nextRootAddress = String(
+      searchedRootAddress || MAPS_API_ROOT_ADDRESS || "",
+    ).trim();
+
+    pendingMobileFitKeyRef.current = [
+      selectedTokenSymbol,
+      nextRootAddress || "token",
+      searchQuery || "all",
+    ].join("::");
+  }, [isMobileViewport, searchQuery, searchedRootAddress, selectedTokenSymbol]);
+
+  useEffect(() => {
     let isMounted = true;
 
     async function fetchAvailableTokens() {
@@ -817,11 +868,6 @@ export default function App() {
   const selectedMockTokenData = useMemo(
     () => getMockTokenData(selectedTokenSymbol),
     [selectedTokenSymbol],
-  );
-
-  const activeGraphRootAddress = useMemo(
-    () => String(searchedRootAddress || MAPS_API_ROOT_ADDRESS || "").trim(),
-    [searchedRootAddress],
   );
 
   const availableTokenSymbols = useMemo(() => {
@@ -1148,6 +1194,21 @@ export default function App() {
   const resolvedHoveredNode = hoveredNode
     ? nodeById.get(hoveredNode.id) || hoveredNode
     : null;
+
+  useEffect(() => {
+    if (!isMobileViewport) return;
+    if (isMapLoading) return;
+    if (!displayNodes.length) return;
+    if (!bubbleMapActionsRef.current?.fitToView) return;
+    if (!pendingMobileFitKeyRef.current) return;
+
+    const frameId = window.requestAnimationFrame(() => {
+      bubbleMapActionsRef.current?.fitToView?.();
+      pendingMobileFitKeyRef.current = null;
+    });
+
+    return () => window.cancelAnimationFrame(frameId);
+  }, [displayNodes.length, isMapLoading, isMobileViewport, mapLinks.length]);
 
   useEffect(() => {
     if (!selectedNode) return;

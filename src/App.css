@@ -1033,6 +1033,20 @@ body,
   position: relative;
   width: 100%;
   height: 100%;
+  overflow: hidden;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+
+.bubble-map-shell svg,
+.bubble-map-shell .bubble-node,
+.bubble-map-shell .bubble-circle,
+.bubble-map-shell .bubble-label,
+.bubble-map-shell .bubble-pct {
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-user-drag: none;
 }
 
 .map-pan-indicator {
