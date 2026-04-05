@@ -15,6 +15,7 @@ function fmt(n) {
 
 export default function StatsPanel({
   holders,
+  summaryHolders,
   tokenInfo,
   availableTokens,
   selectedTokenSymbol,
@@ -25,11 +26,19 @@ export default function StatsPanel({
   copiedAddress,
   onCopyAddress,
   onOpenTransactions,
+  isConnectionsView,
+  onClearConnections,
+  canShowConnections,
+  onShowConnections,
+  isMobileViewport,
   colorTheme,
+  activeLegendFilter,
+  onLegendFilterChange,
   isCollapsed,
   onToggleCollapse,
 }) {
   const holderPalette = getHolderPalette(colorTheme);
+  const allHolders = Array.isArray(summaryHolders) ? summaryHolders : holders;
   const totalSupply = Number(tokenInfo.totalSupply) || 0;
   const currentSupply = Number(tokenInfo.currentSupply) || 0;
   const hasMetadataTotalSupply = Boolean(tokenInfo.hasMetadataTotalSupply);
@@ -39,7 +48,7 @@ export default function StatsPanel({
   const [tokenMenuOffset, setTokenMenuOffset] = useState({ x: 0, y: 0 });
   const tokenSearchInputRef = useRef(null);
 
-  const top10pct = holders
+  const top10pct = allHolders
     .slice()
     .sort((a, b) => b.value - a.value)
     .slice(0, 10)
@@ -53,7 +62,7 @@ export default function StatsPanel({
     : "0.00";
 
   const sorted = holders.slice().sort((a, b) => b.value - a.value);
-  const legendCounts = holders.reduce((counts, holder) => {
+  const legendCounts = allHolders.reduce((counts, holder) => {
     const key = String(holder?.type || "minor");
     counts[key] = (counts[key] || 0) + 1;
     return counts;
@@ -208,25 +217,81 @@ export default function StatsPanel({
             </div>
           </div>
 
+          {selectedNode || isConnectionsView ? (
+            <div className="stats-card stats-clear-connections-card">
+              <div className="stats-clear-connections-copy">
+                <div className="stats-section-title stats-clear-connections-title">
+                  Connections
+                </div>
+                <div className="stats-clear-connections-text">
+                  {isConnectionsView
+                    ? "The graph is focused on a selected wallet's network."
+                    : selectedNode
+                      ? "Use the selected wallet to load a focused connections graph."
+                      : ""}
+                </div>
+              </div>
+              {selectedNode && canShowConnections ? (
+                <button
+                  type="button"
+                  className="stats-connection-cta-button"
+                  onClick={() => onShowConnections?.()}
+                >
+                  Show Connections
+                </button>
+              ) : null}
+              {isConnectionsView ? (
+                <button
+                  type="button"
+                  className="stats-clear-connections-button"
+                  onClick={() => onClearConnections?.()}
+                >
+                  Clear Connections
+                </button>
+              ) : null}
+            </div>
+          ) : null}
+
           {/* Legend */}
           <div className="stats-card">
             <div className="stats-section-title">Legend</div>
-            {orderedLegendItems.map(({ key, label, count }) => (
-              <div className="legend-row" key={key}>
-                <span
-                  className="legend-dot"
-                  style={{ background: holderPalette[key] || "#74b9ff" }}
-                />
-                <span className="legend-label">{label}</span>
-                <span className="legend-count">
-                  {count.toLocaleString()} {count === 1 ? "wallet" : "wallets"}
-                </span>
-              </div>
-            ))}
+            {orderedLegendItems.map(({ key, label, count }) => {
+              const isActive = activeLegendFilter === key;
+              const toggleTitle = isActive
+                ? "Show all wallets"
+                : `Show only ${label.toLowerCase()} wallets in the bubble map`;
+
+              return (
+                <div
+                  className={`legend-row ${isActive ? "is-active" : ""}`}
+                  key={key}
+                >
+                  <span
+                    className="legend-dot"
+                    style={{ background: holderPalette[key] || "#74b9ff" }}
+                  />
+                  <span className="legend-label">{label}</span>
+                  <div className="legend-actions">
+                    <button
+                      type="button"
+                      className={`legend-action ${isActive ? "is-active" : ""}`}
+                      onClick={() => onLegendFilterChange?.(key)}
+                      disabled={!count}
+                      title={toggleTitle}
+                      aria-pressed={isActive}
+                      aria-label={`${count.toLocaleString()} ${count === 1 ? "wallet" : "wallets"} in ${label.toLowerCase()}`}
+                    >
+                      {count.toLocaleString()}{" "}
+                      {count === 1 ? "wallet" : "wallets"}
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
           </div>
 
           {/* Selected Node Info */}
-          {selectedNode && (
+          {selectedNode && isMobileViewport && (
             <div className="stats-card stats-card-selected stats-node-detail-card">
               <div className="stats-section-title">Selected</div>
               <div className="stats-node-detail-head">
@@ -303,13 +368,15 @@ export default function StatsPanel({
                   {HOLDER_TYPES[selectedNode.type]?.label}
                 </span>
               </div>
-              <button
-                type="button"
-                className="map-selected-show-transfers"
-                onClick={() => onOpenTransactions?.()}
-              >
-                Show All Transactions
-              </button>
+              <div className="selected-node-actions">
+                <button
+                  type="button"
+                  className="map-selected-show-transfers"
+                  onClick={() => onOpenTransactions?.()}
+                >
+                  Show All Transactions
+                </button>
+              </div>
             </div>
           )}
 

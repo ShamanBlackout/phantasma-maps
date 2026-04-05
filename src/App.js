@@ -588,6 +588,7 @@ export default function App() {
   const [isTransfersModalOpen, setIsTransfersModalOpen] = useState(false);
   const [copiedAddress, setCopiedAddress] = useState(null);
   const [copiedTxHash, setCopiedTxHash] = useState(null);
+  const [activeHolderTypeFilter, setActiveHolderTypeFilter] = useState("");
   const [isExportMenuOpen, setIsExportMenuOpen] = useState(false);
   const [activeTransactionFilter, setActiveTransactionFilter] = useState(null);
   const [transactionDirFilter, setTransactionDirFilter] = useState("all");
@@ -608,6 +609,7 @@ export default function App() {
       return DEFAULT_MAPS_API_TOKEN_SYMBOL;
     }
   });
+  const previousSelectedTokenSymbolRef = useRef(selectedTokenSymbol);
   const [apiTokenSymbols, setApiTokenSymbols] = useState([]);
   const [apiTokenInfo, setApiTokenInfo] = useState(null);
   const [trackedTokenSupply, setTrackedTokenSupply] = useState(0);
@@ -632,6 +634,7 @@ export default function App() {
   const [searchedRootAddress, setSearchedRootAddress] = useState(
     MAPS_API_ROOT_ADDRESS || "",
   );
+  const [isConnectionsView, setIsConnectionsView] = useState(false);
   const activeGraphRootAddress = useMemo(
     () => String(searchedRootAddress || MAPS_API_ROOT_ADDRESS || "").trim(),
     [searchedRootAddress],
@@ -711,6 +714,21 @@ export default function App() {
   }, [selectedTokenSymbol]);
 
   useEffect(() => {
+    if (previousSelectedTokenSymbolRef.current === selectedTokenSymbol) {
+      return;
+    }
+
+    previousSelectedTokenSymbolRef.current = selectedTokenSymbol;
+    setSearchQuery("");
+    setSearchedRootAddress(MAPS_API_ROOT_ADDRESS || "");
+    setIsConnectionsView(false);
+    setActiveHolderTypeFilter("");
+    setSelectedNode(null);
+    setHoveredNode(null);
+    setIsTransfersModalOpen(false);
+  }, [selectedTokenSymbol]);
+
+  useEffect(() => {
     let isMounted = true;
 
     async function fetchTokenInfo() {
@@ -772,17 +790,43 @@ export default function App() {
     if (!value) {
       setSearchQuery("");
       setSearchedRootAddress(MAPS_API_ROOT_ADDRESS || "");
+      setIsConnectionsView(false);
       return;
     }
 
     if (isPotentialAddress(value)) {
       setSearchQuery("");
       setSearchedRootAddress(value);
+      setIsConnectionsView(false);
       return;
     }
 
     setSearchedRootAddress(MAPS_API_ROOT_ADDRESS || "");
+    setIsConnectionsView(false);
     setSearchQuery(value);
+  }
+
+  function handleShowNodeConnections(nodeId) {
+    const value = String(nodeId || "").trim();
+    if (!value) return;
+
+    setSearchQuery("");
+    setActiveHolderTypeFilter("");
+    setHoveredNode(null);
+    setSelectedNode(null);
+    setIsTransfersModalOpen(false);
+    setSearchedRootAddress(value);
+    setIsConnectionsView(true);
+  }
+
+  function handleClearConnections() {
+    setSearchQuery("");
+    setActiveHolderTypeFilter("");
+    setHoveredNode(null);
+    setSelectedNode(null);
+    setIsTransfersModalOpen(false);
+    setSearchedRootAddress(MAPS_API_ROOT_ADDRESS || "");
+    setIsConnectionsView(false);
   }
 
   useEffect(() => {
@@ -798,9 +842,16 @@ export default function App() {
     pendingMobileFitKeyRef.current = [
       selectedTokenSymbol,
       nextRootAddress || "token",
+      activeHolderTypeFilter || "all-types",
       searchQuery || "all",
     ].join("::");
-  }, [isMobileViewport, searchQuery, searchedRootAddress, selectedTokenSymbol]);
+  }, [
+    activeHolderTypeFilter,
+    isMobileViewport,
+    searchQuery,
+    searchedRootAddress,
+    selectedTokenSymbol,
+  ]);
 
   useEffect(() => {
     let isMounted = true;
@@ -1168,15 +1219,23 @@ export default function App() {
   );
 
   const filteredNodes = useMemo(() => {
-    if (!searchQuery) return displayNodes;
+    const typeFilteredNodes = activeHolderTypeFilter
+      ? displayNodes.filter(
+          (holder) =>
+            String(holder?.type || "minor") === activeHolderTypeFilter,
+        )
+      : displayNodes;
+
+    if (!searchQuery) return typeFilteredNodes;
+
     const q = searchQuery.toLowerCase();
-    return displayNodes.filter(
+    return typeFilteredNodes.filter(
       (h) =>
         h.id.toLowerCase().includes(q) ||
         h.label.toLowerCase().includes(q) ||
         h.shortAddr.toLowerCase().includes(q),
     );
-  }, [searchQuery, displayNodes]);
+  }, [activeHolderTypeFilter, searchQuery, displayNodes]);
 
   const filteredLinks = useMemo(() => {
     const ids = new Set(filteredNodes.map((n) => n.id));
@@ -1195,10 +1254,62 @@ export default function App() {
     ? nodeById.get(hoveredNode.id) || hoveredNode
     : null;
 
+  const selectedNodeVisibleLinkCounts = useMemo(() => {
+    if (!resolvedSelectedNode?.id) {
+      return {
+        sentTransactions: 0,
+        receivedTransactions: 0,
+      };
+    }
+
+    return filteredLinks.reduce(
+      (totals, link) => {
+        if (link.source === resolvedSelectedNode.id) {
+          totals.sentTransactions += 1;
+        }
+        if (link.target === resolvedSelectedNode.id) {
+          totals.receivedTransactions += 1;
+        }
+        return totals;
+      },
+      {
+        sentTransactions: 0,
+        receivedTransactions: 0,
+      },
+    );
+  }, [filteredLinks, resolvedSelectedNode]);
+
+  const canShowSelectedNodeConnections = useMemo(() => {
+    if (!resolvedSelectedNode?.id) return false;
+    if (resolvedSelectedNode.id === activeGraphRootAddress) return false;
+
+    return (
+      Number(resolvedSelectedNode.sentTransactions ?? 0) >
+        selectedNodeVisibleLinkCounts.sentTransactions ||
+      Number(resolvedSelectedNode.receivedTransactions ?? 0) >
+        selectedNodeVisibleLinkCounts.receivedTransactions
+    );
+  }, [
+    activeGraphRootAddress,
+    resolvedSelectedNode,
+    selectedNodeVisibleLinkCounts.receivedTransactions,
+    selectedNodeVisibleLinkCounts.sentTransactions,
+  ]);
+
+  useEffect(() => {
+    if (!activeHolderTypeFilter) return;
+    const hasMatchingType = displayNodes.some(
+      (node) => String(node?.type || "minor") === activeHolderTypeFilter,
+    );
+    if (!hasMatchingType) {
+      setActiveHolderTypeFilter("");
+    }
+  }, [activeHolderTypeFilter, displayNodes]);
+
   useEffect(() => {
     if (!isMobileViewport) return;
     if (isMapLoading) return;
-    if (!displayNodes.length) return;
+    if (!filteredNodes.length) return;
     if (!bubbleMapActionsRef.current?.fitToView) return;
     if (!pendingMobileFitKeyRef.current) return;
 
@@ -1208,17 +1319,22 @@ export default function App() {
     });
 
     return () => window.cancelAnimationFrame(frameId);
-  }, [displayNodes.length, isMapLoading, isMobileViewport, mapLinks.length]);
+  }, [
+    filteredLinks.length,
+    filteredNodes.length,
+    isMapLoading,
+    isMobileViewport,
+  ]);
 
   useEffect(() => {
     if (!selectedNode) return;
-    const stillExists = displayNodes.some(
+    const stillExists = filteredNodes.some(
       (node) => node.id === selectedNode.id,
     );
     if (!stillExists) {
       setSelectedNode(null);
     }
-  }, [displayNodes, selectedNode]);
+  }, [filteredNodes, selectedNode]);
 
   useEffect(() => {
     if (!selectedNode?.id) {
@@ -1314,6 +1430,7 @@ export default function App() {
             counterpartNode?.label ||
             counterpartNode?.shortAddr ||
             counterpartId,
+          counterpartAddress: counterpartId,
           counterpartAddr: counterpartNode?.shortAddr || counterpartId,
           token: activeTokenInfo.name,
           amount,
@@ -1375,6 +1492,7 @@ export default function App() {
               counterpartNode?.label ||
               counterpartNode?.shortAddr ||
               shortenAddress(counterpartId),
+            counterpartAddress: counterpartId,
             counterpartAddr:
               counterpartNode?.shortAddr || shortenAddress(counterpartId),
             token,
@@ -1471,7 +1589,7 @@ export default function App() {
     return filteredTransactions.map((tx) => ({
       direction: tx.direction,
       counterparty: tx.counterpartLabel,
-      address: tx.counterpartAddr,
+      address: tx.counterpartAddress || tx.counterpartAddr,
       time: tx.timeUtc,
       token: tx.token,
       amount: tx.amount,
@@ -1811,13 +1929,26 @@ export default function App() {
                     "0"}
                 </span>
               </div>
-              <button
-                type="button"
-                className="map-selected-show-transfers"
-                onClick={() => setIsTransfersModalOpen(true)}
-              >
-                Show All Transactions
-              </button>
+              <div className="selected-node-actions">
+                {canShowSelectedNodeConnections ? (
+                  <button
+                    type="button"
+                    className="map-selected-show-transfers"
+                    onClick={() =>
+                      handleShowNodeConnections(resolvedSelectedNode.id)
+                    }
+                  >
+                    Show Connections
+                  </button>
+                ) : null}
+                <button
+                  type="button"
+                  className="map-selected-show-transfers"
+                  onClick={() => setIsTransfersModalOpen(true)}
+                >
+                  Show All Transactions
+                </button>
+              </div>
             </div>
           )}
           <div className="map-hint">
@@ -1838,7 +1969,8 @@ export default function App() {
           </div>
         </div>
         <StatsPanel
-          holders={displayNodes}
+          holders={filteredNodes}
+          summaryHolders={displayNodes}
           tokenInfo={activeTokenInfo}
           availableTokens={availableTokenSymbols}
           selectedTokenSymbol={selectedTokenSymbol}
@@ -1849,7 +1981,20 @@ export default function App() {
           copiedAddress={copiedAddress}
           onCopyAddress={handleCopyAddress}
           onOpenTransactions={() => setIsTransfersModalOpen(true)}
+          isConnectionsView={isConnectionsView}
+          onClearConnections={handleClearConnections}
+          canShowConnections={canShowSelectedNodeConnections}
+          onShowConnections={() =>
+            handleShowNodeConnections(resolvedSelectedNode?.id)
+          }
+          isMobileViewport={isMobileViewport}
           colorTheme={colorTheme}
+          activeLegendFilter={activeHolderTypeFilter}
+          onLegendFilterChange={(typeKey) =>
+            setActiveHolderTypeFilter((current) =>
+              current === typeKey ? "" : typeKey,
+            )
+          }
           isCollapsed={isStatsCollapsed}
           onToggleCollapse={() =>
             setIsStatsCollapsed((collapsed) => !collapsed)
@@ -2233,11 +2378,38 @@ export default function App() {
                           {transfer.direction}
                         </td>
                         <td>
-                          <div className="transfer-counterparty">
-                            {transfer.counterpartLabel}
-                          </div>
-                          <div className="transfer-addr">
-                            {transfer.counterpartAddr}
+                          <div className="transfer-counterparty-row">
+                            <div className="transfer-counterparty">
+                              {transfer.counterpartLabel}
+                            </div>
+                            <button
+                              type="button"
+                              className="transfer-action"
+                              onClick={() =>
+                                handleCopyAddress(
+                                  transfer.counterpartAddress ||
+                                    transfer.counterpartAddr,
+                                )
+                              }
+                              aria-label="Copy counterpart address"
+                              title="Copy counterpart address"
+                            >
+                              {copiedAddress ===
+                              (transfer.counterpartAddress ||
+                                transfer.counterpartAddr)
+                                ? "Copied"
+                                : "Copy"}
+                            </button>
+                            <a
+                              className="transfer-action"
+                              href={`${PHANTASMA_EXPLORER_BASE}${encodeURIComponent(transfer.counterpartAddress || transfer.counterpartAddr)}`}
+                              target="_blank"
+                              rel="noreferrer noopener"
+                              aria-label="Open address on Phantasma Explorer"
+                              title="Open address on Phantasma Explorer"
+                            >
+                              ↗
+                            </a>
                           </div>
                         </td>
                         <td>{transfer.timeUtc}</td>
@@ -2254,7 +2426,7 @@ export default function App() {
                             </span>
                             <button
                               type="button"
-                              className="transfer-hash-action"
+                              className="transfer-action"
                               onClick={() =>
                                 handleCopyTransactionHash(
                                   transfer.transactionHash,
@@ -2268,7 +2440,7 @@ export default function App() {
                                 : "Copy"}
                             </button>
                             <a
-                              className="transfer-hash-action"
+                              className="transfer-action"
                               href={`${PHANTASMA_TX_EXPLORER_BASE}${encodeURIComponent(transfer.transactionHash)}`}
                               target="_blank"
                               rel="noreferrer noopener"
