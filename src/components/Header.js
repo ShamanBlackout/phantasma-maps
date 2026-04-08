@@ -4,6 +4,9 @@ export default function Header({
   onSearch,
   tokenInfo,
   priceUpdatedAt,
+  blockSyncHeight,
+  blockSyncTargetHeight,
+  blockSyncUpdatedAt,
   colorTheme,
   onThemeChange,
 }) {
@@ -37,6 +40,20 @@ export default function Header({
     : hasPrice
       ? "Syncing..."
       : "No market feed";
+  const hasBlockSyncHeight = Number.isFinite(blockSyncHeight);
+  const hasBlockSyncTargetHeight = Number.isFinite(blockSyncTargetHeight);
+  const blockSyncLabel = hasBlockSyncHeight
+    ? hasBlockSyncTargetHeight
+      ? `${Number(blockSyncHeight).toLocaleString()}/${Number(blockSyncTargetHeight).toLocaleString()}`
+      : Number(blockSyncHeight).toLocaleString()
+    : "Syncing...";
+  const blockSyncUpdatedLabel = blockSyncUpdatedAt
+    ? new Date(blockSyncUpdatedAt).toLocaleTimeString([], {
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+      })
+    : "Waiting for API";
 
   return (
     <header className="header">
@@ -75,6 +92,16 @@ export default function Header({
       </form>
 
       <div className="header-meta">
+        <div
+          className="header-sync"
+          title="Backend sync progress versus the live chain height"
+        >
+          <span className="header-sync-label">Block Sync</span>
+          <span className="header-sync-value">{blockSyncLabel}</span>
+          <span className="header-sync-updated">
+            Updated {blockSyncUpdatedLabel}
+          </span>
+        </div>
         <label className="header-theme" title="Change overall accent color">
           <span className="header-theme-label">Theme</span>
           <select

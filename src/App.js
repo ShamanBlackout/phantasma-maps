@@ -105,6 +105,10 @@ const MAPS_API_TX_PAGE_SIZE = parseEnvInt(
   250,
 );
 const MAPS_API_TX_MAX_PAGES = parseEnvInt("REACT_APP_MAPS_API_TX_MAX_PAGES", 8);
+const MAPS_API_SYNC_STATUS_POLL_INTERVAL_MS = parseEnvMs(
+  "REACT_APP_MAPS_API_SYNC_STATUS_POLL_INTERVAL_MS",
+  30000,
+);
 
 function parseRetryAfterMs(response) {
   const rawValue = response.headers.get("retry-after");
@@ -420,6 +424,210 @@ function createTransactionsEndpoint(
   return `${base}/transactions?${params.toString()}`;
 }
 
+function createSyncStatusEndpoint() {
+  const base = MAPS_API_BASE_URL.replace(/\/+$/, "");
+  return `${base}/sync-status`;
+}
+
+async function fetchAllTransactionsForAddress(address, tokenSymbol) {
+  const normalizedAddress = String(address || "").trim();
+  if (!normalizedAddress) return [];
+
+  const allItems = [];
+  let page = 1;
+  let total = Infinity;
+
+  while (page <= MAPS_API_TX_MAX_PAGES && allItems.length < total) {
+    const endpoint = createTransactionsEndpoint(
+      normalizedAddress,
+      tokenSymbol,
+      page,
+      MAPS_API_TX_PAGE_SIZE,
+    );
+    const result = await fetchJsonWithTimeout(
+      endpoint,
+      { cache: "no-store" },
+      MAPS_API_REQUEST_TIMEOUT_MS,
+    );
+
+    if (!result.ok) {
+      throw new Error(
+        `transactions request failed with status ${result.status}`,
+      );
+    }
+
+    const items = Array.isArray(result.payload?.items)
+      ? result.payload.items
+      : [];
+    const nextTotal = Number(result.payload?.total ?? items.length);
+    total =
+      Number.isFinite(nextTotal) && nextTotal >= 0 ? nextTotal : items.length;
+    allItems.push(...items);
+
+    if (!items.length) break;
+    page += 1;
+  }
+
+  return allItems;
+}
+
+function buildConnectionsGraphFromTransactions(
+  transactions,
+  rootAddress,
+  fallbackGraph,
+  currentSupply = 0,
+) {
+  const normalizedRoot = String(rootAddress || "").trim();
+  if (!normalizedRoot || !Array.isArray(transactions) || !transactions.length) {
+    return null;
+  }
+
+  const fallbackNodes = Array.isArray(fallbackGraph?.nodes)
+    ? fallbackGraph.nodes
+    : [];
+  const fallbackNodeById = new Map(
+    fallbackNodes.map((node) => [node.id, node]),
+  );
+  const linkMap = new Map();
+  const nodeStats = new Map();
+  const nodeVolumes = new Map();
+
+  function ensureNodeStats(nodeId) {
+    if (!nodeStats.has(nodeId)) {
+      nodeStats.set(nodeId, {
+        sentTransactions: 0,
+        receivedTransactions: 0,
+      });
+    }
+    return nodeStats.get(nodeId);
+  }
+
+  function addNodeVolume(nodeId, amount) {
+    nodeVolumes.set(nodeId, (nodeVolumes.get(nodeId) || 0) + amount);
+  }
+
+  transactions.forEach((transaction) => {
+    const source = String(
+      transaction?.from_address ?? transaction?.fromAddress ?? "",
+    ).trim();
+    const target = String(
+      transaction?.to_address ?? transaction?.toAddress ?? "",
+    ).trim();
+
+    if (!source || !target) return;
+    if (source !== normalizedRoot && target !== normalizedRoot) return;
+    if (source === target) return;
+
+    const amount = normalizeAmount(
+      transaction?.amountNormalized ??
+        transaction?.amount_normalized ??
+        transaction?.amount,
+    );
+    const txHash = String(
+      transaction?.tx_hash ?? transaction?.txHash ?? "",
+    ).trim();
+    const linkKey = `${source}->${target}`;
+    const existingLink = linkMap.get(linkKey);
+
+    if (!existingLink) {
+      linkMap.set(linkKey, {
+        source,
+        target,
+        transactionVolume: amount,
+        sentTransactions: 1,
+        receivedTransactions: 1,
+        transactionHash: txHash,
+      });
+    } else {
+      existingLink.transactionVolume += amount;
+      existingLink.sentTransactions += 1;
+      existingLink.receivedTransactions += 1;
+      if (!existingLink.transactionHash && txHash) {
+        existingLink.transactionHash = txHash;
+      }
+    }
+
+    ensureNodeStats(source).sentTransactions += 1;
+    ensureNodeStats(target).receivedTransactions += 1;
+    addNodeVolume(source, amount);
+    addNodeVolume(target, amount);
+  });
+
+  if (!linkMap.size) return null;
+
+  const nodeIds = new Set([normalizedRoot]);
+  linkMap.forEach((link) => {
+    nodeIds.add(link.source);
+    nodeIds.add(link.target);
+  });
+
+  const baseNodes = [...nodeIds].map((nodeId) => {
+    const fallbackNode = fallbackNodeById.get(nodeId);
+    const volume = nodeVolumes.get(nodeId) || 0;
+    const knownValue = Number(fallbackNode?.value);
+    const value =
+      Number.isFinite(knownValue) && knownValue > 0
+        ? knownValue
+        : Math.max(volume, 1);
+    const pct =
+      Number.isFinite(currentSupply) && currentSupply > 0
+        ? (value / currentSupply) * 100
+        : Number(fallbackNode?.pct) || 0;
+    const label =
+      String(fallbackNode?.label || "").trim() || shortenAddress(nodeId);
+    const stats = ensureNodeStats(nodeId);
+
+    return {
+      ...fallbackNode,
+      id: nodeId,
+      label,
+      shortAddr: fallbackNode?.shortAddr || shortenAddress(nodeId),
+      value,
+      pct: pct.toFixed(2),
+      type: fallbackNode?.type || inferHolderType(label, pct),
+      sentTransactions: stats.sentTransactions,
+      receivedTransactions: stats.receivedTransactions,
+      isSearchRoot: nodeId === normalizedRoot,
+    };
+  });
+
+  const counterpartyVisualValues = baseNodes
+    .filter((node) => node.id !== normalizedRoot)
+    .map((node) => Math.max(nodeVolumes.get(node.id) || node.value || 1, 1));
+  const maxCounterpartyVisual = counterpartyVisualValues.length
+    ? Math.max(...counterpartyVisualValues)
+    : 1;
+
+  const emphasizedNodes = baseNodes.map((node) => {
+    if (node.id === normalizedRoot) {
+      return {
+        ...node,
+        visualValue: Math.max(
+          nodeVolumes.get(node.id) || node.value || 1,
+          maxCounterpartyVisual * 2.1,
+        ),
+      };
+    }
+
+    return {
+      ...node,
+      visualValue: Math.max(nodeVolumes.get(node.id) || node.value || 1, 1),
+    };
+  });
+
+  const totalValue = emphasizedNodes.reduce(
+    (sum, node) => sum + Number(node.value || 0),
+    0,
+  );
+
+  return {
+    nodes: emphasizedNodes,
+    links: [...linkMap.values()],
+    totalValue,
+    rootNodeId: normalizedRoot,
+  };
+}
+
 function parseTimestampMs(rawTimestamp) {
   const ms = new Date(rawTimestamp).getTime();
   return Number.isFinite(ms) ? ms : Date.now();
@@ -630,6 +838,9 @@ export default function App() {
     setIsSelectedNodeTransactionsLoading,
   ] = useState(false);
   const [priceLastUpdatedAt, setPriceLastUpdatedAt] = useState(null);
+  const [blockSyncHeight, setBlockSyncHeight] = useState(null);
+  const [blockSyncTargetHeight, setBlockSyncTargetHeight] = useState(null);
+  const [blockSyncUpdatedAt, setBlockSyncUpdatedAt] = useState(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [searchedRootAddress, setSearchedRootAddress] = useState(
     MAPS_API_ROOT_ADDRESS || "",
@@ -1053,23 +1264,44 @@ export default function App() {
 
       const graphDecimals = apiTokenInfo?.decimals ?? 0;
       const mappedGraph = buildGraphDataFromApi(result.payload, graphDecimals);
+      let focusedGraph = null;
 
-      if (
-        !mappedGraph ||
-        !mappedGraph.nodes.length ||
-        !mappedGraph.links.length
-      ) {
-        setTrackedTokenSupply(0);
-        setMapNodes([]);
-        setMapLinks([]);
-        setMapDataStatus("API returned no graph data.");
-        setIsMapLoading(false);
-        return;
+      if (activeGraphRootAddress) {
+        try {
+          const connectionTransactions = await fetchAllTransactionsForAddress(
+            activeGraphRootAddress,
+            selectedTokenSymbol,
+          );
+
+          focusedGraph = buildConnectionsGraphFromTransactions(
+            connectionTransactions,
+            activeGraphRootAddress,
+            mappedGraph,
+            mappedGraph?.totalSupply || 0,
+          );
+        } catch {
+          focusedGraph = null;
+        }
       }
 
-      const focusedGraph = searchedRootAddress
-        ? buildNeighborFocusedGraph(mappedGraph, activeGraphRootAddress)
-        : mappedGraph;
+      if (!focusedGraph) {
+        if (
+          !mappedGraph ||
+          !mappedGraph.nodes.length ||
+          !mappedGraph.links.length
+        ) {
+          setTrackedTokenSupply(0);
+          setMapNodes([]);
+          setMapLinks([]);
+          setMapDataStatus("API returned no graph data.");
+          setIsMapLoading(false);
+          return;
+        }
+
+        focusedGraph = searchedRootAddress
+          ? buildNeighborFocusedGraph(mappedGraph, activeGraphRootAddress)
+          : mappedGraph;
+      }
 
       if (!focusedGraph || !focusedGraph.nodes.length) {
         setTrackedTokenSupply(0);
@@ -1084,7 +1316,7 @@ export default function App() {
       setMapLinks(focusedGraph.links);
       // Prefer the API's explicit totalSupply; fall back to discovered sum.
       setTrackedTokenSupply(
-        mappedGraph.totalSupply > 0
+        mappedGraph?.totalSupply > 0
           ? mappedGraph.totalSupply
           : focusedGraph.totalValue || 0,
       );
@@ -1204,6 +1436,66 @@ export default function App() {
     }
 
     fetchSoulPrice();
+
+    return () => {
+      isActive = false;
+      if (timeoutId) {
+        window.clearTimeout(timeoutId);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    let isActive = true;
+    let timeoutId = null;
+
+    async function fetchSyncStatus() {
+      const result = await fetchJsonWithTimeout(
+        createSyncStatusEndpoint(),
+        { cache: "no-store" },
+        MAPS_API_REQUEST_TIMEOUT_MS,
+      );
+
+      if (!isActive) return;
+
+      if (result.ok) {
+        const items = Array.isArray(result.payload?.items)
+          ? result.payload.items
+          : [];
+        const chainState = items.find(
+          (item) => String(item?.tokenSymbol || "") === "__chain__",
+        );
+        const nextHeight = Number(chainState?.lastBlockHeight);
+        const nextTargetHeight = Number(result.payload?.chainHeadBlockHeight);
+        const nextUpdatedAt = chainState?.updatedAt
+          ? new Date(chainState.updatedAt).getTime()
+          : null;
+
+        setBlockSyncHeight(Number.isFinite(nextHeight) ? nextHeight : null);
+        setBlockSyncTargetHeight(
+          Number.isFinite(nextTargetHeight) ? nextTargetHeight : null,
+        );
+        setBlockSyncUpdatedAt(
+          Number.isFinite(nextUpdatedAt) ? nextUpdatedAt : null,
+        );
+      }
+
+      timeoutId = window.setTimeout(
+        fetchSyncStatus,
+        MAPS_API_SYNC_STATUS_POLL_INTERVAL_MS,
+      );
+    }
+
+    fetchSyncStatus().catch(() => {
+      if (!isActive) return;
+      setBlockSyncHeight(null);
+      setBlockSyncTargetHeight(null);
+      setBlockSyncUpdatedAt(null);
+      timeoutId = window.setTimeout(
+        fetchSyncStatus,
+        MAPS_API_SYNC_STATUS_POLL_INTERVAL_MS,
+      );
+    });
 
     return () => {
       isActive = false;
@@ -1351,38 +1643,10 @@ export default function App() {
       setSelectedNodeApiTransactionsError("");
 
       try {
-        const allItems = [];
-        let page = 1;
-        let total = Infinity;
-
-        while (page <= MAPS_API_TX_MAX_PAGES && allItems.length < total) {
-          const endpoint = createTransactionsEndpoint(
-            selectedNode.id,
-            selectedTokenSymbol,
-            page,
-            MAPS_API_TX_PAGE_SIZE,
-          );
-          const result = await fetchJsonWithTimeout(
-            endpoint,
-            { cache: "no-store" },
-            MAPS_API_REQUEST_TIMEOUT_MS,
-          );
-
-          if (!result.ok) {
-            throw new Error(
-              `transactions request failed with status ${result.status}`,
-            );
-          }
-
-          const items = Array.isArray(result.payload?.items)
-            ? result.payload.items
-            : [];
-          total = Number(result.payload?.total ?? items.length);
-          allItems.push(...items);
-
-          if (!items.length) break;
-          page += 1;
-        }
+        const allItems = await fetchAllTransactionsForAddress(
+          selectedNode.id,
+          selectedTokenSymbol,
+        );
 
         if (!isMounted) return;
         setSelectedNodeApiTransactions(allItems);
@@ -1781,6 +2045,9 @@ export default function App() {
         onSearch={handleHeaderSearch}
         tokenInfo={activeTokenInfo}
         priceUpdatedAt={priceLastUpdatedAt}
+        blockSyncHeight={blockSyncHeight}
+        blockSyncTargetHeight={blockSyncTargetHeight}
+        blockSyncUpdatedAt={blockSyncUpdatedAt}
         colorTheme={colorTheme}
         onThemeChange={setColorTheme}
       />
