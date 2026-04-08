@@ -3237,12 +3237,42 @@ body,
 
   .header-meta {
     order: 2;
-    margin-left: auto;
+    margin-left: 0;
     gap: 8px;
+    flex: 1 1 100%;
+    width: 100%;
+    justify-content: space-between;
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .header-sync {
+    order: 1;
+    flex: 1 1 100%;
+    width: 100%;
+    min-width: 0;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 7px 10px;
+  }
+
+  .header-sync-value {
+    max-width: 100%;
+    overflow-wrap: anywhere;
+  }
+
+  .header-sync-updated {
+    width: 100%;
+    text-align: right;
   }
 
   .header-theme-label {
     display: none;
+  }
+
+  .header-theme {
+    order: 2;
   }
 
   .header-theme-select {
@@ -3255,8 +3285,13 @@ body,
   }
 
   .header-price {
+    order: 3;
     font-size: 12px;
     gap: 6px;
+    margin-left: auto;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    min-width: 0;
   }
 
   .header-price-symbol {
@@ -3378,6 +3413,14 @@ body,
 @media (max-width: 420px) {
   .header-logo-text {
     font-size: 15px;
+  }
+
+  .header-sync {
+    justify-content: flex-start;
+  }
+
+  .header-sync-updated {
+    text-align: left;
   }
 
   .header-price {
