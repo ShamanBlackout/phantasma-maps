@@ -2378,11 +2378,83 @@ body,
     inset 0 1px 0 rgba(255, 255, 255, 0.08);
 }
 
+.header-sync-heading {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
 .header-sync-label {
   font-size: 10px;
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: rgba(198, 223, 244, 0.8);
+}
+
+.header-sync-subtext {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 18px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-weight: 700;
+  color: #f6fbff;
+  background: linear-gradient(
+    180deg,
+    rgba(var(--accent-rgb), 0.5),
+    rgba(var(--accent-rgb), 0.28)
+  );
+  border: 1px solid rgba(var(--accent-rgb), 0.5);
+  box-shadow:
+    0 6px 14px rgba(var(--accent-rgb), 0.2),
+    inset 0 1px 0 rgba(255, 255, 255, 0.18);
+  text-shadow: 0 1px 8px rgba(5, 10, 20, 0.28);
+}
+
+.app-root.theme-light .header-sync-subtext {
+  color: #28405a;
+  background: linear-gradient(
+    180deg,
+    rgba(176, 156, 125, 0.3),
+    rgba(176, 156, 125, 0.18)
+  );
+  border-color: rgba(176, 156, 125, 0.34);
+  box-shadow:
+    0 8px 16px rgba(176, 156, 125, 0.14),
+    inset 0 1px 0 rgba(255, 255, 255, 0.5);
+  text-shadow: none;
+}
+
+.app-root.theme-dark .header-sync-subtext {
+  background: linear-gradient(
+    180deg,
+    rgba(255, 104, 166, 0.42),
+    rgba(89, 210, 255, 0.24)
+  );
+  border-color: rgba(89, 210, 255, 0.34);
+}
+
+.app-root.theme-ghost-blue .header-sync-subtext {
+  background: linear-gradient(
+    180deg,
+    rgba(214, 184, 107, 0.44),
+    rgba(103, 138, 220, 0.26)
+  );
+  border-color: rgba(214, 184, 107, 0.34);
+}
+
+.app-root.theme-kcal-red .header-sync-subtext {
+  color: #fff4ea;
+  background: linear-gradient(
+    180deg,
+    rgba(255, 186, 138, 0.42),
+    rgba(214, 112, 78, 0.28)
+  );
+  border-color: rgba(255, 205, 166, 0.34);
 }
 
 .header-sync-value {
@@ -3255,6 +3327,10 @@ body,
     flex-wrap: wrap;
     gap: 6px;
     padding: 7px 10px;
+  }
+
+  .header-sync-heading {
+    flex-wrap: wrap;
   }
 
   .header-sync-value {
