@@ -96,7 +96,10 @@ export default function Header({
           className="header-sync"
           title="Backend sync progress versus the live chain height"
         >
-          <span className="header-sync-label">Block Sync</span>
+          <span className="header-sync-heading">
+            <span className="header-sync-label">Block Sync</span>
+            <span className="header-sync-subtext">Gen3</span>
+          </span>
           <span className="header-sync-value">{blockSyncLabel}</span>
           <span className="header-sync-updated">
             Updated {blockSyncUpdatedLabel}
