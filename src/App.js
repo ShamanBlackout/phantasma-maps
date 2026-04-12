@@ -96,6 +96,10 @@ const MAPS_API_GRAPH_EDGE_LIMIT = parseEnvInt(
   "REACT_APP_MAPS_API_GRAPH_EDGE_LIMIT",
   1200,
 );
+const MAPS_API_GRAPH_NODE_LIMIT = parseEnvInt(
+  "REACT_APP_MAPS_API_GRAPH_NODE_LIMIT",
+  300,
+);
 const MAPS_API_REQUEST_TIMEOUT_MS = parseEnvMs(
   "REACT_APP_MAPS_API_REQUEST_TIMEOUT_MS",
   12000,
@@ -178,6 +182,13 @@ function inferHolderType(label, pct) {
 function normalizeAmount(rawAmount) {
   const parsed = Number(rawAmount);
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
+}
+
+function normalizePositiveInteger(value, fallbackValue) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0
+    ? Math.floor(parsed)
+    : fallbackValue;
 }
 
 function applyCurrentSupplyToNodes(nodes, currentSupply) {
@@ -390,7 +401,11 @@ function createTokenInfoEndpoint(tokenSymbol) {
   return `${base}/tokens/${encodeURIComponent(tokenSymbol)}/metadata`;
 }
 
-function createGraphEndpoint(tokenSymbol, rootAddress = "") {
+function createGraphEndpoint(
+  tokenSymbol,
+  rootAddress = "",
+  edgeLimit = MAPS_API_GRAPH_EDGE_LIMIT,
+) {
   const base = MAPS_API_BASE_URL.replace(/\/+$/, "");
   const activeRootAddress = String(
     rootAddress || MAPS_API_ROOT_ADDRESS || "",
@@ -400,7 +415,9 @@ function createGraphEndpoint(tokenSymbol, rootAddress = "") {
     const params = new URLSearchParams({
       token: tokenSymbol,
       depth: String(MAPS_API_GRAPH_DEPTH),
-      edgeLimit: String(MAPS_API_GRAPH_EDGE_LIMIT),
+      edgeLimit: String(
+        normalizePositiveInteger(edgeLimit, MAPS_API_GRAPH_EDGE_LIMIT),
+      ),
     });
     return `${base}/graph/address/${encodeURIComponent(activeRootAddress)}?${params.toString()}`;
   }
@@ -408,11 +425,85 @@ function createGraphEndpoint(tokenSymbol, rootAddress = "") {
   return `${base}/graph/token/${encodeURIComponent(tokenSymbol)}`;
 }
 
+function limitGraphForDisplay(
+  nodes,
+  links,
+  maxNodes,
+  maxEdges,
+  rootNodeId = "",
+) {
+  const safeNodes = Array.isArray(nodes) ? nodes : [];
+  const safeLinks = Array.isArray(links) ? links : [];
+
+  if (!safeNodes.length) {
+    return {
+      nodes: [],
+      links: [],
+    };
+  }
+
+  const normalizedMaxEdges = normalizePositiveInteger(
+    maxEdges,
+    safeLinks.length || 1,
+  );
+  const normalizedMaxNodes = normalizePositiveInteger(
+    maxNodes,
+    safeNodes.length || 1,
+  );
+  const nodeById = new Map(
+    safeNodes.map((node) => [String(node?.id || "").trim(), node]),
+  );
+  const normalizedRootNodeId = String(rootNodeId || "").trim();
+  const limitedLinks = safeLinks.slice(0, normalizedMaxEdges);
+  const prioritizedNodeIds = [];
+  const seenNodeIds = new Set();
+
+  function addNodeId(nodeId) {
+    const normalizedNodeId = String(nodeId || "").trim();
+    if (!normalizedNodeId || seenNodeIds.has(normalizedNodeId)) return;
+    if (!nodeById.has(normalizedNodeId)) return;
+    seenNodeIds.add(normalizedNodeId);
+    prioritizedNodeIds.push(normalizedNodeId);
+  }
+
+  addNodeId(normalizedRootNodeId);
+
+  limitedLinks.forEach((link) => {
+    addNodeId(link?.source);
+    addNodeId(link?.target);
+  });
+
+  safeNodes
+    .slice()
+    .sort((leftNode, rightNode) => {
+      if (String(leftNode?.id || "") === normalizedRootNodeId) return -1;
+      if (String(rightNode?.id || "") === normalizedRootNodeId) return 1;
+      return Number(rightNode?.value || 0) - Number(leftNode?.value || 0);
+    })
+    .forEach((node) => addNodeId(node?.id));
+
+  const allowedNodeIds = new Set(
+    prioritizedNodeIds.slice(0, normalizedMaxNodes),
+  );
+  const limitedNodes = safeNodes.filter((node) => allowedNodeIds.has(node.id));
+  const fullyLimitedLinks = limitedLinks.filter(
+    (link) =>
+      allowedNodeIds.has(String(link?.source || "").trim()) &&
+      allowedNodeIds.has(String(link?.target || "").trim()),
+  );
+
+  return {
+    nodes: limitedNodes,
+    links: fullyLimitedLinks,
+  };
+}
+
 function createTransactionsEndpoint(
   address,
   tokenSymbol,
   page = 1,
   pageSize = MAPS_API_TX_PAGE_SIZE,
+  filters = {},
 ) {
   const base = MAPS_API_BASE_URL.replace(/\/+$/, "");
   const params = new URLSearchParams({
@@ -421,6 +512,59 @@ function createTransactionsEndpoint(
     page: String(page),
     pageSize: String(pageSize),
   });
+
+  const direction = String(filters?.direction || "")
+    .trim()
+    .toLowerCase();
+  if (direction === "from" || direction === "to") {
+    params.set("dir", direction);
+  }
+
+  const counterparty = String(filters?.counterparty || "").trim();
+  if (counterparty) {
+    params.set("counterparty", counterparty);
+  }
+
+  const startTime = String(filters?.startTime || "").trim();
+  if (startTime) {
+    params.set("startTime", startTime);
+  }
+
+  const endTime = String(filters?.endTime || "").trim();
+  if (endTime) {
+    params.set("endTime", endTime);
+  }
+
+  if (Number.isFinite(filters?.minAmount)) {
+    params.set("minAmount", String(filters.minAmount));
+  }
+  if (Number.isFinite(filters?.maxAmount)) {
+    params.set("maxAmount", String(filters.maxAmount));
+  }
+  if (Number.isFinite(filters?.minUsd)) {
+    params.set("minUsd", String(filters.minUsd));
+  }
+  if (Number.isFinite(filters?.maxUsd)) {
+    params.set("maxUsd", String(filters.maxUsd));
+  }
+  if (Number.isFinite(filters?.usdRateNow)) {
+    params.set("usdRateNow", String(filters.usdRateNow));
+  }
+
+  const sortBy = String(filters?.sortBy || "")
+    .trim()
+    .toLowerCase();
+  if (sortBy === "amount" || sortBy === "usd") {
+    params.set("sortBy", sortBy);
+  }
+
+  const sortDir = String(filters?.sortDir || "")
+    .trim()
+    .toLowerCase();
+  if (sortDir === "asc" || sortDir === "desc") {
+    params.set("sortDir", sortDir);
+  }
+
   return `${base}/transactions?${params.toString()}`;
 }
 
@@ -469,6 +613,55 @@ async function fetchAllTransactionsForAddress(address, tokenSymbol) {
   }
 
   return allItems;
+}
+
+async function fetchTransactionsPageForAddress(
+  address,
+  tokenSymbol,
+  { page = 1, pageSize = 100, filters = {} } = {},
+) {
+  const normalizedAddress = String(address || "").trim();
+  if (!normalizedAddress) {
+    return {
+      items: [],
+      total: 0,
+      page,
+      pageSize,
+    };
+  }
+
+  const endpoint = createTransactionsEndpoint(
+    normalizedAddress,
+    tokenSymbol,
+    page,
+    pageSize,
+    filters,
+  );
+  const result = await fetchJsonWithTimeout(
+    endpoint,
+    { cache: "no-store" },
+    MAPS_API_REQUEST_TIMEOUT_MS,
+  );
+
+  if (!result.ok) {
+    throw new Error(`transactions request failed with status ${result.status}`);
+  }
+
+  const items = Array.isArray(result.payload?.items)
+    ? result.payload.items
+    : [];
+  const parsedTotal = Number(result.payload?.total);
+  const total =
+    Number.isFinite(parsedTotal) && parsedTotal >= 0
+      ? parsedTotal
+      : items.length;
+
+  return {
+    items,
+    total,
+    page,
+    pageSize,
+  };
 }
 
 function buildConnectionsGraphFromTransactions(
@@ -770,10 +963,39 @@ function fmtSharePct(value, currentSupply, fallbackPct = 0) {
   return `${(Number.isFinite(parsedFallback) ? parsedFallback : 0).toFixed(2)}%`;
 }
 
-function toDateTimeLocalValue(timestamp) {
+function formatUtcDateTime(timestamp) {
   const date = new Date(timestamp);
+  if (!Number.isFinite(date.getTime())) return "Invalid date";
+
+  return `${date.toLocaleDateString([], {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    timeZone: "UTC",
+  })} ${date.toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+    timeZone: "UTC",
+  })} UTC`;
+}
+
+function parseUtcDateTimeInput(value) {
+  const normalizedValue = String(value || "").trim();
+  if (!normalizedValue) return null;
+
+  const normalizedWithSeconds =
+    normalizedValue.length === 16 ? `${normalizedValue}:00` : normalizedValue;
+  const timestamp = new Date(`${normalizedWithSeconds}Z`).getTime();
+  return Number.isFinite(timestamp) ? timestamp : null;
+}
+
+function toUtcDateTimeInputValue(timestamp) {
+  const date = new Date(timestamp);
+  if (!Number.isFinite(date.getTime())) return "";
   const pad = (value) => String(value).padStart(2, "0");
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+  return `${date.getUTCFullYear()}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())}T${pad(date.getUTCHours())}:${pad(date.getUTCMinutes())}`;
 }
 
 function makeExportFileName(selectedNode, ext) {
@@ -808,6 +1030,10 @@ export default function App() {
   const [transactionMaxAmount, setTransactionMaxAmount] = useState("");
   const [transactionMinUsd, setTransactionMinUsd] = useState("");
   const [transactionMaxUsd, setTransactionMaxUsd] = useState("");
+  const [transactionSortBy, setTransactionSortBy] = useState(null);
+  const [transactionSortDirection, setTransactionSortDirection] =
+    useState("asc");
+  const [transactionPage, setTransactionPage] = useState(0);
   const [liveTokenInfo, setLiveTokenInfo] = useState(TOKEN_INFO);
   const [selectedTokenSymbol, setSelectedTokenSymbol] = useState(() => {
     try {
@@ -830,6 +1056,10 @@ export default function App() {
   const [selectedNodeApiTransactions, setSelectedNodeApiTransactions] =
     useState([]);
   const [
+    selectedNodeApiTransactionsTotal,
+    setSelectedNodeApiTransactionsTotal,
+  ] = useState(0);
+  const [
     selectedNodeApiTransactionsError,
     setSelectedNodeApiTransactionsError,
   ] = useState("");
@@ -845,6 +1075,13 @@ export default function App() {
   const [searchedRootAddress, setSearchedRootAddress] = useState(
     MAPS_API_ROOT_ADDRESS || "",
   );
+  const [graphEdgeLimit, setGraphEdgeLimit] = useState(
+    MAPS_API_GRAPH_EDGE_LIMIT,
+  );
+  const [graphNodeLimit, setGraphNodeLimit] = useState(
+    MAPS_API_GRAPH_NODE_LIMIT,
+  );
+  const [isGraphMaxModeEnabled, setIsGraphMaxModeEnabled] = useState(false);
   const [isConnectionsView, setIsConnectionsView] = useState(false);
   const activeGraphRootAddress = useMemo(
     () => String(searchedRootAddress || MAPS_API_ROOT_ADDRESS || "").trim(),
@@ -936,7 +1173,7 @@ export default function App() {
     setActiveHolderTypeFilter("");
     setSelectedNode(null);
     setHoveredNode(null);
-    setIsTransfersModalOpen(false);
+    closeTransfersModal();
   }, [selectedTokenSymbol]);
 
   useEffect(() => {
@@ -1025,7 +1262,7 @@ export default function App() {
     setActiveHolderTypeFilter("");
     setHoveredNode(null);
     setSelectedNode(null);
-    setIsTransfersModalOpen(false);
+    closeTransfersModal();
     setSearchedRootAddress(value);
     setIsConnectionsView(true);
   }
@@ -1035,7 +1272,7 @@ export default function App() {
     setActiveHolderTypeFilter("");
     setHoveredNode(null);
     setSelectedNode(null);
-    setIsTransfersModalOpen(false);
+    closeTransfersModal();
     setSearchedRootAddress(MAPS_API_ROOT_ADDRESS || "");
     setIsConnectionsView(false);
   }
@@ -1230,6 +1467,7 @@ export default function App() {
       const graphEndpoint = createGraphEndpoint(
         selectedTokenSymbol,
         activeGraphRootAddress,
+        graphEdgeLimit,
       );
       const result = await fetchJsonWithTimeout(
         graphEndpoint,
@@ -1350,6 +1588,7 @@ export default function App() {
   }, [
     activeGraphRootAddress,
     apiTokenInfo,
+    graphEdgeLimit,
     searchedRootAddress,
     selectedMockTokenData,
     selectedTokenSymbol,
@@ -1509,14 +1748,39 @@ export default function App() {
     () => applyCurrentSupplyToNodes(mapNodes, activeTokenInfo.currentSupply),
     [mapNodes, activeTokenInfo.currentSupply],
   );
+  const isTokenGraphMaxModeActive = isGraphMaxModeEnabled;
+  const effectiveGraphNodeLimit = isTokenGraphMaxModeActive
+    ? displayNodes.length
+    : graphNodeLimit;
+  const effectiveGraphEdgeLimit = isTokenGraphMaxModeActive
+    ? mapLinks.length
+    : graphEdgeLimit;
+
+  const limitedDisplayGraph = useMemo(
+    () =>
+      limitGraphForDisplay(
+        displayNodes,
+        mapLinks,
+        effectiveGraphNodeLimit,
+        effectiveGraphEdgeLimit,
+        activeGraphRootAddress,
+      ),
+    [
+      activeGraphRootAddress,
+      displayNodes,
+      effectiveGraphEdgeLimit,
+      effectiveGraphNodeLimit,
+      mapLinks,
+    ],
+  );
 
   const filteredNodes = useMemo(() => {
     const typeFilteredNodes = activeHolderTypeFilter
-      ? displayNodes.filter(
+      ? limitedDisplayGraph.nodes.filter(
           (holder) =>
             String(holder?.type || "minor") === activeHolderTypeFilter,
         )
-      : displayNodes;
+      : limitedDisplayGraph.nodes;
 
     if (!searchQuery) return typeFilteredNodes;
 
@@ -1527,16 +1791,19 @@ export default function App() {
         h.label.toLowerCase().includes(q) ||
         h.shortAddr.toLowerCase().includes(q),
     );
-  }, [activeHolderTypeFilter, searchQuery, displayNodes]);
+  }, [activeHolderTypeFilter, searchQuery, limitedDisplayGraph.nodes]);
 
   const filteredLinks = useMemo(() => {
     const ids = new Set(filteredNodes.map((n) => n.id));
-    return mapLinks.filter((l) => ids.has(l.source) && ids.has(l.target));
-  }, [filteredNodes, mapLinks]);
+    return limitedDisplayGraph.links.filter(
+      (link) => ids.has(link.source) && ids.has(link.target),
+    );
+  }, [filteredNodes, limitedDisplayGraph.links]);
 
   const nodeById = useMemo(
-    () => new Map(displayNodes.map((holder) => [holder.id, holder])),
-    [displayNodes],
+    () =>
+      new Map(limitedDisplayGraph.nodes.map((holder) => [holder.id, holder])),
+    [limitedDisplayGraph.nodes],
   );
 
   const resolvedSelectedNode = selectedNode
@@ -1590,13 +1857,36 @@ export default function App() {
 
   useEffect(() => {
     if (!activeHolderTypeFilter) return;
-    const hasMatchingType = displayNodes.some(
+    const hasMatchingType = limitedDisplayGraph.nodes.some(
       (node) => String(node?.type || "minor") === activeHolderTypeFilter,
     );
     if (!hasMatchingType) {
       setActiveHolderTypeFilter("");
     }
-  }, [activeHolderTypeFilter, displayNodes]);
+  }, [activeHolderTypeFilter, limitedDisplayGraph.nodes]);
+
+  function handleGraphSettingsApply(nextSettings) {
+    const useMaxMode = nextSettings?.useMaxMode === true;
+
+    setIsGraphMaxModeEnabled(useMaxMode);
+
+    if (useMaxMode) {
+      return;
+    }
+
+    setGraphEdgeLimit(
+      normalizePositiveInteger(
+        nextSettings?.edgeLimit,
+        MAPS_API_GRAPH_EDGE_LIMIT,
+      ),
+    );
+    setGraphNodeLimit(
+      normalizePositiveInteger(
+        nextSettings?.nodeLimit,
+        MAPS_API_GRAPH_NODE_LIMIT,
+      ),
+    );
+  }
 
   useEffect(() => {
     if (!isMobileViewport) return;
@@ -1631,6 +1921,7 @@ export default function App() {
   useEffect(() => {
     if (!selectedNode?.id) {
       setSelectedNodeApiTransactions([]);
+      setSelectedNodeApiTransactionsTotal(0);
       setSelectedNodeApiTransactionsError("");
       setIsSelectedNodeTransactionsLoading(false);
       return;
@@ -1642,18 +1933,55 @@ export default function App() {
       setIsSelectedNodeTransactionsLoading(true);
       setSelectedNodeApiTransactionsError("");
 
+      const startTs = parseUtcDateTimeInput(transactionStartTime);
+      const endTs = parseUtcDateTimeInput(transactionEndTime);
+      const minAmount =
+        transactionMinAmount === "" ? null : Number(transactionMinAmount);
+      const maxAmount =
+        transactionMaxAmount === "" ? null : Number(transactionMaxAmount);
+      const minUsd =
+        transactionMinUsd === "" ? null : Number(transactionMinUsd);
+      const maxUsd =
+        transactionMaxUsd === "" ? null : Number(transactionMaxUsd);
+
+      const apiFilters = {
+        direction: transactionDirFilter,
+        counterparty: transactionCounterpartyFilter,
+        startTime: startTs === null ? "" : new Date(startTs).toISOString(),
+        endTime: endTs === null ? "" : new Date(endTs).toISOString(),
+        minAmount: Number.isFinite(minAmount) ? minAmount : null,
+        maxAmount: Number.isFinite(maxAmount) ? maxAmount : null,
+        minUsd: Number.isFinite(minUsd) ? minUsd : null,
+        maxUsd: Number.isFinite(maxUsd) ? maxUsd : null,
+        usdRateNow: Number.isFinite(Number(activeTokenInfo.price))
+          ? Number(activeTokenInfo.price)
+          : null,
+        sortBy:
+          transactionSortBy === "amount" || transactionSortBy === "time"
+            ? transactionSortBy
+            : null,
+        sortDir: transactionSortDirection,
+      };
+
       try {
-        const allItems = await fetchAllTransactionsForAddress(
+        const pageData = await fetchTransactionsPageForAddress(
           selectedNode.id,
           selectedTokenSymbol,
+          {
+            page: transactionPage + 1,
+            pageSize: 100,
+            filters: apiFilters,
+          },
         );
 
         if (!isMounted) return;
-        setSelectedNodeApiTransactions(allItems);
+        setSelectedNodeApiTransactions(pageData.items);
+        setSelectedNodeApiTransactionsTotal(pageData.total);
         setSelectedNodeApiTransactionsError("");
       } catch {
         if (!isMounted) return;
         setSelectedNodeApiTransactions([]);
+        setSelectedNodeApiTransactionsTotal(0);
         setSelectedNodeApiTransactionsError(
           "Using graph-derived transfers (transactions API unavailable).",
         );
@@ -1668,7 +1996,37 @@ export default function App() {
     return () => {
       isMounted = false;
     };
-  }, [selectedNode, selectedTokenSymbol]);
+  }, [
+    selectedNode,
+    selectedTokenSymbol,
+    transactionPage,
+    transactionDirFilter,
+    transactionCounterpartyFilter,
+    transactionStartTime,
+    transactionEndTime,
+    transactionMinAmount,
+    transactionMaxAmount,
+    transactionMinUsd,
+    transactionMaxUsd,
+    transactionSortBy,
+    transactionSortDirection,
+    activeTokenInfo.price,
+  ]);
+
+  useEffect(() => {
+    setTransactionPage(0);
+  }, [
+    selectedNode?.id,
+    selectedTokenSymbol,
+    transactionDirFilter,
+    transactionCounterpartyFilter,
+    transactionStartTime,
+    transactionEndTime,
+    transactionMinAmount,
+    transactionMaxAmount,
+    transactionMinUsd,
+    transactionMaxUsd,
+  ]);
 
   const fallbackSelectedNodeTransfers = useMemo(() => {
     if (!selectedNode) return [];
@@ -1703,8 +2061,8 @@ export default function App() {
           receivedTransactions: Number(link.receivedTransactions ?? 0),
           transactionHash: link.transactionHash || "N/A",
           timestamp,
-          timeUtc: new Date(timestamp).toLocaleString(),
-          timeInputValue: toDateTimeLocalValue(timestamp),
+          timeUtc: formatUtcDateTime(timestamp),
+          timeInputValue: toUtcDateTimeInputValue(timestamp),
         };
       })
       .sort((a, b) => b.timestamp - a.timestamp);
@@ -1720,57 +2078,53 @@ export default function App() {
     if (!selectedNode) return [];
 
     if (!selectedNodeApiTransactionsError) {
-      return selectedNodeApiTransactions
-        .map((transaction, index) => {
-          const fromAddress = String(
-            transaction.from_address ?? transaction.fromAddress ?? "",
-          );
-          const toAddress = String(
-            transaction.to_address ?? transaction.toAddress ?? "",
-          );
-          const txHash = String(
-            transaction.tx_hash ?? transaction.txHash ?? "",
-          );
-          const token = String(
-            transaction.token_symbol ??
-              transaction.tokenSymbol ??
-              activeTokenInfo.name,
-          );
-          const amount = normalizeAmount(
-            transaction.amountNormalized ??
-              transaction.amount_normalized ??
-              transaction.amount,
-          );
-          const timestamp = parseTimestampMs(transaction.timestamp);
-          const isOutgoing = fromAddress === selectedNode.id;
-          const counterpartId = isOutgoing ? toAddress : fromAddress;
-          const counterpartNode = nodeById.get(counterpartId);
+      return selectedNodeApiTransactions.map((transaction, index) => {
+        const fromAddress = String(
+          transaction.from_address ?? transaction.fromAddress ?? "",
+        );
+        const toAddress = String(
+          transaction.to_address ?? transaction.toAddress ?? "",
+        );
+        const txHash = String(transaction.tx_hash ?? transaction.txHash ?? "");
+        const token = String(
+          transaction.token_symbol ??
+            transaction.tokenSymbol ??
+            activeTokenInfo.name,
+        );
+        const amount = normalizeAmount(
+          transaction.amountNormalized ??
+            transaction.amount_normalized ??
+            transaction.amount,
+        );
+        const timestamp = parseTimestampMs(transaction.timestamp);
+        const isOutgoing = fromAddress === selectedNode.id;
+        const counterpartId = isOutgoing ? toAddress : fromAddress;
+        const counterpartNode = nodeById.get(counterpartId);
 
-          return {
-            id: String(
-              transaction.id ||
-                `${txHash}-${transaction.event_index ?? transaction.eventIndex ?? index}`,
-            ),
-            direction: isOutgoing ? "To" : "From",
-            counterpartLabel:
-              counterpartNode?.label ||
-              counterpartNode?.shortAddr ||
-              shortenAddress(counterpartId),
-            counterpartAddress: counterpartId,
-            counterpartAddr:
-              counterpartNode?.shortAddr || shortenAddress(counterpartId),
-            token,
-            amount,
-            usd: amount * Number(activeTokenInfo.price),
-            sentTransactions: isOutgoing ? 1 : 0,
-            receivedTransactions: isOutgoing ? 0 : 1,
-            transactionHash: txHash || "N/A",
-            timestamp,
-            timeUtc: new Date(timestamp).toLocaleString(),
-            timeInputValue: toDateTimeLocalValue(timestamp),
-          };
-        })
-        .sort((a, b) => b.timestamp - a.timestamp);
+        return {
+          id: String(
+            transaction.id ||
+              `${txHash}-${transaction.event_index ?? transaction.eventIndex ?? index}`,
+          ),
+          direction: isOutgoing ? "To" : "From",
+          counterpartLabel:
+            counterpartNode?.label ||
+            counterpartNode?.shortAddr ||
+            shortenAddress(counterpartId),
+          counterpartAddress: counterpartId,
+          counterpartAddr:
+            counterpartNode?.shortAddr || shortenAddress(counterpartId),
+          token,
+          amount,
+          usd: amount * Number(activeTokenInfo.price),
+          sentTransactions: isOutgoing ? 1 : 0,
+          receivedTransactions: isOutgoing ? 0 : 1,
+          transactionHash: txHash || "N/A",
+          timestamp,
+          timeUtc: formatUtcDateTime(timestamp),
+          timeInputValue: toUtcDateTimeInputValue(timestamp),
+        };
+      });
     }
 
     return fallbackSelectedNodeTransfers;
@@ -1785,12 +2139,14 @@ export default function App() {
   ]);
 
   const filteredTransactions = useMemo(() => {
-    const startTs = transactionStartTime
-      ? new Date(transactionStartTime).getTime()
-      : null;
-    const endTs = transactionEndTime
-      ? new Date(transactionEndTime).getTime()
-      : null;
+    const shouldUseServerFilteredPage =
+      Boolean(selectedNode?.id) && !selectedNodeApiTransactionsError;
+    if (shouldUseServerFilteredPage) {
+      return selectedNodeTransfers;
+    }
+
+    const startTs = parseUtcDateTimeInput(transactionStartTime);
+    const endTs = parseUtcDateTimeInput(transactionEndTime);
     const minAmount =
       transactionMinAmount === "" ? null : Number(transactionMinAmount);
     const maxAmount =
@@ -1801,7 +2157,7 @@ export default function App() {
       .trim()
       .toLowerCase();
 
-    return selectedNodeTransfers.filter((transaction) => {
+    const filtered = selectedNodeTransfers.filter((transaction) => {
       if (transactionDirFilter !== "all") {
         if (transaction.direction.toLowerCase() !== transactionDirFilter)
           return false;
@@ -1819,8 +2175,24 @@ export default function App() {
       if (maxUsd !== null && transaction.usd > maxUsd) return false;
       return true;
     });
+
+    if (transactionSortBy !== "amount" && transactionSortBy !== "time") {
+      return filtered;
+    }
+
+    const directionMultiplier = transactionSortDirection === "desc" ? -1 : 1;
+    return [...filtered].sort((left, right) => {
+      const leftValue = Number(left?.[transactionSortBy]) || 0;
+      const rightValue = Number(right?.[transactionSortBy]) || 0;
+      if (leftValue === rightValue) return 0;
+      return leftValue > rightValue
+        ? directionMultiplier
+        : -directionMultiplier;
+    });
   }, [
+    selectedNode,
     selectedNodeTransfers,
+    selectedNodeApiTransactionsError,
     transactionDirFilter,
     transactionCounterpartyFilter,
     transactionStartTime,
@@ -1829,7 +2201,26 @@ export default function App() {
     transactionMaxAmount,
     transactionMinUsd,
     transactionMaxUsd,
+    transactionSortBy,
+    transactionSortDirection,
   ]);
+
+  const TRANSACTIONS_PER_PAGE = 100;
+  const isUsingApiTransactions =
+    Boolean(selectedNode?.id) && !selectedNodeApiTransactionsError;
+  const totalTransactionCount = isUsingApiTransactions
+    ? selectedNodeApiTransactionsTotal
+    : filteredTransactions.length;
+  const transactionPageCount = Math.max(
+    1,
+    Math.ceil(totalTransactionCount / TRANSACTIONS_PER_PAGE),
+  );
+  const pagedTransactions = isUsingApiTransactions
+    ? filteredTransactions
+    : filteredTransactions.slice(
+        transactionPage * TRANSACTIONS_PER_PAGE,
+        (transactionPage + 1) * TRANSACTIONS_PER_PAGE,
+      );
 
   const hasDirFilter = transactionDirFilter !== "all";
   const hasCounterpartyFilter = Boolean(transactionCounterpartyFilter.trim());
@@ -1847,6 +2238,31 @@ export default function App() {
     setTransactionMaxAmount("");
     setTransactionMinUsd("");
     setTransactionMaxUsd("");
+    setTransactionSortBy(null);
+    setTransactionSortDirection("asc");
+    setTransactionPage(0);
+  }
+
+  function closeTransfersModal() {
+    setIsExportMenuOpen(false);
+    setIsTransfersModalOpen(false);
+    resetAllTransactionFilters();
+  }
+
+  function handleTransactionSortToggle(nextSortBy) {
+    if (nextSortBy !== "amount" && nextSortBy !== "time") return;
+    setTransactionPage(0);
+    setTransactionSortBy((currentSortBy) => {
+      if (currentSortBy !== nextSortBy) {
+        setTransactionSortDirection("asc");
+        return nextSortBy;
+      }
+
+      setTransactionSortDirection((currentDirection) =>
+        currentDirection === "asc" ? "desc" : "asc",
+      );
+      return currentSortBy;
+    });
   }
 
   function buildExportRows() {
@@ -1948,6 +2364,7 @@ export default function App() {
       setTransactionMaxAmount("");
       setTransactionMinUsd("");
       setTransactionMaxUsd("");
+      setTransactionPage(0);
     }
   }, [selectedNode]);
 
@@ -1994,7 +2411,7 @@ export default function App() {
         return;
       }
       if (isTransfersModalOpen) {
-        setIsTransfersModalOpen(false);
+        closeTransfersModal();
         return;
       }
       if (selectedNode) {
@@ -2050,6 +2467,17 @@ export default function App() {
         blockSyncUpdatedAt={blockSyncUpdatedAt}
         colorTheme={colorTheme}
         onThemeChange={setColorTheme}
+        graphEdgeLimit={graphEdgeLimit}
+        graphNodeLimit={graphNodeLimit}
+        defaultGraphEdgeLimit={MAPS_API_GRAPH_EDGE_LIMIT}
+        defaultGraphNodeLimit={MAPS_API_GRAPH_NODE_LIMIT}
+        onGraphSettingsApply={handleGraphSettingsApply}
+        isGraphMaxModeEnabled={isTokenGraphMaxModeActive}
+        canUseGraphMaxMode={true}
+        availableNodeCount={displayNodes.length}
+        availableEdgeCount={mapLinks.length}
+        renderedNodeCount={filteredNodes.length}
+        renderedEdgeCount={filteredLinks.length}
       />
       <div className="main-layout">
         <div className="map-area">
@@ -2181,7 +2609,7 @@ export default function App() {
                 </div>
                 <div className="map-selected-stat">
                   <span>Transactions</span>
-                  <strong>{selectedNodeTransfers.length}</strong>
+                  <strong>{totalTransactionCount.toLocaleString()}</strong>
                 </div>
               </div>
               <div className="map-selected-tx-row">
@@ -2269,10 +2697,7 @@ export default function App() {
         />
       </div>
       {isTransfersModalOpen && selectedNode && (
-        <div
-          className="transfers-modal-backdrop"
-          onClick={() => setIsTransfersModalOpen(false)}
-        >
+        <div className="transfers-modal-backdrop" onClick={closeTransfersModal}>
           <div
             className="transfers-modal"
             onClick={(event) => event.stopPropagation()}
@@ -2325,7 +2750,7 @@ export default function App() {
               <button
                 type="button"
                 className="transfers-modal-close"
-                onClick={() => setIsTransfersModalOpen(false)}
+                onClick={closeTransfersModal}
                 aria-label="Close transfers modal"
               >
                 ×
@@ -2446,6 +2871,19 @@ export default function App() {
                         <span>Time</span>
                         <button
                           type="button"
+                          className={`transactions-th-sort-btn ${transactionSortBy === "time" ? "is-active" : ""}`}
+                          onClick={() => handleTransactionSortToggle("time")}
+                          aria-label={`Sort time ${transactionSortBy === "time" && transactionSortDirection === "asc" ? "descending" : "ascending"}`}
+                          title={`Sort time ${transactionSortBy === "time" && transactionSortDirection === "asc" ? "descending" : "ascending"}`}
+                        >
+                          {transactionSortBy === "time"
+                            ? transactionSortDirection === "asc"
+                              ? "↑"
+                              : "↓"
+                            : "↕"}
+                        </button>
+                        <button
+                          type="button"
                           className={`transactions-th-filter-btn ${activeTransactionFilter === "time" ? "is-active" : ""} ${hasTimeFilter ? "has-value" : ""}`}
                           onClick={() =>
                             setActiveTransactionFilter((current) =>
@@ -2466,7 +2904,7 @@ export default function App() {
                       {activeTransactionFilter === "time" && (
                         <div className="transactions-th-popover">
                           <label className="transactions-filter-field">
-                            <span>Begin Time</span>
+                            <span>Begin Time (UTC)</span>
                             <input
                               type="datetime-local"
                               value={transactionStartTime}
@@ -2476,7 +2914,7 @@ export default function App() {
                             />
                           </label>
                           <label className="transactions-filter-field">
-                            <span>End Time</span>
+                            <span>End Time (UTC)</span>
                             <input
                               type="datetime-local"
                               value={transactionEndTime}
@@ -2505,6 +2943,19 @@ export default function App() {
                     >
                       <div className="transactions-th-content">
                         <span>Amount</span>
+                        <button
+                          type="button"
+                          className={`transactions-th-sort-btn ${transactionSortBy === "amount" ? "is-active" : ""}`}
+                          onClick={() => handleTransactionSortToggle("amount")}
+                          aria-label={`Sort amount ${transactionSortBy === "amount" && transactionSortDirection === "asc" ? "descending" : "ascending"}`}
+                          title={`Sort amount ${transactionSortBy === "amount" && transactionSortDirection === "asc" ? "descending" : "ascending"}`}
+                        >
+                          {transactionSortBy === "amount"
+                            ? transactionSortDirection === "asc"
+                              ? "↑"
+                              : "↓"
+                            : "↕"}
+                        </button>
                         <button
                           type="button"
                           className={`transactions-th-filter-btn ${activeTransactionFilter === "amount" ? "is-active" : ""} ${hasAmountFilter ? "has-value" : ""}`}
@@ -2637,7 +3088,7 @@ export default function App() {
                 </thead>
                 <tbody>
                   {filteredTransactions.length ? (
-                    filteredTransactions.map((transfer) => (
+                    pagedTransactions.map((transfer) => (
                       <tr key={transfer.id}>
                         <td
                           className={`transfer-dir ${transfer.direction === "From" ? "from" : "to"}`}
@@ -2734,6 +3185,35 @@ export default function App() {
                 </tbody>
               </table>
             </div>
+            {transactionPageCount > 1 && (
+              <div className="transfers-pagination">
+                <button
+                  type="button"
+                  className="transfers-pagination-btn"
+                  onClick={() => setTransactionPage((p) => Math.max(0, p - 1))}
+                  disabled={transactionPage === 0}
+                >
+                  ‹ Prev
+                </button>
+                <span className="transfers-pagination-info">
+                  Page {transactionPage + 1} of {transactionPageCount}
+                  {" · "}
+                  {totalTransactionCount.toLocaleString()} total
+                </span>
+                <button
+                  type="button"
+                  className="transfers-pagination-btn"
+                  onClick={() =>
+                    setTransactionPage((p) =>
+                      Math.min(transactionPageCount - 1, p + 1),
+                    )
+                  }
+                  disabled={transactionPage >= transactionPageCount - 1}
+                >
+                  Next ›
+                </button>
+              </div>
+            )}
           </div>
         </div>
       )}
