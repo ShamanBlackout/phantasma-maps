@@ -1524,6 +1524,33 @@ body,
   border-color: rgba(var(--accent-rgb), 0.52);
 }
 
+.map-selected-sparkline {
+  margin-top: 10px;
+  padding: 8px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.map-selected-sparkline span {
+  color: rgba(173, 201, 230, 0.68);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.sparkline-svg {
+  display: block;
+  overflow: visible;
+}
+
+.transfer-action-focus {
+  font-size: 14px;
+}
+
 .selected-node-actions {
   margin-top: 10px;
   display: flex;

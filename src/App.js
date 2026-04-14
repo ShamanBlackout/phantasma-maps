@@ -2,6 +2,22 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import Header from "./components/Header";
 import BubbleMap from "./components/BubbleMap";
 import StatsPanel from "./components/StatsPanel";
+import TransactionsModal from "./components/TransactionsModal";
+import SparklineSvg from "./components/SparklineSvg";
+import SelectedNodeCard from "./components/SelectedNodeCard";
+import useTransactionState from "./hooks/useTransactionState";
+import useUrlState, { readUrlParams } from "./hooks/useUrlState";
+import { fetchJsonWithTimeout } from "./api/http";
+import {
+  createActivityEndpoint as buildActivityEndpoint,
+  createGraphEndpoint as buildGraphEndpoint,
+  createSyncStatusEndpoint as buildSyncStatusEndpoint,
+  createTokenInfoEndpoint as buildTokenInfoEndpoint,
+  createTokensEndpoint as buildTokensEndpoint,
+  createTransactionsEndpoint as buildTransactionsEndpoint,
+  fetchAllTransactionsForAddress as fetchAllTransactionsForAddressFromApi,
+  fetchTransactionsPageForAddress as fetchTransactionsPageForAddressFromApi,
+} from "./api/mapsApi";
 import {
   HOLDER_TYPES,
   MOCK_TOKEN_DATA_BY_SYMBOL,
@@ -113,57 +129,6 @@ const MAPS_API_SYNC_STATUS_POLL_INTERVAL_MS = parseEnvMs(
   "REACT_APP_MAPS_API_SYNC_STATUS_POLL_INTERVAL_MS",
   30000,
 );
-
-function parseRetryAfterMs(response) {
-  const rawValue = response.headers.get("retry-after");
-  if (!rawValue) return null;
-  const asSeconds = Number(rawValue);
-  if (Number.isFinite(asSeconds) && asSeconds > 0) {
-    return asSeconds * 1000;
-  }
-  return null;
-}
-
-async function fetchJsonWithTimeout(
-  url,
-  options = {},
-  timeoutMs = SOUL_PRICE_REQUEST_TIMEOUT_MS,
-) {
-  const controller = new AbortController();
-  const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
-
-  try {
-    const response = await fetch(url, {
-      cache: "no-store",
-      ...options,
-      signal: controller.signal,
-    });
-
-    if (!response.ok) {
-      return {
-        ok: false,
-        status: response.status,
-        retryAfterMs: parseRetryAfterMs(response),
-      };
-    }
-
-    const payload = await response.json();
-    return {
-      ok: true,
-      status: response.status,
-      payload,
-      retryAfterMs: parseRetryAfterMs(response),
-    };
-  } catch {
-    return {
-      ok: false,
-      status: 0,
-      retryAfterMs: null,
-    };
-  } finally {
-    window.clearTimeout(timeoutId);
-  }
-}
 
 function shortenAddress(address) {
   if (typeof address !== "string" || address.length <= 10)
@@ -391,40 +356,6 @@ function buildNeighborFocusedGraph(graphData, rootAddress) {
   };
 }
 
-function createTokensEndpoint() {
-  const base = MAPS_API_BASE_URL.replace(/\/+$/, "");
-  return `${base}/tokens`;
-}
-
-function createTokenInfoEndpoint(tokenSymbol) {
-  const base = MAPS_API_BASE_URL.replace(/\/+$/, "");
-  return `${base}/tokens/${encodeURIComponent(tokenSymbol)}/metadata`;
-}
-
-function createGraphEndpoint(
-  tokenSymbol,
-  rootAddress = "",
-  edgeLimit = MAPS_API_GRAPH_EDGE_LIMIT,
-) {
-  const base = MAPS_API_BASE_URL.replace(/\/+$/, "");
-  const activeRootAddress = String(
-    rootAddress || MAPS_API_ROOT_ADDRESS || "",
-  ).trim();
-
-  if (activeRootAddress) {
-    const params = new URLSearchParams({
-      token: tokenSymbol,
-      depth: String(MAPS_API_GRAPH_DEPTH),
-      edgeLimit: String(
-        normalizePositiveInteger(edgeLimit, MAPS_API_GRAPH_EDGE_LIMIT),
-      ),
-    });
-    return `${base}/graph/address/${encodeURIComponent(activeRootAddress)}?${params.toString()}`;
-  }
-
-  return `${base}/graph/token/${encodeURIComponent(tokenSymbol)}`;
-}
-
 function limitGraphForDisplay(
   nodes,
   links,
@@ -495,172 +426,6 @@ function limitGraphForDisplay(
   return {
     nodes: limitedNodes,
     links: fullyLimitedLinks,
-  };
-}
-
-function createTransactionsEndpoint(
-  address,
-  tokenSymbol,
-  page = 1,
-  pageSize = MAPS_API_TX_PAGE_SIZE,
-  filters = {},
-) {
-  const base = MAPS_API_BASE_URL.replace(/\/+$/, "");
-  const params = new URLSearchParams({
-    token: tokenSymbol,
-    address,
-    page: String(page),
-    pageSize: String(pageSize),
-  });
-
-  const direction = String(filters?.direction || "")
-    .trim()
-    .toLowerCase();
-  if (direction === "from" || direction === "to") {
-    params.set("dir", direction);
-  }
-
-  const counterparty = String(filters?.counterparty || "").trim();
-  if (counterparty) {
-    params.set("counterparty", counterparty);
-  }
-
-  const startTime = String(filters?.startTime || "").trim();
-  if (startTime) {
-    params.set("startTime", startTime);
-  }
-
-  const endTime = String(filters?.endTime || "").trim();
-  if (endTime) {
-    params.set("endTime", endTime);
-  }
-
-  if (Number.isFinite(filters?.minAmount)) {
-    params.set("minAmount", String(filters.minAmount));
-  }
-  if (Number.isFinite(filters?.maxAmount)) {
-    params.set("maxAmount", String(filters.maxAmount));
-  }
-  if (Number.isFinite(filters?.minUsd)) {
-    params.set("minUsd", String(filters.minUsd));
-  }
-  if (Number.isFinite(filters?.maxUsd)) {
-    params.set("maxUsd", String(filters.maxUsd));
-  }
-  if (Number.isFinite(filters?.usdRateNow)) {
-    params.set("usdRateNow", String(filters.usdRateNow));
-  }
-
-  const sortBy = String(filters?.sortBy || "")
-    .trim()
-    .toLowerCase();
-  if (sortBy === "amount" || sortBy === "usd") {
-    params.set("sortBy", sortBy);
-  }
-
-  const sortDir = String(filters?.sortDir || "")
-    .trim()
-    .toLowerCase();
-  if (sortDir === "asc" || sortDir === "desc") {
-    params.set("sortDir", sortDir);
-  }
-
-  return `${base}/transactions?${params.toString()}`;
-}
-
-function createSyncStatusEndpoint() {
-  const base = MAPS_API_BASE_URL.replace(/\/+$/, "");
-  return `${base}/sync-status`;
-}
-
-async function fetchAllTransactionsForAddress(address, tokenSymbol) {
-  const normalizedAddress = String(address || "").trim();
-  if (!normalizedAddress) return [];
-
-  const allItems = [];
-  let page = 1;
-  let total = Infinity;
-
-  while (page <= MAPS_API_TX_MAX_PAGES && allItems.length < total) {
-    const endpoint = createTransactionsEndpoint(
-      normalizedAddress,
-      tokenSymbol,
-      page,
-      MAPS_API_TX_PAGE_SIZE,
-    );
-    const result = await fetchJsonWithTimeout(
-      endpoint,
-      { cache: "no-store" },
-      MAPS_API_REQUEST_TIMEOUT_MS,
-    );
-
-    if (!result.ok) {
-      throw new Error(
-        `transactions request failed with status ${result.status}`,
-      );
-    }
-
-    const items = Array.isArray(result.payload?.items)
-      ? result.payload.items
-      : [];
-    const nextTotal = Number(result.payload?.total ?? items.length);
-    total =
-      Number.isFinite(nextTotal) && nextTotal >= 0 ? nextTotal : items.length;
-    allItems.push(...items);
-
-    if (!items.length) break;
-    page += 1;
-  }
-
-  return allItems;
-}
-
-async function fetchTransactionsPageForAddress(
-  address,
-  tokenSymbol,
-  { page = 1, pageSize = 100, filters = {} } = {},
-) {
-  const normalizedAddress = String(address || "").trim();
-  if (!normalizedAddress) {
-    return {
-      items: [],
-      total: 0,
-      page,
-      pageSize,
-    };
-  }
-
-  const endpoint = createTransactionsEndpoint(
-    normalizedAddress,
-    tokenSymbol,
-    page,
-    pageSize,
-    filters,
-  );
-  const result = await fetchJsonWithTimeout(
-    endpoint,
-    { cache: "no-store" },
-    MAPS_API_REQUEST_TIMEOUT_MS,
-  );
-
-  if (!result.ok) {
-    throw new Error(`transactions request failed with status ${result.status}`);
-  }
-
-  const items = Array.isArray(result.payload?.items)
-    ? result.payload.items
-    : [];
-  const parsedTotal = Number(result.payload?.total);
-  const total =
-    Number.isFinite(parsedTotal) && parsedTotal >= 0
-      ? parsedTotal
-      : items.length;
-
-  return {
-    items,
-    total,
-    page,
-    pageSize,
   };
 }
 
@@ -1020,22 +785,37 @@ export default function App() {
   const [copiedTxHash, setCopiedTxHash] = useState(null);
   const [activeHolderTypeFilter, setActiveHolderTypeFilter] = useState("");
   const [isExportMenuOpen, setIsExportMenuOpen] = useState(false);
-  const [activeTransactionFilter, setActiveTransactionFilter] = useState(null);
-  const [transactionDirFilter, setTransactionDirFilter] = useState("all");
-  const [transactionCounterpartyFilter, setTransactionCounterpartyFilter] =
-    useState("");
-  const [transactionStartTime, setTransactionStartTime] = useState("");
-  const [transactionEndTime, setTransactionEndTime] = useState("");
-  const [transactionMinAmount, setTransactionMinAmount] = useState("");
-  const [transactionMaxAmount, setTransactionMaxAmount] = useState("");
-  const [transactionMinUsd, setTransactionMinUsd] = useState("");
-  const [transactionMaxUsd, setTransactionMaxUsd] = useState("");
-  const [transactionSortBy, setTransactionSortBy] = useState(null);
-  const [transactionSortDirection, setTransactionSortDirection] =
-    useState("asc");
-  const [transactionPage, setTransactionPage] = useState(0);
+  const {
+    activeTransactionFilter,
+    setActiveTransactionFilter,
+    transactionDirFilter,
+    setTransactionDirFilter,
+    transactionCounterpartyFilter,
+    setTransactionCounterpartyFilter,
+    transactionStartTime,
+    setTransactionStartTime,
+    transactionEndTime,
+    setTransactionEndTime,
+    transactionMinAmount,
+    setTransactionMinAmount,
+    transactionMaxAmount,
+    setTransactionMaxAmount,
+    transactionMinUsd,
+    setTransactionMinUsd,
+    transactionMaxUsd,
+    setTransactionMaxUsd,
+    transactionSortBy,
+    setTransactionSortBy,
+    transactionSortDirection,
+    setTransactionSortDirection,
+    transactionPage,
+    setTransactionPage,
+    resetTransactionState,
+  } = useTransactionState();
   const [liveTokenInfo, setLiveTokenInfo] = useState(TOKEN_INFO);
   const [selectedTokenSymbol, setSelectedTokenSymbol] = useState(() => {
+    const { tokenSymbol: urlToken } = readUrlParams();
+    if (urlToken) return urlToken;
     try {
       const stored = window.localStorage.getItem(TOKEN_SYMBOL_STORAGE_KEY);
       return stored || DEFAULT_MAPS_API_TOKEN_SYMBOL;
@@ -1044,6 +824,7 @@ export default function App() {
     }
   });
   const previousSelectedTokenSymbolRef = useRef(selectedTokenSymbol);
+  const initialNodeIdFromUrlRef = useRef(readUrlParams().nodeId);
   const [apiTokenSymbols, setApiTokenSymbols] = useState([]);
   const [apiTokenInfo, setApiTokenInfo] = useState(null);
   const [trackedTokenSupply, setTrackedTokenSupply] = useState(0);
@@ -1067,6 +848,7 @@ export default function App() {
     isSelectedNodeTransactionsLoading,
     setIsSelectedNodeTransactionsLoading,
   ] = useState(false);
+  const [selectedNodeSparkline, setSelectedNodeSparkline] = useState([]);
   const [priceLastUpdatedAt, setPriceLastUpdatedAt] = useState(null);
   const [blockSyncHeight, setBlockSyncHeight] = useState(null);
   const [blockSyncTargetHeight, setBlockSyncTargetHeight] = useState(null);
@@ -1161,6 +943,8 @@ export default function App() {
     }
   }, [selectedTokenSymbol]);
 
+  useUrlState(selectedTokenSymbol, selectedNode);
+
   useEffect(() => {
     if (previousSelectedTokenSymbolRef.current === selectedTokenSymbol) {
       return;
@@ -1181,7 +965,7 @@ export default function App() {
 
     async function fetchTokenInfo() {
       const result = await fetchJsonWithTimeout(
-        createTokenInfoEndpoint(selectedTokenSymbol),
+        buildTokenInfoEndpoint(MAPS_API_BASE_URL, selectedTokenSymbol),
         { cache: "no-store" },
         MAPS_API_REQUEST_TIMEOUT_MS,
       );
@@ -1306,7 +1090,7 @@ export default function App() {
 
     async function fetchAvailableTokens() {
       const result = await fetchJsonWithTimeout(
-        createTokensEndpoint(),
+        buildTokensEndpoint(MAPS_API_BASE_URL),
         { cache: "no-store" },
         MAPS_API_REQUEST_TIMEOUT_MS,
       );
@@ -1464,10 +1248,15 @@ export default function App() {
           : `Generating maps for ${selectedTokenSymbol}...`,
       );
 
-      const graphEndpoint = createGraphEndpoint(
+      const graphEndpoint = buildGraphEndpoint(
+        MAPS_API_BASE_URL,
         selectedTokenSymbol,
-        activeGraphRootAddress,
-        graphEdgeLimit,
+        {
+          rootAddress: activeGraphRootAddress || MAPS_API_ROOT_ADDRESS || "",
+          depth: MAPS_API_GRAPH_DEPTH,
+          edgeLimit: graphEdgeLimit,
+          defaultEdgeLimit: MAPS_API_GRAPH_EDGE_LIMIT,
+        },
       );
       const result = await fetchJsonWithTimeout(
         graphEndpoint,
@@ -1506,10 +1295,15 @@ export default function App() {
 
       if (activeGraphRootAddress) {
         try {
-          const connectionTransactions = await fetchAllTransactionsForAddress(
-            activeGraphRootAddress,
-            selectedTokenSymbol,
-          );
+          const connectionTransactions =
+            await fetchAllTransactionsForAddressFromApi(
+              MAPS_API_BASE_URL,
+              MAPS_API_REQUEST_TIMEOUT_MS,
+              MAPS_API_TX_MAX_PAGES,
+              MAPS_API_TX_PAGE_SIZE,
+              activeGraphRootAddress,
+              selectedTokenSymbol,
+            );
 
           focusedGraph = buildConnectionsGraphFromTransactions(
             connectionTransactions,
@@ -1690,7 +1484,7 @@ export default function App() {
 
     async function fetchSyncStatus() {
       const result = await fetchJsonWithTimeout(
-        createSyncStatusEndpoint(),
+        buildSyncStatusEndpoint(MAPS_API_BASE_URL),
         { cache: "no-store" },
         MAPS_API_REQUEST_TIMEOUT_MS,
       );
@@ -1805,6 +1599,15 @@ export default function App() {
       new Map(limitedDisplayGraph.nodes.map((holder) => [holder.id, holder])),
     [limitedDisplayGraph.nodes],
   );
+
+  useEffect(() => {
+    if (!initialNodeIdFromUrlRef.current) return;
+    const node = nodeById.get(initialNodeIdFromUrlRef.current);
+    if (node) {
+      setSelectedNode(node);
+      initialNodeIdFromUrlRef.current = null;
+    }
+  }, [nodeById]);
 
   const resolvedSelectedNode = selectedNode
     ? nodeById.get(selectedNode.id) || selectedNode
@@ -1964,7 +1767,9 @@ export default function App() {
       };
 
       try {
-        const pageData = await fetchTransactionsPageForAddress(
+        const pageData = await fetchTransactionsPageForAddressFromApi(
+          MAPS_API_BASE_URL,
+          MAPS_API_REQUEST_TIMEOUT_MS,
           selectedNode.id,
           selectedTokenSymbol,
           {
@@ -2229,18 +2034,7 @@ export default function App() {
   const hasUsdFilter = Boolean(transactionMinUsd || transactionMaxUsd);
 
   function resetAllTransactionFilters() {
-    setActiveTransactionFilter(null);
-    setTransactionDirFilter("all");
-    setTransactionCounterpartyFilter("");
-    setTransactionStartTime("");
-    setTransactionEndTime("");
-    setTransactionMinAmount("");
-    setTransactionMaxAmount("");
-    setTransactionMinUsd("");
-    setTransactionMaxUsd("");
-    setTransactionSortBy(null);
-    setTransactionSortDirection("asc");
-    setTransactionPage(0);
+    resetTransactionState();
   }
 
   function closeTransfersModal() {
@@ -2355,18 +2149,46 @@ export default function App() {
       setCopiedAddress(null);
       setCopiedTxHash(null);
       setIsExportMenuOpen(false);
-      setActiveTransactionFilter(null);
-      setTransactionDirFilter("all");
-      setTransactionCounterpartyFilter("");
-      setTransactionStartTime("");
-      setTransactionEndTime("");
-      setTransactionMinAmount("");
-      setTransactionMaxAmount("");
-      setTransactionMinUsd("");
-      setTransactionMaxUsd("");
-      setTransactionPage(0);
+      resetTransactionState();
     }
   }, [selectedNode]);
+
+  useEffect(() => {
+    if (!selectedNode?.id || !selectedTokenSymbol) {
+      setSelectedNodeSparkline([]);
+      return;
+    }
+
+    let isMounted = true;
+    const endpoint = buildActivityEndpoint(
+      MAPS_API_BASE_URL,
+      selectedNode.id,
+      selectedTokenSymbol,
+      30,
+    );
+
+    fetchJsonWithTimeout(
+      endpoint,
+      { cache: "no-store" },
+      MAPS_API_REQUEST_TIMEOUT_MS,
+    )
+      .then((result) => {
+        if (!isMounted) return;
+        if (result.ok && Array.isArray(result.payload?.items)) {
+          setSelectedNodeSparkline(result.payload.items);
+        } else {
+          setSelectedNodeSparkline([]);
+        }
+      })
+      .catch(() => {
+        if (!isMounted) return;
+        setSelectedNodeSparkline([]);
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [selectedNode?.id, selectedTokenSymbol]);
 
   async function copyTextToClipboard(value) {
     if (!value) return false;
@@ -2538,113 +2360,24 @@ export default function App() {
             </div>
           )}
           {resolvedSelectedNode && (
-            <div className="map-selected-info is-active">
-              <div className="map-selected-head">
-                <div>
-                  <div className="map-selected-title">
-                    {resolvedSelectedNode.label}
-                  </div>
-                  <div className="map-selected-addr-row">
-                    <div className="map-selected-addr">
-                      {resolvedSelectedNode.shortAddr}
-                    </div>
-                    <button
-                      type="button"
-                      className="map-selected-action"
-                      onClick={() => handleCopyAddress(resolvedSelectedNode.id)}
-                      aria-label="Copy address"
-                      title="Copy address"
-                    >
-                      {copiedAddress === resolvedSelectedNode.id
-                        ? "Copied"
-                        : "Copy"}
-                    </button>
-                    <a
-                      className="map-selected-action"
-                      href={`${PHANTASMA_EXPLORER_BASE}${encodeURIComponent(resolvedSelectedNode.id)}`}
-                      target="_blank"
-                      rel="noreferrer noopener"
-                      aria-label="Open address on Phantasma Explorer"
-                      title="Open on Phantasma Explorer"
-                    >
-                      ↗
-                    </a>
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  className="map-selected-close"
-                  onClick={() => setSelectedNode(null)}
-                  aria-label="Close selected node card"
-                >
-                  ×
-                </button>
-              </div>
-              <div className="map-selected-grid">
-                <div className="map-selected-stat">
-                  <span>Share</span>
-                  <strong>
-                    {fmtSharePct(
-                      resolvedSelectedNode.value,
-                      currentSupplyBase,
-                      resolvedSelectedNode.pct,
-                    )}
-                  </strong>
-                </div>
-                <div className="map-selected-stat">
-                  <span>Amount</span>
-                  <strong>
-                    {fmtTokenAmount(resolvedSelectedNode.value)}{" "}
-                    {activeTokenInfo.name}
-                  </strong>
-                </div>
-                <div className="map-selected-stat">
-                  <span>USD Value</span>
-                  <strong>
-                    {fmtUsdAmount(
-                      resolvedSelectedNode.value *
-                        Number(activeTokenInfo.price),
-                    )}
-                  </strong>
-                </div>
-                <div className="map-selected-stat">
-                  <span>Transactions</span>
-                  <strong>{totalTransactionCount.toLocaleString()}</strong>
-                </div>
-              </div>
-              <div className="map-selected-tx-row">
-                <span>
-                  Sent{" "}
-                  {resolvedSelectedNode.sentTransactions?.toLocaleString() ??
-                    "0"}
-                </span>
-                <span>
-                  Received{" "}
-                  {resolvedSelectedNode.receivedTransactions?.toLocaleString() ??
-                    "0"}
-                </span>
-              </div>
-              <div className="selected-node-actions">
-                {canShowSelectedNodeConnections ? (
-                  <button
-                    type="button"
-                    className="map-selected-show-transfers"
-                    onClick={() =>
-                      handleShowNodeConnections(resolvedSelectedNode.id)
-                    }
-                  >
-                    Show Connections
-                  </button>
-                ) : null}
-                <button
-                  type="button"
-                  className="map-selected-show-transfers"
-                  onClick={() => setIsTransfersModalOpen(true)}
-                >
-                  Show All Transactions
-                </button>
-              </div>
-            </div>
+            <SelectedNodeCard
+              node={resolvedSelectedNode}
+              copiedAddress={copiedAddress}
+              onCopyAddress={handleCopyAddress}
+              explorerBase={PHANTASMA_EXPLORER_BASE}
+              onClose={() => setSelectedNode(null)}
+              fmtSharePct={fmtSharePct}
+              currentSupply={currentSupplyBase}
+              fmtTokenAmount={fmtTokenAmount}
+              tokenName={activeTokenInfo.name}
+              fmtUsdAmount={fmtUsdAmount}
+              tokenPrice={Number(activeTokenInfo.price)}
+              totalTransactionCount={totalTransactionCount}
+              sparklineData={selectedNodeSparkline}
+              canShowConnections={canShowSelectedNodeConnections}
+              onShowConnections={handleShowNodeConnections}
+              onOpenTransactions={() => setIsTransfersModalOpen(true)}
+            />
           )}
           <div className="map-hint">
             <span className="map-hint-text">
@@ -2696,527 +2429,65 @@ export default function App() {
           }
         />
       </div>
-      {isTransfersModalOpen && selectedNode && (
-        <div className="transfers-modal-backdrop" onClick={closeTransfersModal}>
-          <div
-            className="transfers-modal"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <div className="transfers-modal-head">
-              <div>
-                <h3>All Transactions</h3>
-                <p>For {selectedNode.shortAddr}</p>
-                {isSelectedNodeTransactionsLoading ? (
-                  <p>Loading from API...</p>
-                ) : null}
-                {selectedNodeApiTransactionsError ? (
-                  <p>{selectedNodeApiTransactionsError}</p>
-                ) : null}
-              </div>
-              <div className="transactions-export" ref={exportMenuRef}>
-                <button
-                  type="button"
-                  className="transactions-export-btn"
-                  onClick={() => setIsExportMenuOpen((open) => !open)}
-                >
-                  Export
-                </button>
-                {isExportMenuOpen && (
-                  <div className="transactions-export-menu">
-                    <button
-                      type="button"
-                      className="transactions-export-item"
-                      onClick={() => exportTransactions("json")}
-                    >
-                      Export JSON
-                    </button>
-                    <button
-                      type="button"
-                      className="transactions-export-item"
-                      onClick={() => exportTransactions("excel")}
-                    >
-                      Export Excel
-                    </button>
-                  </div>
-                )}
-              </div>
-              <button
-                type="button"
-                className="transactions-reset-all"
-                onClick={resetAllTransactionFilters}
-              >
-                Reset All Filters
-              </button>
-              <button
-                type="button"
-                className="transfers-modal-close"
-                onClick={closeTransfersModal}
-                aria-label="Close transfers modal"
-              >
-                ×
-              </button>
-            </div>
-            <div className="transfers-table-wrap">
-              <table className="transfers-table">
-                <thead>
-                  <tr>
-                    <th
-                      className="transactions-th-filterable"
-                      ref={dirFilterRef}
-                    >
-                      <div className="transactions-th-content">
-                        <span>Dir</span>
-                        <button
-                          type="button"
-                          className={`transactions-th-filter-btn ${activeTransactionFilter === "dir" ? "is-active" : ""} ${hasDirFilter ? "has-value" : ""}`}
-                          onClick={() =>
-                            setActiveTransactionFilter((current) =>
-                              current === "dir" ? null : "dir",
-                            )
-                          }
-                          aria-label="Filter direction column"
-                          title="Filter direction"
-                        >
-                          <svg viewBox="0 0 16 16" aria-hidden="true">
-                            <path
-                              d="M2 3h12l-4.5 5v4l-3-1.8V8z"
-                              fill="currentColor"
-                            />
-                          </svg>
-                        </button>
-                      </div>
-                      {activeTransactionFilter === "dir" && (
-                        <div className="transactions-th-popover transactions-th-popover-dir">
-                          <button
-                            type="button"
-                            className={`transactions-filter-chip ${transactionDirFilter === "all" ? "is-active" : ""}`}
-                            onClick={() => setTransactionDirFilter("all")}
-                          >
-                            All
-                          </button>
-                          <button
-                            type="button"
-                            className={`transactions-filter-chip ${transactionDirFilter === "from" ? "is-active" : ""}`}
-                            onClick={() => setTransactionDirFilter("from")}
-                          >
-                            From
-                          </button>
-                          <button
-                            type="button"
-                            className={`transactions-filter-chip ${transactionDirFilter === "to" ? "is-active" : ""}`}
-                            onClick={() => setTransactionDirFilter("to")}
-                          >
-                            To
-                          </button>
-                        </div>
-                      )}
-                    </th>
-                    <th
-                      className="transactions-th-filterable"
-                      ref={counterpartyFilterRef}
-                    >
-                      <div className="transactions-th-content">
-                        <span>Counterparty</span>
-                        <button
-                          type="button"
-                          className={`transactions-th-filter-btn ${activeTransactionFilter === "counterparty" ? "is-active" : ""} ${hasCounterpartyFilter ? "has-value" : ""}`}
-                          onClick={() =>
-                            setActiveTransactionFilter((current) =>
-                              current === "counterparty"
-                                ? null
-                                : "counterparty",
-                            )
-                          }
-                          aria-label="Filter counterparty column"
-                          title="Filter counterparty"
-                        >
-                          <svg viewBox="0 0 16 16" aria-hidden="true">
-                            <path
-                              d="M2 3h12l-4.5 5v4l-3-1.8V8z"
-                              fill="currentColor"
-                            />
-                          </svg>
-                        </button>
-                      </div>
-                      {activeTransactionFilter === "counterparty" && (
-                        <div className="transactions-th-popover transactions-th-popover-counterparty">
-                          <label className="transactions-filter-field">
-                            <span>Address or Name</span>
-                            <input
-                              type="text"
-                              value={transactionCounterpartyFilter}
-                              onChange={(event) =>
-                                setTransactionCounterpartyFilter(
-                                  event.target.value,
-                                )
-                              }
-                              placeholder="Search by address or name"
-                            />
-                          </label>
-                          <button
-                            type="button"
-                            className="transactions-filter-reset"
-                            onClick={() => setTransactionCounterpartyFilter("")}
-                          >
-                            Clear
-                          </button>
-                        </div>
-                      )}
-                    </th>
-                    <th
-                      className="transactions-th-filterable"
-                      ref={timeFilterRef}
-                    >
-                      <div className="transactions-th-content">
-                        <span>Time</span>
-                        <button
-                          type="button"
-                          className={`transactions-th-sort-btn ${transactionSortBy === "time" ? "is-active" : ""}`}
-                          onClick={() => handleTransactionSortToggle("time")}
-                          aria-label={`Sort time ${transactionSortBy === "time" && transactionSortDirection === "asc" ? "descending" : "ascending"}`}
-                          title={`Sort time ${transactionSortBy === "time" && transactionSortDirection === "asc" ? "descending" : "ascending"}`}
-                        >
-                          {transactionSortBy === "time"
-                            ? transactionSortDirection === "asc"
-                              ? "↑"
-                              : "↓"
-                            : "↕"}
-                        </button>
-                        <button
-                          type="button"
-                          className={`transactions-th-filter-btn ${activeTransactionFilter === "time" ? "is-active" : ""} ${hasTimeFilter ? "has-value" : ""}`}
-                          onClick={() =>
-                            setActiveTransactionFilter((current) =>
-                              current === "time" ? null : "time",
-                            )
-                          }
-                          aria-label="Filter time column"
-                          title="Filter time"
-                        >
-                          <svg viewBox="0 0 16 16" aria-hidden="true">
-                            <path
-                              d="M2 3h12l-4.5 5v4l-3-1.8V8z"
-                              fill="currentColor"
-                            />
-                          </svg>
-                        </button>
-                      </div>
-                      {activeTransactionFilter === "time" && (
-                        <div className="transactions-th-popover">
-                          <label className="transactions-filter-field">
-                            <span>Begin Time (UTC)</span>
-                            <input
-                              type="datetime-local"
-                              value={transactionStartTime}
-                              onChange={(event) =>
-                                setTransactionStartTime(event.target.value)
-                              }
-                            />
-                          </label>
-                          <label className="transactions-filter-field">
-                            <span>End Time (UTC)</span>
-                            <input
-                              type="datetime-local"
-                              value={transactionEndTime}
-                              onChange={(event) =>
-                                setTransactionEndTime(event.target.value)
-                              }
-                            />
-                          </label>
-                          <button
-                            type="button"
-                            className="transactions-filter-reset"
-                            onClick={() => {
-                              setTransactionStartTime("");
-                              setTransactionEndTime("");
-                            }}
-                          >
-                            Reset Time
-                          </button>
-                        </div>
-                      )}
-                    </th>
-                    <th>Token</th>
-                    <th
-                      className="transactions-th-filterable"
-                      ref={amountFilterRef}
-                    >
-                      <div className="transactions-th-content">
-                        <span>Amount</span>
-                        <button
-                          type="button"
-                          className={`transactions-th-sort-btn ${transactionSortBy === "amount" ? "is-active" : ""}`}
-                          onClick={() => handleTransactionSortToggle("amount")}
-                          aria-label={`Sort amount ${transactionSortBy === "amount" && transactionSortDirection === "asc" ? "descending" : "ascending"}`}
-                          title={`Sort amount ${transactionSortBy === "amount" && transactionSortDirection === "asc" ? "descending" : "ascending"}`}
-                        >
-                          {transactionSortBy === "amount"
-                            ? transactionSortDirection === "asc"
-                              ? "↑"
-                              : "↓"
-                            : "↕"}
-                        </button>
-                        <button
-                          type="button"
-                          className={`transactions-th-filter-btn ${activeTransactionFilter === "amount" ? "is-active" : ""} ${hasAmountFilter ? "has-value" : ""}`}
-                          onClick={() =>
-                            setActiveTransactionFilter((current) =>
-                              current === "amount" ? null : "amount",
-                            )
-                          }
-                          aria-label="Filter amount column"
-                          title="Filter amount"
-                        >
-                          <svg viewBox="0 0 16 16" aria-hidden="true">
-                            <path
-                              d="M2 3h12l-4.5 5v4l-3-1.8V8z"
-                              fill="currentColor"
-                            />
-                          </svg>
-                        </button>
-                      </div>
-                      {activeTransactionFilter === "amount" && (
-                        <div className="transactions-th-popover transactions-th-popover-amount">
-                          <label className="transactions-filter-field transactions-filter-field-amount">
-                            <span>Min Amount</span>
-                            <input
-                              type="number"
-                              min="0"
-                              step="100"
-                              value={transactionMinAmount}
-                              onChange={(event) =>
-                                setTransactionMinAmount(event.target.value)
-                              }
-                              placeholder="0"
-                            />
-                          </label>
-                          <label className="transactions-filter-field transactions-filter-field-amount">
-                            <span>Max Amount</span>
-                            <input
-                              type="number"
-                              min="0"
-                              step="100"
-                              value={transactionMaxAmount}
-                              onChange={(event) =>
-                                setTransactionMaxAmount(event.target.value)
-                              }
-                              placeholder="No limit"
-                            />
-                          </label>
-                          <button
-                            type="button"
-                            className="transactions-filter-reset"
-                            onClick={() => {
-                              setTransactionMinAmount("");
-                              setTransactionMaxAmount("");
-                            }}
-                          >
-                            Reset Amount
-                          </button>
-                        </div>
-                      )}
-                    </th>
-                    <th
-                      className="transactions-th-filterable"
-                      ref={usdFilterRef}
-                    >
-                      <div className="transactions-th-content">
-                        <span>USD (Now)</span>
-                        <button
-                          type="button"
-                          className={`transactions-th-filter-btn ${activeTransactionFilter === "usd" ? "is-active" : ""} ${hasUsdFilter ? "has-value" : ""}`}
-                          onClick={() =>
-                            setActiveTransactionFilter((current) =>
-                              current === "usd" ? null : "usd",
-                            )
-                          }
-                          aria-label="Filter USD column"
-                          title="Filter USD"
-                        >
-                          <svg viewBox="0 0 16 16" aria-hidden="true">
-                            <path
-                              d="M2 3h12l-4.5 5v4l-3-1.8V8z"
-                              fill="currentColor"
-                            />
-                          </svg>
-                        </button>
-                      </div>
-                      {activeTransactionFilter === "usd" && (
-                        <div className="transactions-th-popover transactions-th-popover-amount">
-                          <label className="transactions-filter-field transactions-filter-field-amount">
-                            <span>Min USD</span>
-                            <input
-                              type="number"
-                              min="0"
-                              step="100"
-                              value={transactionMinUsd}
-                              onChange={(event) =>
-                                setTransactionMinUsd(event.target.value)
-                              }
-                              placeholder="0"
-                            />
-                          </label>
-                          <label className="transactions-filter-field transactions-filter-field-amount">
-                            <span>Max USD</span>
-                            <input
-                              type="number"
-                              min="0"
-                              step="100"
-                              value={transactionMaxUsd}
-                              onChange={(event) =>
-                                setTransactionMaxUsd(event.target.value)
-                              }
-                              placeholder="No limit"
-                            />
-                          </label>
-                          <button
-                            type="button"
-                            className="transactions-filter-reset"
-                            onClick={() => {
-                              setTransactionMinUsd("");
-                              setTransactionMaxUsd("");
-                            }}
-                          >
-                            Reset USD
-                          </button>
-                        </div>
-                      )}
-                    </th>
-                    <th>Tx Hash</th>
-                    <th>Tx</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredTransactions.length ? (
-                    pagedTransactions.map((transfer) => (
-                      <tr key={transfer.id}>
-                        <td
-                          className={`transfer-dir ${transfer.direction === "From" ? "from" : "to"}`}
-                        >
-                          {transfer.direction}
-                        </td>
-                        <td>
-                          <div className="transfer-counterparty-row">
-                            <div className="transfer-counterparty">
-                              {transfer.counterpartLabel}
-                            </div>
-                            <button
-                              type="button"
-                              className="transfer-action"
-                              onClick={() =>
-                                handleCopyAddress(
-                                  transfer.counterpartAddress ||
-                                    transfer.counterpartAddr,
-                                )
-                              }
-                              aria-label="Copy counterpart address"
-                              title="Copy counterpart address"
-                            >
-                              {copiedAddress ===
-                              (transfer.counterpartAddress ||
-                                transfer.counterpartAddr)
-                                ? "Copied"
-                                : "Copy"}
-                            </button>
-                            <a
-                              className="transfer-action"
-                              href={`${PHANTASMA_EXPLORER_BASE}${encodeURIComponent(transfer.counterpartAddress || transfer.counterpartAddr)}`}
-                              target="_blank"
-                              rel="noreferrer noopener"
-                              aria-label="Open address on Phantasma Explorer"
-                              title="Open address on Phantasma Explorer"
-                            >
-                              ↗
-                            </a>
-                          </div>
-                        </td>
-                        <td>{transfer.timeUtc}</td>
-                        <td>{transfer.token}</td>
-                        <td>{fmtTokenAmount(transfer.amount)}</td>
-                        <td>{fmtUsdAmount(transfer.usd)}</td>
-                        <td>
-                          <div
-                            className="transfer-hash-cell"
-                            title={transfer.transactionHash}
-                          >
-                            <span className="transfer-hash">
-                              {transfer.transactionHash}
-                            </span>
-                            <button
-                              type="button"
-                              className="transfer-action"
-                              onClick={() =>
-                                handleCopyTransactionHash(
-                                  transfer.transactionHash,
-                                )
-                              }
-                              aria-label="Copy transaction hash"
-                              title="Copy transaction hash"
-                            >
-                              {copiedTxHash === transfer.transactionHash
-                                ? "Copied"
-                                : "Copy"}
-                            </button>
-                            <a
-                              className="transfer-action"
-                              href={`${PHANTASMA_TX_EXPLORER_BASE}${encodeURIComponent(transfer.transactionHash)}`}
-                              target="_blank"
-                              rel="noreferrer noopener"
-                              aria-label="Open transaction on Phantasma Explorer"
-                              title="Open transaction on Phantasma Explorer"
-                            >
-                              ↗
-                            </a>
-                          </div>
-                        </td>
-                        <td>
-                          S {transfer.sentTransactions.toLocaleString()} · R{" "}
-                          {transfer.receivedTransactions.toLocaleString()}
-                        </td>
-                      </tr>
-                    ))
-                  ) : (
-                    <tr>
-                      <td colSpan={8} className="transfers-empty">
-                        No transactions found for the current filters.
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-            {transactionPageCount > 1 && (
-              <div className="transfers-pagination">
-                <button
-                  type="button"
-                  className="transfers-pagination-btn"
-                  onClick={() => setTransactionPage((p) => Math.max(0, p - 1))}
-                  disabled={transactionPage === 0}
-                >
-                  ‹ Prev
-                </button>
-                <span className="transfers-pagination-info">
-                  Page {transactionPage + 1} of {transactionPageCount}
-                  {" · "}
-                  {totalTransactionCount.toLocaleString()} total
-                </span>
-                <button
-                  type="button"
-                  className="transfers-pagination-btn"
-                  onClick={() =>
-                    setTransactionPage((p) =>
-                      Math.min(transactionPageCount - 1, p + 1),
-                    )
-                  }
-                  disabled={transactionPage >= transactionPageCount - 1}
-                >
-                  Next ›
-                </button>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
+      <TransactionsModal
+        isOpen={isTransfersModalOpen}
+        selectedNode={selectedNode}
+        closeTransfersModal={closeTransfersModal}
+        isSelectedNodeTransactionsLoading={isSelectedNodeTransactionsLoading}
+        selectedNodeApiTransactionsError={selectedNodeApiTransactionsError}
+        exportMenuRef={exportMenuRef}
+        isExportMenuOpen={isExportMenuOpen}
+        setIsExportMenuOpen={setIsExportMenuOpen}
+        exportTransactions={exportTransactions}
+        resetAllTransactionFilters={resetAllTransactionFilters}
+        dirFilterRef={dirFilterRef}
+        counterpartyFilterRef={counterpartyFilterRef}
+        timeFilterRef={timeFilterRef}
+        amountFilterRef={amountFilterRef}
+        usdFilterRef={usdFilterRef}
+        activeTransactionFilter={activeTransactionFilter}
+        setActiveTransactionFilter={setActiveTransactionFilter}
+        hasDirFilter={hasDirFilter}
+        hasCounterpartyFilter={hasCounterpartyFilter}
+        hasTimeFilter={hasTimeFilter}
+        hasAmountFilter={hasAmountFilter}
+        hasUsdFilter={hasUsdFilter}
+        transactionDirFilter={transactionDirFilter}
+        setTransactionDirFilter={setTransactionDirFilter}
+        transactionCounterpartyFilter={transactionCounterpartyFilter}
+        setTransactionCounterpartyFilter={setTransactionCounterpartyFilter}
+        transactionStartTime={transactionStartTime}
+        setTransactionStartTime={setTransactionStartTime}
+        transactionEndTime={transactionEndTime}
+        setTransactionEndTime={setTransactionEndTime}
+        transactionMinAmount={transactionMinAmount}
+        setTransactionMinAmount={setTransactionMinAmount}
+        transactionMaxAmount={transactionMaxAmount}
+        setTransactionMaxAmount={setTransactionMaxAmount}
+        transactionMinUsd={transactionMinUsd}
+        setTransactionMinUsd={setTransactionMinUsd}
+        transactionMaxUsd={transactionMaxUsd}
+        setTransactionMaxUsd={setTransactionMaxUsd}
+        transactionSortBy={transactionSortBy}
+        transactionSortDirection={transactionSortDirection}
+        handleTransactionSortToggle={handleTransactionSortToggle}
+        filteredTransactions={filteredTransactions}
+        pagedTransactions={pagedTransactions}
+        nodeById={nodeById}
+        setSelectedNode={setSelectedNode}
+        handleCopyAddress={handleCopyAddress}
+        copiedAddress={copiedAddress}
+        explorerBase={PHANTASMA_EXPLORER_BASE}
+        fmtTokenAmount={fmtTokenAmount}
+        fmtUsdAmount={fmtUsdAmount}
+        handleCopyTransactionHash={handleCopyTransactionHash}
+        copiedTxHash={copiedTxHash}
+        txExplorerBase={PHANTASMA_TX_EXPLORER_BASE}
+        transactionPageCount={transactionPageCount}
+        setTransactionPage={setTransactionPage}
+        transactionPage={transactionPage}
+        totalTransactionCount={totalTransactionCount}
+      />
     </div>
   );
 }
