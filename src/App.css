@@ -201,6 +201,31 @@ body,
   color: rgba(57, 84, 113, 0.72);
 }
 
+.app-root.theme-light .map-empty-state {
+  background: rgba(248, 242, 232, 0.9);
+  border-color: rgba(120, 152, 186, 0.35);
+  box-shadow: 0 16px 40px rgba(71, 94, 120, 0.18);
+}
+
+.app-root.theme-light .map-empty-state-title {
+  color: #24415e;
+}
+
+.app-root.theme-light .map-empty-state-copy {
+  color: rgba(56, 84, 115, 0.78);
+}
+
+.app-root.theme-light .map-empty-state-button {
+  background: rgba(250, 246, 239, 0.95);
+  border-color: rgba(125, 154, 184, 0.4);
+  color: rgba(39, 63, 89, 0.9);
+}
+
+.app-root.theme-light .map-empty-state-button:hover {
+  background: rgba(255, 252, 247, 0.98);
+  border-color: rgba(96, 132, 168, 0.55);
+}
+
 .app-root.theme-light .map-loading-spinner {
   border-color: rgba(87, 120, 154, 0.18);
   border-top-color: rgba(39, 65, 93, 0.88);
@@ -1262,6 +1287,10 @@ body,
 }
 
 .map-loading-overlay {
+  --loading-network-rgb: var(--accent-rgb);
+  --loading-node-pulse-duration: 1.25s;
+  --loading-link-draw-duration: 1.7s;
+
   position: absolute;
   inset: 0;
   display: flex;
@@ -1276,6 +1305,52 @@ body,
   z-index: 4;
 }
 
+@keyframes map-loading-node-pulse {
+  0%,
+  100% {
+    transform: translate(-50%, -50%) scale(1);
+    box-shadow: 0 0 0 0 rgba(var(--loading-network-rgb), 0.42);
+  }
+
+  50% {
+    transform: translate(-50%, -50%) scale(1.18);
+    box-shadow: 0 0 0 9px rgba(var(--loading-network-rgb), 0);
+  }
+}
+
+@keyframes map-loading-link-draw {
+  0% {
+    transform: scaleX(0.06);
+    opacity: 0.2;
+  }
+
+  45% {
+    transform: scaleX(1);
+    opacity: 1;
+  }
+
+  100% {
+    transform: scaleX(1);
+    opacity: 0.46;
+  }
+}
+
+@keyframes map-loading-link-scan {
+  0% {
+    transform: translateX(-120%);
+    opacity: 0;
+  }
+
+  35% {
+    opacity: 0.95;
+  }
+
+  100% {
+    transform: translateX(132%);
+    opacity: 0;
+  }
+}
+
 @keyframes map-loading-spin {
   from {
     transform: rotate(0deg);
@@ -1286,15 +1361,128 @@ body,
   }
 }
 
+.map-loading-network {
+  position: relative;
+  width: 220px;
+  height: 120px;
+  margin-bottom: 2px;
+  filter: drop-shadow(0 0 14px rgba(var(--loading-network-rgb), 0.3));
+}
+
+.map-loading-link {
+  --link-delay: 0s;
+
+  position: absolute;
+  height: 2px;
+  border-radius: 999px;
+  background: rgba(var(--loading-network-rgb), 0.14);
+  overflow: hidden;
+}
+
+.map-loading-link::before,
+.map-loading-link::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+}
+
+.map-loading-link::before {
+  background: linear-gradient(
+    90deg,
+    rgba(var(--loading-network-rgb), 0.35) 0%,
+    rgba(var(--loading-network-rgb), 0.9) 78%,
+    rgba(255, 255, 255, 0.95) 100%
+  );
+  transform-origin: left center;
+  animation: map-loading-link-draw var(--loading-link-draw-duration) ease-in-out
+    infinite;
+  animation-delay: var(--link-delay);
+}
+
+.map-loading-link::after {
+  width: 30%;
+  background: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0) 0%,
+    rgba(255, 255, 255, 0.92) 48%,
+    rgba(255, 255, 255, 0) 100%
+  );
+  filter: blur(0.3px);
+  animation: map-loading-link-scan var(--loading-link-draw-duration) linear
+    infinite;
+  animation-delay: calc(var(--link-delay) + 0.12s);
+}
+
+.map-loading-link-a {
+  left: 31px;
+  top: 29px;
+  width: 76px;
+}
+
+.map-loading-link-b {
+  left: 120.5px;
+  top: 31.8px;
+  width: 77.4px;
+  transform: rotate(23.2deg);
+  transform-origin: left center;
+  --link-delay: 0.22s;
+}
+
+.map-loading-link-c {
+  left: 119.5px;
+  top: 33.4px;
+  width: 85.6px;
+  transform: rotate(38.5deg);
+  transform-origin: left center;
+  --link-delay: 0.44s;
+}
+
+.map-loading-node {
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  border-radius: 4px;
+  background: rgba(226, 242, 255, 0.95);
+  border: 1px solid rgba(var(--loading-network-rgb), 0.9);
+  transform: translate(-50%, -50%);
+  animation: map-loading-node-pulse var(--loading-node-pulse-duration)
+    ease-in-out infinite;
+}
+
+.map-loading-node-a {
+  left: 24px;
+  top: 30px;
+  animation-delay: 0s;
+}
+
+.map-loading-node-b {
+  left: 114px;
+  top: 30px;
+  animation-delay: 0.2s;
+}
+
+.map-loading-node-c {
+  left: 198px;
+  top: 66px;
+  animation-delay: 0.4s;
+}
+
+.map-loading-node-d {
+  left: 192px;
+  top: 92px;
+  animation-delay: 0.6s;
+}
+
 .map-loading-spinner {
   width: 34px;
   height: 34px;
   border-radius: 999px;
-  border: 2px solid rgba(173, 202, 232, 0.18);
-  border-top-color: rgba(226, 242, 255, 0.9);
-  border-right-color: rgba(27, 221, 226, 0.72);
+  border: 2px solid rgba(var(--loading-network-rgb), 0.22);
+  border-top-color: rgba(255, 255, 255, 0.94);
+  border-right-color: rgba(var(--loading-network-rgb), 0.92);
   animation: map-loading-spin 0.95s linear infinite;
-  box-shadow: 0 0 24px rgba(var(--accent-rgb), 0.12);
+  box-shadow: 0 0 24px rgba(var(--loading-network-rgb), 0.2);
 }
 
 .map-loading-title {
@@ -1309,6 +1497,59 @@ body,
   font-size: 13px;
   letter-spacing: 0.04em;
   color: rgba(173, 202, 232, 0.78);
+}
+
+.map-empty-state {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: min(520px, calc(100% - 32px));
+  transform: translate(-50%, -50%);
+  padding: 18px 20px;
+  border-radius: 14px;
+  border: 1px solid rgba(var(--accent-rgb), 0.36);
+  background: rgba(10, 14, 31, 0.82);
+  box-shadow: 0 20px 48px rgba(0, 0, 0, 0.42);
+  backdrop-filter: blur(8px);
+  z-index: 4;
+  text-align: center;
+}
+
+.map-empty-state-title {
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: rgba(226, 242, 255, 0.95);
+}
+
+.map-empty-state-copy {
+  margin-top: 8px;
+  font-size: 13px;
+  line-height: 1.45;
+  color: rgba(173, 202, 232, 0.82);
+}
+
+.map-empty-state-button {
+  margin-top: 14px;
+  border: 1px solid rgba(var(--accent-rgb), 0.4);
+  background: rgba(12, 18, 37, 0.9);
+  color: rgba(226, 242, 255, 0.95);
+  padding: 8px 12px;
+  border-radius: 9px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition:
+    border-color 150ms ease,
+    background 150ms ease;
+}
+
+.map-empty-state-button:hover {
+  border-color: rgba(var(--accent-rgb), 0.62);
+  background: rgba(16, 24, 48, 0.96);
 }
 
 .map-hover-info {
