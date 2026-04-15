@@ -78,13 +78,13 @@ export default function Header({
 
     updateSettingsPopoverPosition();
 
-    document.addEventListener("mousedown", handlePointerDown);
+    document.addEventListener("pointerdown", handlePointerDown);
     document.addEventListener("keydown", handleKeyDown);
     window.addEventListener("resize", updateSettingsPopoverPosition);
     window.addEventListener("scroll", updateSettingsPopoverPosition, true);
 
     return () => {
-      document.removeEventListener("mousedown", handlePointerDown);
+      document.removeEventListener("pointerdown", handlePointerDown);
       document.removeEventListener("keydown", handleKeyDown);
       window.removeEventListener("resize", updateSettingsPopoverPosition);
       window.removeEventListener("scroll", updateSettingsPopoverPosition, true);

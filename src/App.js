@@ -125,6 +125,10 @@ const MAPS_API_TX_PAGE_SIZE = parseEnvInt(
   250,
 );
 const MAPS_API_TX_MAX_PAGES = parseEnvInt("REACT_APP_MAPS_API_TX_MAX_PAGES", 8);
+const MAPS_API_CONNECTIONS_TX_MAX_PAGES = parseEnvInt(
+  "REACT_APP_MAPS_API_CONNECTIONS_TX_MAX_PAGES",
+  3,
+);
 const MAPS_API_SYNC_STATUS_POLL_INTERVAL_MS = parseEnvMs(
   "REACT_APP_MAPS_API_SYNC_STATUS_POLL_INTERVAL_MS",
   30000,
@@ -154,6 +158,64 @@ function normalizePositiveInteger(value, fallbackValue) {
   return Number.isFinite(parsed) && parsed > 0
     ? Math.floor(parsed)
     : fallbackValue;
+}
+
+function clampColorChannel(value) {
+  return Math.max(0, Math.min(255, Math.round(value)));
+}
+
+function hslToRgbString(h, s, l) {
+  const normalizedHue = ((Number(h) % 360) + 360) % 360;
+  const saturation = Math.max(0, Math.min(100, Number(s))) / 100;
+  const lightness = Math.max(0, Math.min(100, Number(l))) / 100;
+
+  if (saturation === 0) {
+    const channel = clampColorChannel(lightness * 255);
+    return `${channel}, ${channel}, ${channel}`;
+  }
+
+  const chroma = (1 - Math.abs(2 * lightness - 1)) * saturation;
+  const hueSection = normalizedHue / 60;
+  const x = chroma * (1 - Math.abs((hueSection % 2) - 1));
+
+  let redPrime = 0;
+  let greenPrime = 0;
+  let bluePrime = 0;
+
+  if (hueSection >= 0 && hueSection < 1) {
+    redPrime = chroma;
+    greenPrime = x;
+  } else if (hueSection < 2) {
+    redPrime = x;
+    greenPrime = chroma;
+  } else if (hueSection < 3) {
+    greenPrime = chroma;
+    bluePrime = x;
+  } else if (hueSection < 4) {
+    greenPrime = x;
+    bluePrime = chroma;
+  } else if (hueSection < 5) {
+    redPrime = x;
+    bluePrime = chroma;
+  } else {
+    redPrime = chroma;
+    bluePrime = x;
+  }
+
+  const match = lightness - chroma / 2;
+  const red = clampColorChannel((redPrime + match) * 255);
+  const green = clampColorChannel((greenPrime + match) * 255);
+  const blue = clampColorChannel((bluePrime + match) * 255);
+  return `${red}, ${green}, ${blue}`;
+}
+
+function hashToHue(value) {
+  const source = String(value || "");
+  let hash = 0;
+  for (let i = 0; i < source.length; i += 1) {
+    hash = (hash * 31 + source.charCodeAt(i)) % 360;
+  }
+  return hash;
 }
 
 function applyCurrentSupplyToNodes(nodes, currentSupply) {
@@ -1028,8 +1090,12 @@ export default function App() {
 
     if (isPotentialAddress(value)) {
       setSearchQuery("");
+      setActiveHolderTypeFilter("");
+      setHoveredNode(null);
+      setSelectedNode(null);
+      closeTransfersModal();
       setSearchedRootAddress(value);
-      setIsConnectionsView(false);
+      setIsConnectionsView(true);
       return;
     }
 
@@ -1240,13 +1306,13 @@ export default function App() {
       setIsMapLoading(true);
       setSelectedNode(null);
       setHoveredNode(null);
-      setMapNodes([]);
-      setMapLinks([]);
       setMapDataStatus(
         activeGraphRootAddress
           ? `Generating maps for ${selectedTokenSymbol} around ${shortenAddress(activeGraphRootAddress)}...`
           : `Generating maps for ${selectedTokenSymbol}...`,
       );
+
+      const effectiveGraphEdgeLimit = graphEdgeLimit;
 
       const graphEndpoint = buildGraphEndpoint(
         MAPS_API_BASE_URL,
@@ -1254,7 +1320,7 @@ export default function App() {
         {
           rootAddress: activeGraphRootAddress || MAPS_API_ROOT_ADDRESS || "",
           depth: MAPS_API_GRAPH_DEPTH,
-          edgeLimit: graphEdgeLimit,
+          edgeLimit: effectiveGraphEdgeLimit,
           defaultEdgeLimit: MAPS_API_GRAPH_EDGE_LIMIT,
         },
       );
@@ -1268,20 +1334,30 @@ export default function App() {
 
       if (!result.ok) {
         if (result.status === 0) {
-          setIsUsingMockApiFallback(true);
-          setTrackedTokenSupply(
-            selectedMockTokenData?.tokenInfo?.totalSupply || 0,
-          );
-          setMapNodes(selectedMockTokenData?.holders || []);
-          setMapLinks(selectedMockTokenData?.links || []);
-          setTokenSelectorStatus("API unavailable; showing mock tokens");
-          setMapDataStatus("Using fallback map data (API unavailable).");
+          if (isConnectionsView) {
+            setIsUsingMockApiFallback(false);
+            setMapDataStatus("Connections unavailable (API timeout/network).");
+          } else {
+            setIsUsingMockApiFallback(true);
+            setTrackedTokenSupply(
+              selectedMockTokenData?.tokenInfo?.totalSupply || 0,
+            );
+            setMapNodes(selectedMockTokenData?.holders || []);
+            setMapLinks(selectedMockTokenData?.links || []);
+            setTokenSelectorStatus("API unavailable; showing mock tokens");
+            setMapDataStatus("Using fallback map data (API unavailable).");
+          }
         } else {
-          setIsUsingMockApiFallback(false);
-          setTrackedTokenSupply(0);
-          setMapNodes([]);
-          setMapLinks([]);
-          setMapDataStatus(`Graph request failed (${result.status}).`);
+          if (isConnectionsView) {
+            setIsUsingMockApiFallback(false);
+            setMapDataStatus(`Connections request failed (${result.status}).`);
+          } else {
+            setIsUsingMockApiFallback(false);
+            setTrackedTokenSupply(0);
+            setMapNodes([]);
+            setMapLinks([]);
+            setMapDataStatus(`Graph request failed (${result.status}).`);
+          }
         }
         setIsMapLoading(false);
         return;
@@ -1291,30 +1367,81 @@ export default function App() {
 
       const graphDecimals = apiTokenInfo?.decimals ?? 0;
       const mappedGraph = buildGraphDataFromApi(result.payload, graphDecimals);
-      let focusedGraph = null;
+      const baseFocusedGraph = isConnectionsView
+        ? buildNeighborFocusedGraph(mappedGraph, activeGraphRootAddress)
+        : searchedRootAddress
+          ? buildNeighborFocusedGraph(mappedGraph, activeGraphRootAddress)
+          : mappedGraph;
+      let focusedGraph = baseFocusedGraph;
+      const canRefineConnections = Boolean(
+        isConnectionsView &&
+        activeGraphRootAddress &&
+        baseFocusedGraph &&
+        baseFocusedGraph.nodes.length,
+      );
 
-      if (activeGraphRootAddress) {
+      const refineConnectionsGraphInBackground = async () => {
+        if (!canRefineConnections) return;
+
         try {
           const connectionTransactions =
             await fetchAllTransactionsForAddressFromApi(
               MAPS_API_BASE_URL,
               MAPS_API_REQUEST_TIMEOUT_MS,
-              MAPS_API_TX_MAX_PAGES,
+              Math.max(
+                1,
+                Math.min(
+                  MAPS_API_TX_MAX_PAGES,
+                  MAPS_API_CONNECTIONS_TX_MAX_PAGES,
+                ),
+              ),
               MAPS_API_TX_PAGE_SIZE,
               activeGraphRootAddress,
               selectedTokenSymbol,
             );
 
-          focusedGraph = buildConnectionsGraphFromTransactions(
+          if (!isMounted) return;
+
+          const transactionFocusedGraph = buildConnectionsGraphFromTransactions(
             connectionTransactions,
             activeGraphRootAddress,
             mappedGraph,
             mappedGraph?.totalSupply || 0,
           );
+
+          if (
+            !transactionFocusedGraph ||
+            !Array.isArray(transactionFocusedGraph.nodes) ||
+            !transactionFocusedGraph.nodes.length
+          ) {
+            return;
+          }
+
+          setMapNodes(transactionFocusedGraph.nodes);
+          setMapLinks(transactionFocusedGraph.links);
+          setTrackedTokenSupply(
+            mappedGraph?.totalSupply > 0
+              ? mappedGraph.totalSupply
+              : transactionFocusedGraph.totalValue || 0,
+          );
+
+          if (transactionFocusedGraph.rootNodeId) {
+            const focusedRootNode = transactionFocusedGraph.nodes.find(
+              (node) => node.id === transactionFocusedGraph.rootNodeId,
+            );
+            setSelectedNode(focusedRootNode || null);
+          }
+
+          setMapDataStatus(
+            `Live graph loaded for ${shortenAddress(activeGraphRootAddress)} [connections-phase:tx]`,
+          );
         } catch {
-          focusedGraph = null;
+          if (!isMounted) return;
+          setMapDataStatus(
+            `Live graph loaded for ${shortenAddress(activeGraphRootAddress)} [connections-phase:base]`,
+          );
         }
-      }
+      };
 
       if (!focusedGraph) {
         if (
@@ -1322,24 +1449,30 @@ export default function App() {
           !mappedGraph.nodes.length ||
           !mappedGraph.links.length
         ) {
-          setTrackedTokenSupply(0);
-          setMapNodes([]);
-          setMapLinks([]);
-          setMapDataStatus("API returned no graph data.");
+          if (isConnectionsView) {
+            setMapDataStatus("No connections found for this wallet.");
+          } else {
+            setTrackedTokenSupply(0);
+            setMapNodes([]);
+            setMapLinks([]);
+            setMapDataStatus("API returned no graph data.");
+          }
           setIsMapLoading(false);
           return;
         }
 
-        focusedGraph = searchedRootAddress
-          ? buildNeighborFocusedGraph(mappedGraph, activeGraphRootAddress)
-          : mappedGraph;
+        focusedGraph = baseFocusedGraph;
       }
 
       if (!focusedGraph || !focusedGraph.nodes.length) {
-        setTrackedTokenSupply(0);
-        setMapNodes([]);
-        setMapLinks([]);
-        setMapDataStatus("Searched address not found in graph data.");
+        if (isConnectionsView) {
+          setMapDataStatus("Searched address not found in graph data.");
+        } else {
+          setTrackedTokenSupply(0);
+          setMapNodes([]);
+          setMapLinks([]);
+          setMapDataStatus("Searched address not found in graph data.");
+        }
         setIsMapLoading(false);
         return;
       }
@@ -1360,19 +1493,32 @@ export default function App() {
       }
       setMapDataStatus(
         activeGraphRootAddress
-          ? `Live graph loaded for ${shortenAddress(activeGraphRootAddress)}`
+          ? isConnectionsView
+            ? canRefineConnections
+              ? `Live graph loaded for ${shortenAddress(activeGraphRootAddress)} [connections-phase:base][refining]`
+              : `Live graph loaded for ${shortenAddress(activeGraphRootAddress)} [connections-phase:base]`
+            : `Live graph loaded for ${shortenAddress(activeGraphRootAddress)}`
           : `Live graph loaded from ${graphEndpoint}`,
       );
       setIsMapLoading(false);
+
+      if (canRefineConnections) {
+        void refineConnectionsGraphInBackground();
+      }
     }
 
     fetchMapGraph().catch(() => {
       if (!isMounted) return;
-      setIsUsingMockApiFallback(false);
-      setTrackedTokenSupply(0);
-      setMapNodes([]);
-      setMapLinks([]);
-      setMapDataStatus("Unable to process graph data.");
+      if (isConnectionsView) {
+        setIsUsingMockApiFallback(false);
+        setMapDataStatus("Unable to process connections graph.");
+      } else {
+        setIsUsingMockApiFallback(false);
+        setTrackedTokenSupply(0);
+        setMapNodes([]);
+        setMapLinks([]);
+        setMapDataStatus("Unable to process graph data.");
+      }
       setIsMapLoading(false);
     });
 
@@ -1383,6 +1529,7 @@ export default function App() {
     activeGraphRootAddress,
     apiTokenInfo,
     graphEdgeLimit,
+    isConnectionsView,
     searchedRootAddress,
     selectedMockTokenData,
     selectedTokenSymbol,
@@ -1542,6 +1689,30 @@ export default function App() {
     () => applyCurrentSupplyToNodes(mapNodes, activeTokenInfo.currentSupply),
     [mapNodes, activeTokenInfo.currentSupply],
   );
+  const maxModeScopeGraph = useMemo(() => {
+    if (!activeHolderTypeFilter) {
+      return {
+        nodes: displayNodes,
+        links: mapLinks,
+      };
+    }
+
+    const scopedNodes = displayNodes.filter(
+      (node) => String(node?.type || "minor") === activeHolderTypeFilter,
+    );
+    const scopedNodeIds = new Set(scopedNodes.map((node) => node.id));
+    const scopedLinks = mapLinks.filter(
+      (link) =>
+        scopedNodeIds.has(String(link?.source || "").trim()) &&
+        scopedNodeIds.has(String(link?.target || "").trim()),
+    );
+
+    return {
+      nodes: scopedNodes,
+      links: scopedLinks,
+    };
+  }, [activeHolderTypeFilter, displayNodes, mapLinks]);
+
   const isTokenGraphMaxModeActive = isGraphMaxModeEnabled;
   const effectiveGraphNodeLimit = isTokenGraphMaxModeActive
     ? displayNodes.length
@@ -1568,13 +1739,51 @@ export default function App() {
     ],
   );
 
+  const legendScopedDisplayGraph = useMemo(() => {
+    if (!activeHolderTypeFilter) {
+      return limitedDisplayGraph;
+    }
+
+    const scopedNodes = displayNodes.filter(
+      (node) => String(node?.type || "minor") === activeHolderTypeFilter,
+    );
+
+    if (!scopedNodes.length) {
+      return {
+        nodes: [],
+        links: [],
+      };
+    }
+
+    const scopedNodeIds = new Set(scopedNodes.map((node) => node.id));
+    const scopedLinks = mapLinks.filter(
+      (link) =>
+        scopedNodeIds.has(String(link?.source || "").trim()) &&
+        scopedNodeIds.has(String(link?.target || "").trim()),
+    );
+    const scopedRootAddress = scopedNodeIds.has(activeGraphRootAddress)
+      ? activeGraphRootAddress
+      : "";
+
+    return limitGraphForDisplay(
+      scopedNodes,
+      scopedLinks,
+      effectiveGraphNodeLimit,
+      effectiveGraphEdgeLimit,
+      scopedRootAddress,
+    );
+  }, [
+    activeGraphRootAddress,
+    activeHolderTypeFilter,
+    displayNodes,
+    effectiveGraphEdgeLimit,
+    effectiveGraphNodeLimit,
+    limitedDisplayGraph,
+    mapLinks,
+  ]);
+
   const filteredNodes = useMemo(() => {
-    const typeFilteredNodes = activeHolderTypeFilter
-      ? limitedDisplayGraph.nodes.filter(
-          (holder) =>
-            String(holder?.type || "minor") === activeHolderTypeFilter,
-        )
-      : limitedDisplayGraph.nodes;
+    const typeFilteredNodes = legendScopedDisplayGraph.nodes;
 
     if (!searchQuery) return typeFilteredNodes;
 
@@ -1585,19 +1794,21 @@ export default function App() {
         h.label.toLowerCase().includes(q) ||
         h.shortAddr.toLowerCase().includes(q),
     );
-  }, [activeHolderTypeFilter, searchQuery, limitedDisplayGraph.nodes]);
+  }, [searchQuery, legendScopedDisplayGraph.nodes]);
 
   const filteredLinks = useMemo(() => {
     const ids = new Set(filteredNodes.map((n) => n.id));
-    return limitedDisplayGraph.links.filter(
+    return legendScopedDisplayGraph.links.filter(
       (link) => ids.has(link.source) && ids.has(link.target),
     );
-  }, [filteredNodes, limitedDisplayGraph.links]);
+  }, [filteredNodes, legendScopedDisplayGraph.links]);
 
   const nodeById = useMemo(
     () =>
-      new Map(limitedDisplayGraph.nodes.map((holder) => [holder.id, holder])),
-    [limitedDisplayGraph.nodes],
+      new Map(
+        legendScopedDisplayGraph.nodes.map((holder) => [holder.id, holder]),
+      ),
+    [legendScopedDisplayGraph.nodes],
   );
 
   useEffect(() => {
@@ -1660,13 +1871,13 @@ export default function App() {
 
   useEffect(() => {
     if (!activeHolderTypeFilter) return;
-    const hasMatchingType = limitedDisplayGraph.nodes.some(
+    const hasMatchingType = displayNodes.some(
       (node) => String(node?.type || "minor") === activeHolderTypeFilter,
     );
     if (!hasMatchingType) {
       setActiveHolderTypeFilter("");
     }
-  }, [activeHolderTypeFilter, limitedDisplayGraph.nodes]);
+  }, [activeHolderTypeFilter, displayNodes]);
 
   function handleGraphSettingsApply(nextSettings) {
     const useMaxMode = nextSettings?.useMaxMode === true;
@@ -2143,6 +2354,28 @@ export default function App() {
   const infoNode = resolvedHoveredNode || resolvedSelectedNode;
   const currentSupplyBase = Number(activeTokenInfo.currentSupply) || 0;
 
+  const loadingThemeStyle = useMemo(() => {
+    const chainLabel = String(activeTokenInfo.chain || "unknown").trim();
+    const toneKey = `${selectedTokenSymbol}:${chainLabel}`;
+    const hue = hashToHue(toneKey);
+    const rgb = hslToRgbString(hue, 78, colorTheme === "light" ? 50 : 60);
+
+    const chainLower = chainLabel.toLowerCase();
+    const pulseDuration = chainLower.includes("main")
+      ? "1.05s"
+      : chainLower.includes("neo")
+        ? "1.22s"
+        : chainLower.includes("eth")
+          ? "1.38s"
+          : "1.18s";
+
+    return {
+      "--loading-network-rgb": rgb,
+      "--loading-node-pulse-duration": pulseDuration,
+      "--loading-link-draw-duration": "1.65s",
+    };
+  }, [activeTokenInfo.chain, colorTheme, selectedTokenSymbol]);
+
   useEffect(() => {
     if (!selectedNode) {
       setIsTransfersModalOpen(false);
@@ -2296,8 +2529,8 @@ export default function App() {
         onGraphSettingsApply={handleGraphSettingsApply}
         isGraphMaxModeEnabled={isTokenGraphMaxModeActive}
         canUseGraphMaxMode={true}
-        availableNodeCount={displayNodes.length}
-        availableEdgeCount={mapLinks.length}
+        availableNodeCount={maxModeScopeGraph.nodes.length}
+        availableEdgeCount={maxModeScopeGraph.links.length}
         renderedNodeCount={filteredNodes.length}
         renderedEdgeCount={filteredLinks.length}
       />
@@ -2316,10 +2549,26 @@ export default function App() {
             }}
           />
           {isMapLoading ? (
-            <div className="map-loading-overlay" aria-live="polite">
+            <div
+              className="map-loading-overlay"
+              style={loadingThemeStyle}
+              aria-live="polite"
+            >
+              <div className="map-loading-network" aria-hidden="true">
+                <span className="map-loading-link map-loading-link-a" />
+                <span className="map-loading-link map-loading-link-b" />
+                <span className="map-loading-link map-loading-link-c" />
+                <span className="map-loading-node map-loading-node-a" />
+                <span className="map-loading-node map-loading-node-b" />
+                <span className="map-loading-node map-loading-node-c" />
+                <span className="map-loading-node map-loading-node-d" />
+              </div>
               <div className="map-loading-spinner" aria-hidden="true" />
               <div className="map-loading-title">
                 Generating Maps for {selectedTokenSymbol}...
+              </div>
+              <div className="map-loading-copy">
+                Connecting blocks and routing transfers...
               </div>
             </div>
           ) : null}
