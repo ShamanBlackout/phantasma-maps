@@ -3,7 +3,6 @@ import Header from "./components/Header";
 import BubbleMap from "./components/BubbleMap";
 import StatsPanel from "./components/StatsPanel";
 import TransactionsModal from "./components/TransactionsModal";
-import SparklineSvg from "./components/SparklineSvg";
 import SelectedNodeCard from "./components/SelectedNodeCard";
 import useTransactionState from "./hooks/useTransactionState";
 import useUrlState, { readUrlParams } from "./hooks/useUrlState";
@@ -14,8 +13,7 @@ import {
   createSyncStatusEndpoint as buildSyncStatusEndpoint,
   createTokenInfoEndpoint as buildTokenInfoEndpoint,
   createTokensEndpoint as buildTokensEndpoint,
-  createTransactionsEndpoint as buildTransactionsEndpoint,
-  fetchAllTransactionsForAddress as fetchAllTransactionsForAddressFromApi,
+  fetchConnectionsForAddress as fetchConnectionsForAddressFromApi,
   fetchTransactionsPageForAddress as fetchTransactionsPageForAddressFromApi,
 } from "./api/mapsApi";
 import {
@@ -91,10 +89,6 @@ const SOUL_PRICE_MAX_BACKOFF_MS = parseEnvMs(
   "REACT_APP_SOUL_PRICE_MAX_BACKOFF_MS",
   10 * 60 * 1000,
 );
-const SOUL_PRICE_REQUEST_TIMEOUT_MS = parseEnvMs(
-  "REACT_APP_SOUL_PRICE_REQUEST_TIMEOUT_MS",
-  7000,
-);
 const CMC_API_KEY = parseEnvString("REACT_APP_CMC_API_KEY");
 const CMC_PROXY_URL = parseEnvString("REACT_APP_CMC_PROXY_URL");
 const CMC_ALLOW_BROWSER_DIRECT =
@@ -119,15 +113,6 @@ const MAPS_API_GRAPH_NODE_LIMIT = parseEnvInt(
 const MAPS_API_REQUEST_TIMEOUT_MS = parseEnvMs(
   "REACT_APP_MAPS_API_REQUEST_TIMEOUT_MS",
   45000,
-);
-const MAPS_API_TX_PAGE_SIZE = parseEnvInt(
-  "REACT_APP_MAPS_API_TX_PAGE_SIZE",
-  250,
-);
-const MAPS_API_TX_MAX_PAGES = parseEnvInt("REACT_APP_MAPS_API_TX_MAX_PAGES", 8);
-const MAPS_API_CONNECTIONS_TX_MAX_PAGES = parseEnvInt(
-  "REACT_APP_MAPS_API_CONNECTIONS_TX_MAX_PAGES",
-  3,
 );
 const MAPS_API_SYNC_STATUS_POLL_INTERVAL_MS = parseEnvMs(
   "REACT_APP_MAPS_API_SYNC_STATUS_POLL_INTERVAL_MS",
@@ -491,14 +476,14 @@ function limitGraphForDisplay(
   };
 }
 
-function buildConnectionsGraphFromTransactions(
-  transactions,
+function buildConnectionsGraphFromConnections(
+  connections,
   rootAddress,
   fallbackGraph,
   currentSupply = 0,
 ) {
   const normalizedRoot = String(rootAddress || "").trim();
-  if (!normalizedRoot || !Array.isArray(transactions) || !transactions.length) {
+  if (!normalizedRoot || !Array.isArray(connections) || !connections.length) {
     return null;
   }
 
@@ -508,7 +493,6 @@ function buildConnectionsGraphFromTransactions(
   const fallbackNodeById = new Map(
     fallbackNodes.map((node) => [node.id, node]),
   );
-  const linkMap = new Map();
   const nodeStats = new Map();
   const nodeVolumes = new Map();
 
@@ -526,60 +510,41 @@ function buildConnectionsGraphFromTransactions(
     nodeVolumes.set(nodeId, (nodeVolumes.get(nodeId) || 0) + amount);
   }
 
-  transactions.forEach((transaction) => {
-    const source = String(
-      transaction?.from_address ?? transaction?.fromAddress ?? "",
-    ).trim();
-    const target = String(
-      transaction?.to_address ?? transaction?.toAddress ?? "",
-    ).trim();
-
-    if (!source || !target) return;
-    if (source !== normalizedRoot && target !== normalizedRoot) return;
-    if (source === target) return;
-
-    const amount = normalizeAmount(
-      transaction?.amountNormalized ??
-        transaction?.amount_normalized ??
-        transaction?.amount,
-    );
-    const txHash = String(
-      transaction?.tx_hash ?? transaction?.txHash ?? "",
-    ).trim();
-    const linkKey = `${source}->${target}`;
-    const existingLink = linkMap.get(linkKey);
-
-    if (!existingLink) {
-      linkMap.set(linkKey, {
-        source,
-        target,
-        transactionVolume: amount,
-        sentTransactions: 1,
-        receivedTransactions: 1,
-        transactionHash: txHash,
-      });
-    } else {
-      existingLink.transactionVolume += amount;
-      existingLink.sentTransactions += 1;
-      existingLink.receivedTransactions += 1;
-      if (!existingLink.transactionHash && txHash) {
-        existingLink.transactionHash = txHash;
-      }
-    }
-
-    ensureNodeStats(source).sentTransactions += 1;
-    ensureNodeStats(target).receivedTransactions += 1;
-    addNodeVolume(source, amount);
-    addNodeVolume(target, amount);
-  });
-
-  if (!linkMap.size) return null;
-
+  const links = [];
   const nodeIds = new Set([normalizedRoot]);
-  linkMap.forEach((link) => {
-    nodeIds.add(link.source);
-    nodeIds.add(link.target);
+  let rootTransactionCount = 0;
+
+  connections.forEach((connection) => {
+    const counterparty = String(connection?.counterparty || "").trim();
+    if (!counterparty || counterparty === normalizedRoot) return;
+
+    const volume = normalizeAmount(
+      connection?.totalVolume ?? connection?.total_volume,
+    );
+    const transactionCount = normalizePositiveInteger(
+      connection?.transactionCount ?? connection?.transaction_count,
+      0,
+    );
+
+    links.push({
+      source: normalizedRoot,
+      target: counterparty,
+      transactionVolume: volume,
+      sentTransactions: transactionCount,
+      receivedTransactions: transactionCount,
+    });
+
+    nodeIds.add(counterparty);
+    ensureNodeStats(counterparty).receivedTransactions += transactionCount;
+    addNodeVolume(counterparty, volume);
+    rootTransactionCount += transactionCount;
   });
+
+  if (!links.length) return null;
+
+  ensureNodeStats(normalizedRoot).sentTransactions = rootTransactionCount;
+  ensureNodeStats(normalizedRoot).receivedTransactions = rootTransactionCount;
+  addNodeVolume(normalizedRoot, nodeVolumes.get(normalizedRoot) || 0);
 
   const baseNodes = [...nodeIds].map((nodeId) => {
     const fallbackNode = fallbackNodeById.get(nodeId);
@@ -642,7 +607,7 @@ function buildConnectionsGraphFromTransactions(
 
   return {
     nodes: emphasizedNodes,
-    links: [...linkMap.values()],
+    links,
     totalValue,
     rootNodeId: normalizedRoot,
   };
@@ -1373,75 +1338,38 @@ export default function App() {
           ? buildNeighborFocusedGraph(mappedGraph, activeGraphRootAddress)
           : mappedGraph;
       let focusedGraph = baseFocusedGraph;
-      const canRefineConnections = Boolean(
-        isConnectionsView &&
-        activeGraphRootAddress &&
-        baseFocusedGraph &&
-        baseFocusedGraph.nodes.length,
-      );
+      let usedConnectionsTable = false;
 
-      const refineConnectionsGraphInBackground = async () => {
-        if (!canRefineConnections) return;
-
+      if (isConnectionsView && activeGraphRootAddress) {
         try {
-          const connectionTransactions =
-            await fetchAllTransactionsForAddressFromApi(
-              MAPS_API_BASE_URL,
-              MAPS_API_REQUEST_TIMEOUT_MS,
-              Math.max(
-                1,
-                Math.min(
-                  MAPS_API_TX_MAX_PAGES,
-                  MAPS_API_CONNECTIONS_TX_MAX_PAGES,
-                ),
-              ),
-              MAPS_API_TX_PAGE_SIZE,
-              activeGraphRootAddress,
-              selectedTokenSymbol,
-            );
+          const connectionsResult = await fetchConnectionsForAddressFromApi(
+            MAPS_API_BASE_URL,
+            MAPS_API_REQUEST_TIMEOUT_MS,
+            activeGraphRootAddress,
+            selectedTokenSymbol,
+          );
 
           if (!isMounted) return;
 
-          const transactionFocusedGraph = buildConnectionsGraphFromTransactions(
-            connectionTransactions,
+          const tableFocusedGraph = buildConnectionsGraphFromConnections(
+            connectionsResult.items,
             activeGraphRootAddress,
             mappedGraph,
             mappedGraph?.totalSupply || 0,
           );
 
           if (
-            !transactionFocusedGraph ||
-            !Array.isArray(transactionFocusedGraph.nodes) ||
-            !transactionFocusedGraph.nodes.length
+            tableFocusedGraph &&
+            Array.isArray(tableFocusedGraph.nodes) &&
+            tableFocusedGraph.nodes.length
           ) {
-            return;
+            focusedGraph = tableFocusedGraph;
+            usedConnectionsTable = true;
           }
-
-          setMapNodes(transactionFocusedGraph.nodes);
-          setMapLinks(transactionFocusedGraph.links);
-          setTrackedTokenSupply(
-            mappedGraph?.totalSupply > 0
-              ? mappedGraph.totalSupply
-              : transactionFocusedGraph.totalValue || 0,
-          );
-
-          if (transactionFocusedGraph.rootNodeId) {
-            const focusedRootNode = transactionFocusedGraph.nodes.find(
-              (node) => node.id === transactionFocusedGraph.rootNodeId,
-            );
-            setSelectedNode(focusedRootNode || null);
-          }
-
-          setMapDataStatus(
-            `Live graph loaded for ${shortenAddress(activeGraphRootAddress)} [connections-phase:tx]`,
-          );
         } catch {
-          if (!isMounted) return;
-          setMapDataStatus(
-            `Live graph loaded for ${shortenAddress(activeGraphRootAddress)} [connections-phase:base]`,
-          );
+          // Fall back to the base graph if precomputed connections are unavailable.
         }
-      };
+      }
 
       if (!focusedGraph) {
         if (
@@ -1494,17 +1422,13 @@ export default function App() {
       setMapDataStatus(
         activeGraphRootAddress
           ? isConnectionsView
-            ? canRefineConnections
-              ? `Live graph loaded for ${shortenAddress(activeGraphRootAddress)} [connections-phase:base][refining]`
+            ? usedConnectionsTable
+              ? `Live graph loaded for ${shortenAddress(activeGraphRootAddress)} [connections-phase:table]`
               : `Live graph loaded for ${shortenAddress(activeGraphRootAddress)} [connections-phase:base]`
             : `Live graph loaded for ${shortenAddress(activeGraphRootAddress)}`
           : `Live graph loaded from ${graphEndpoint}`,
       );
       setIsMapLoading(false);
-
-      if (canRefineConnections) {
-        void refineConnectionsGraphInBackground();
-      }
     }
 
     fetchMapGraph().catch(() => {
