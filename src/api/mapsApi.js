@@ -35,6 +35,14 @@ export function createGraphEndpoint(
   return `${base}/graph/token/${encodeURIComponent(tokenSymbol)}`;
 }
 
+export function createConnectionsEndpoint(baseUrl, address, tokenSymbol) {
+  const base = baseUrl.replace(/\/+$/, "");
+  const params = new URLSearchParams({
+    token: tokenSymbol,
+  });
+  return `${base}/connections/address/${encodeURIComponent(address)}?${params.toString()}`;
+}
+
 export function createTransactionsEndpoint(
   baseUrl,
   address,
@@ -170,6 +178,39 @@ export async function fetchAllTransactionsForAddress(
   }
 
   return allItems;
+}
+
+export async function fetchConnectionsForAddress(
+  baseUrl,
+  timeoutMs,
+  address,
+  tokenSymbol,
+) {
+  const normalizedAddress = String(address || "").trim();
+  if (!normalizedAddress) {
+    return {
+      items: [],
+    };
+  }
+
+  const endpoint = createConnectionsEndpoint(
+    baseUrl,
+    normalizedAddress,
+    tokenSymbol,
+  );
+  const result = await fetchJsonWithTimeout(
+    endpoint,
+    { cache: "no-store" },
+    timeoutMs,
+  );
+
+  if (!result.ok) {
+    throw new Error(`connections request failed with status ${result.status}`);
+  }
+
+  return {
+    items: Array.isArray(result.payload?.items) ? result.payload.items : [],
+  };
 }
 
 export async function fetchTransactionsPageForAddress(
