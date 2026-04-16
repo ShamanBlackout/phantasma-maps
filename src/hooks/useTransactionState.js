@@ -1,4 +1,4 @@
-import { useReducer } from "react";
+import { useCallback, useMemo, useReducer } from "react";
 
 const initialState = {
   activeTransactionFilter: null,
@@ -39,27 +39,47 @@ function transactionReducer(state, action) {
 export default function useTransactionState() {
   const [state, dispatch] = useReducer(transactionReducer, initialState);
 
-  const setField = (field) => (value) =>
-    dispatch({
-      type: "set",
-      field,
-      value,
-    });
+  const setField = useCallback(
+    (field) => (value) =>
+      dispatch({
+        type: "set",
+        field,
+        value,
+      }),
+    [dispatch],
+  );
+
+  const setters = useMemo(
+    () => ({
+      setActiveTransactionFilter: setField("activeTransactionFilter"),
+      setTransactionDirFilter: setField("transactionDirFilter"),
+      setTransactionCounterpartyFilter: setField(
+        "transactionCounterpartyFilter",
+      ),
+      setTransactionStartTime: setField("transactionStartTime"),
+      setTransactionEndTime: setField("transactionEndTime"),
+      setTransactionMinAmount: setField("transactionMinAmount"),
+      setTransactionMaxAmount: setField("transactionMaxAmount"),
+      setTransactionMinUsd: setField("transactionMinUsd"),
+      setTransactionMaxUsd: setField("transactionMaxUsd"),
+      setTransactionSortBy: setField("transactionSortBy"),
+      setTransactionSortDirection: setField("transactionSortDirection"),
+      setTransactionPage: setField("transactionPage"),
+    }),
+    [setField],
+  );
+
+  const resetTransactionState = useCallback(
+    () =>
+      dispatch({
+        type: "reset",
+      }),
+    [dispatch],
+  );
 
   return {
     ...state,
-    setActiveTransactionFilter: setField("activeTransactionFilter"),
-    setTransactionDirFilter: setField("transactionDirFilter"),
-    setTransactionCounterpartyFilter: setField("transactionCounterpartyFilter"),
-    setTransactionStartTime: setField("transactionStartTime"),
-    setTransactionEndTime: setField("transactionEndTime"),
-    setTransactionMinAmount: setField("transactionMinAmount"),
-    setTransactionMaxAmount: setField("transactionMaxAmount"),
-    setTransactionMinUsd: setField("transactionMinUsd"),
-    setTransactionMaxUsd: setField("transactionMaxUsd"),
-    setTransactionSortBy: setField("transactionSortBy"),
-    setTransactionSortDirection: setField("transactionSortDirection"),
-    setTransactionPage: setField("transactionPage"),
-    resetTransactionState: () => dispatch({ type: "reset" }),
+    ...setters,
+    resetTransactionState,
   };
 }

@@ -1,4 +1,10 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import Header from "./components/Header";
 import BubbleMap from "./components/BubbleMap";
 import StatsPanel from "./components/StatsPanel";
@@ -984,8 +990,10 @@ export default function App() {
     setActiveHolderTypeFilter("");
     setSelectedNode(null);
     setHoveredNode(null);
-    closeTransfersModal();
-  }, [selectedTokenSymbol]);
+    setIsExportMenuOpen(false);
+    setIsTransfersModalOpen(false);
+    resetTransactionState();
+  }, [resetTransactionState, selectedTokenSymbol]);
 
   useEffect(() => {
     let isMounted = true;
@@ -1957,6 +1965,7 @@ export default function App() {
     setTransactionPage(0);
   }, [
     selectedNode?.id,
+    setTransactionPage,
     selectedTokenSymbol,
     transactionDirFilter,
     transactionCounterpartyFilter,
@@ -2168,15 +2177,15 @@ export default function App() {
   const hasAmountFilter = Boolean(transactionMinAmount || transactionMaxAmount);
   const hasUsdFilter = Boolean(transactionMinUsd || transactionMaxUsd);
 
-  function resetAllTransactionFilters() {
+  const resetAllTransactionFilters = useCallback(() => {
     resetTransactionState();
-  }
+  }, [resetTransactionState]);
 
-  function closeTransfersModal() {
+  const closeTransfersModal = useCallback(() => {
     setIsExportMenuOpen(false);
     setIsTransfersModalOpen(false);
     resetAllTransactionFilters();
-  }
+  }, [resetAllTransactionFilters]);
 
   function handleTransactionSortToggle(nextSortBy) {
     if (nextSortBy !== "amount" && nextSortBy !== "time") return;
@@ -2308,7 +2317,7 @@ export default function App() {
       setIsExportMenuOpen(false);
       resetTransactionState();
     }
-  }, [selectedNode]);
+  }, [resetTransactionState, selectedNode]);
 
   useEffect(() => {
     if (!selectedNode?.id || !selectedTokenSymbol) {
@@ -2400,7 +2409,12 @@ export default function App() {
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [isExportMenuOpen, isTransfersModalOpen, selectedNode]);
+  }, [
+    closeTransfersModal,
+    isExportMenuOpen,
+    isTransfersModalOpen,
+    selectedNode,
+  ]);
 
   useEffect(() => {
     if (!isExportMenuOpen) return undefined;
@@ -2433,7 +2447,7 @@ export default function App() {
 
     document.addEventListener("mousedown", handlePointerDown);
     return () => document.removeEventListener("mousedown", handlePointerDown);
-  }, [activeTransactionFilter]);
+  }, [activeTransactionFilter, setActiveTransactionFilter]);
 
   return (
     <div className={`app-root theme-${colorTheme}`}>
