@@ -41,7 +41,8 @@ export default function StatsPanel({
   const allHolders = Array.isArray(summaryHolders) ? summaryHolders : holders;
   const totalSupply = Number(tokenInfo.totalSupply) || 0;
   const currentSupply = Number(tokenInfo.currentSupply) || 0;
-  const hasMetadataTotalSupply = Boolean(tokenInfo.hasMetadataTotalSupply);
+  const maxSupply = Number(tokenInfo.maxSupply) || 0;
+  const hasMetadataMaxSupply = Boolean(tokenInfo.hasMetadataMaxSupply);
   const hasPrice = Number.isFinite(tokenInfo.price);
   const [isTokenMenuOpen, setIsTokenMenuOpen] = useState(false);
   const [tokenSearchQuery, setTokenSearchQuery] = useState("");
@@ -186,21 +187,19 @@ export default function StatsPanel({
               <span className="stats-value">{tokenInfo.chain}</span>
             </div>
             <div className="stats-token-row">
-              <span className="stats-label">Total Supply</span>
+              <span className="stats-label">Current Supply</span>
               <span className="stats-value">
-                {hasMetadataTotalSupply
-                  ? totalSupply > 0
-                    ? fmt(totalSupply)
-                    : "∞"
-                  : totalSupply > 0
-                    ? fmt(totalSupply)
-                    : "N/A"}
+                {totalSupply > 0 ? fmt(totalSupply) : "N/A"}
               </span>
             </div>
             <div className="stats-token-row">
-              <span className="stats-label">Current Supply</span>
+              <span className="stats-label">Max Supply</span>
               <span className="stats-value">
-                {currentSupply > 0 ? fmt(currentSupply) : "N/A"}
+                {hasMetadataMaxSupply
+                  ? maxSupply > 0
+                    ? fmt(maxSupply)
+                    : "∞"
+                  : "N/A"}
               </span>
             </div>
             <div className="stats-token-row">
