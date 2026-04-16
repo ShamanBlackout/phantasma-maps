@@ -20,6 +20,7 @@ import {
   createTokenInfoEndpoint as buildTokenInfoEndpoint,
   createTokensEndpoint as buildTokensEndpoint,
   fetchConnectionsForAddress as fetchConnectionsForAddressFromApi,
+  fetchTopHolders as fetchTopHoldersFromApi,
   fetchTransactionsPageForAddress as fetchTransactionsPageForAddressFromApi,
 } from "./api/mapsApi";
 import {
@@ -295,6 +296,7 @@ function buildGraphDataFromApi(graphPayload, decimals = 0) {
         type,
         sentTransactions: stats.sentTransactions,
         receivedTransactions: stats.receivedTransactions,
+        transactionCount: stats.sentTransactions + stats.receivedTransactions,
       };
     })
     .filter(Boolean);
@@ -409,6 +411,210 @@ function buildNeighborFocusedGraph(graphData, rootAddress) {
   };
 }
 
+function buildTopHoldersGraph(graphData, holderLimit = 10) {
+  const safeNodes = Array.isArray(graphData?.nodes) ? graphData.nodes : [];
+  const safeLinks = Array.isArray(graphData?.links) ? graphData.links : [];
+
+  if (!safeNodes.length) {
+    return null;
+  }
+
+  const normalizedLimit = normalizePositiveInteger(holderLimit, 10);
+  const topHolderNodes = safeNodes
+    .slice()
+    .sort((left, right) => Number(right?.value || 0) - Number(left?.value || 0))
+    .slice(0, normalizedLimit);
+
+  if (!topHolderNodes.length) {
+    return null;
+  }
+
+  const seedHolderIds = new Set(topHolderNodes.map((node) => node.id));
+  const visibleNodeIds = new Set(seedHolderIds);
+  const seededLinks = [];
+
+  safeLinks.forEach((link) => {
+    const source = String(link?.source || "").trim();
+    const target = String(link?.target || "").trim();
+    if (!source || !target) return;
+
+    if (seedHolderIds.has(source) || seedHolderIds.has(target)) {
+      seededLinks.push(link);
+      visibleNodeIds.add(source);
+      visibleNodeIds.add(target);
+    }
+  });
+
+  const visibleLinks = safeLinks.filter((link) => {
+    const source = String(link?.source || "").trim();
+    const target = String(link?.target || "").trim();
+    return visibleNodeIds.has(source) && visibleNodeIds.has(target);
+  });
+  const visibleNodes = safeNodes.filter((node) => visibleNodeIds.has(node.id));
+  const visibleTotal = visibleNodes.reduce(
+    (sum, node) => sum + Number(node?.value || 0),
+    0,
+  );
+
+  return {
+    nodes: visibleNodes,
+    links: visibleLinks.length ? visibleLinks : seededLinks,
+    totalValue: visibleTotal,
+    totalSupply: Number(graphData?.totalSupply || 0),
+  };
+}
+
+function buildTopHoldersConnectionsGraph({
+  topHolders,
+  connectionsByAddress,
+  fallbackGraph,
+  currentSupply,
+  decimals = 0,
+}) {
+  const holderItems = Array.isArray(topHolders) ? topHolders : [];
+  const safeConnections = Array.isArray(connectionsByAddress)
+    ? connectionsByAddress
+    : [];
+  const fallbackNodes = Array.isArray(fallbackGraph?.nodes)
+    ? fallbackGraph.nodes
+    : [];
+
+  if (!holderItems.length) {
+    return null;
+  }
+
+  const divisor =
+    Number.isFinite(decimals) && decimals > 0 ? Math.pow(10, decimals) : 1;
+  const fallbackNodeById = new Map(
+    fallbackNodes.map((node) => [String(node?.id || "").trim(), node]),
+  );
+  const nodeVolumeMap = new Map();
+  const nodeStatsMap = new Map();
+  const nodeTransactionCountMap = new Map();
+  const linkMap = new Map();
+  const totalSupply = Number(currentSupply) || 0;
+
+  function ensureStats(nodeId) {
+    if (!nodeStatsMap.has(nodeId)) {
+      nodeStatsMap.set(nodeId, {
+        sentTransactions: 0,
+        receivedTransactions: 0,
+      });
+    }
+    return nodeStatsMap.get(nodeId);
+  }
+
+  function addVolume(nodeId, value) {
+    const safeValue = Number(value) || 0;
+    if (safeValue <= 0) return;
+    nodeVolumeMap.set(nodeId, (nodeVolumeMap.get(nodeId) || 0) + safeValue);
+  }
+
+  function addTransactionCount(nodeId, count) {
+    const safeCount = Number(count) || 0;
+    if (safeCount <= 0) return;
+    nodeTransactionCountMap.set(
+      nodeId,
+      (nodeTransactionCountMap.get(nodeId) || 0) + safeCount,
+    );
+  }
+
+  holderItems.forEach((item) => {
+    const holderId = String(item?.address || "").trim();
+    if (!holderId) return;
+
+    const holderValue = normalizeAmount(item?.netBalance) / divisor;
+    addVolume(holderId, holderValue);
+    ensureStats(holderId);
+  });
+
+  safeConnections.forEach(({ address, items }) => {
+    const holderId = String(address || "").trim();
+    if (!holderId) return;
+
+    const rows = Array.isArray(items) ? items : [];
+    rows.forEach((entry) => {
+      const counterpartyId = String(entry?.counterparty || "").trim();
+      if (!counterpartyId || counterpartyId === holderId) return;
+
+      const rawVolume = normalizeAmount(entry?.totalVolume);
+      const normalizedVolume = rawVolume / divisor;
+      const txCount = Math.max(
+        1,
+        Math.floor(Number(entry?.transactionCount) || 0),
+      );
+      const linkKey = `${holderId}->${counterpartyId}`;
+
+      addVolume(holderId, normalizedVolume);
+      addVolume(counterpartyId, normalizedVolume);
+
+      const holderStats = ensureStats(holderId);
+      holderStats.sentTransactions += txCount;
+      holderStats.receivedTransactions += txCount;
+      addTransactionCount(holderId, txCount);
+
+      const counterpartyStats = ensureStats(counterpartyId);
+      counterpartyStats.sentTransactions += txCount;
+      counterpartyStats.receivedTransactions += txCount;
+      addTransactionCount(counterpartyId, txCount);
+
+      const existingLink = linkMap.get(linkKey);
+      if (existingLink) {
+        existingLink.transactionVolume += normalizedVolume;
+        existingLink.sentTransactions += txCount;
+        existingLink.receivedTransactions += txCount;
+      } else {
+        linkMap.set(linkKey, {
+          source: holderId,
+          target: counterpartyId,
+          transactionVolume: normalizedVolume,
+          sentTransactions: txCount,
+          receivedTransactions: txCount,
+          transactionHash: "",
+        });
+      }
+    });
+  });
+
+  if (!nodeVolumeMap.size) {
+    return null;
+  }
+
+  const nodes = [...nodeVolumeMap.entries()]
+    .map(([nodeId, fallbackValue]) => {
+      const fallbackNode = fallbackNodeById.get(nodeId);
+      const value = Math.max(
+        Number(fallbackNode?.value || 0),
+        Number(fallbackValue || 0),
+      );
+      const pct = totalSupply > 0 ? (value / totalSupply) * 100 : 0;
+      const stats = ensureStats(nodeId);
+
+      return {
+        id: nodeId,
+        label:
+          String(fallbackNode?.label || "").trim() || shortenAddress(nodeId),
+        shortAddr: shortenAddress(nodeId),
+        value,
+        pct: pct.toFixed(2),
+        type: inferHolderType(nodeId, pct),
+        sentTransactions: stats.sentTransactions,
+        receivedTransactions: stats.receivedTransactions,
+        transactionCount: nodeTransactionCountMap.get(nodeId) || 0,
+      };
+    })
+    .sort(
+      (left, right) => Number(right?.value || 0) - Number(left?.value || 0),
+    );
+
+  return {
+    nodes,
+    links: [...linkMap.values()],
+    totalValue: nodes.reduce((sum, node) => sum + Number(node?.value || 0), 0),
+    totalSupply,
+  };
+}
+
 function limitGraphForDisplay(
   nodes,
   links,
@@ -500,6 +706,7 @@ function buildConnectionsGraphFromConnections(
     fallbackNodes.map((node) => [node.id, node]),
   );
   const nodeStats = new Map();
+  const nodeTransactionCounts = new Map();
   const nodeVolumes = new Map();
 
   function ensureNodeStats(nodeId) {
@@ -514,6 +721,15 @@ function buildConnectionsGraphFromConnections(
 
   function addNodeVolume(nodeId, amount) {
     nodeVolumes.set(nodeId, (nodeVolumes.get(nodeId) || 0) + amount);
+  }
+
+  function addNodeTransactionCount(nodeId, count) {
+    const safeCount = Number(count) || 0;
+    if (safeCount <= 0) return;
+    nodeTransactionCounts.set(
+      nodeId,
+      (nodeTransactionCounts.get(nodeId) || 0) + safeCount,
+    );
   }
 
   const links = [];
@@ -542,6 +758,7 @@ function buildConnectionsGraphFromConnections(
 
     nodeIds.add(counterparty);
     ensureNodeStats(counterparty).receivedTransactions += transactionCount;
+    addNodeTransactionCount(counterparty, transactionCount);
     addNodeVolume(counterparty, volume);
     rootTransactionCount += transactionCount;
   });
@@ -550,6 +767,7 @@ function buildConnectionsGraphFromConnections(
 
   ensureNodeStats(normalizedRoot).sentTransactions = rootTransactionCount;
   ensureNodeStats(normalizedRoot).receivedTransactions = rootTransactionCount;
+  nodeTransactionCounts.set(normalizedRoot, rootTransactionCount);
   addNodeVolume(normalizedRoot, nodeVolumes.get(normalizedRoot) || 0);
 
   const baseNodes = [...nodeIds].map((nodeId) => {
@@ -578,6 +796,7 @@ function buildConnectionsGraphFromConnections(
       type: fallbackNode?.type || inferHolderType(label, pct),
       sentTransactions: stats.sentTransactions,
       receivedTransactions: stats.receivedTransactions,
+      transactionCount: nodeTransactionCounts.get(nodeId) || 0,
       isSearchRoot: nodeId === normalizedRoot,
     };
   });
@@ -617,6 +836,54 @@ function buildConnectionsGraphFromConnections(
     totalValue,
     rootNodeId: normalizedRoot,
   };
+}
+
+function mergeSummaryNodesWithTopHolders(
+  summaryNodes,
+  topHolders,
+  decimals = 0,
+) {
+  const safeSummaryNodes = Array.isArray(summaryNodes) ? summaryNodes : [];
+  const safeTopHolders = Array.isArray(topHolders) ? topHolders : [];
+
+  if (!safeTopHolders.length) {
+    return safeSummaryNodes;
+  }
+
+  const divisor =
+    Number.isFinite(decimals) && decimals > 0 ? Math.pow(10, decimals) : 1;
+  const mergedById = new Map(
+    safeSummaryNodes.map((node) => [String(node?.id || "").trim(), node]),
+  );
+
+  safeTopHolders.forEach((holder) => {
+    const address = String(holder?.address || "").trim();
+    if (!address) return;
+
+    const holderValue = normalizeAmount(holder?.netBalance) / divisor;
+    const existingNode = mergedById.get(address);
+
+    if (existingNode) {
+      mergedById.set(address, {
+        ...existingNode,
+        value: Math.max(Number(existingNode?.value || 0), holderValue),
+      });
+      return;
+    }
+
+    mergedById.set(address, {
+      id: address,
+      label: shortenAddress(address),
+      shortAddr: shortenAddress(address),
+      value: holderValue,
+      pct: "0.00",
+      type: "minor",
+      sentTransactions: 0,
+      receivedTransactions: 0,
+    });
+  });
+
+  return [...mergedById.values()];
 }
 
 function parseTimestampMs(rawTimestamp) {
@@ -863,8 +1130,10 @@ export default function App() {
   const [trackedTokenSupply, setTrackedTokenSupply] = useState(0);
   const [tokenSelectorStatus, setTokenSelectorStatus] = useState("");
   const [mapNodes, setMapNodes] = useState([]);
+  const [summaryNodes, setSummaryNodes] = useState([]);
   const [mapLinks, setMapLinks] = useState([]);
   const [isMapLoading, setIsMapLoading] = useState(false);
+  const [mapLoadingProgress, setMapLoadingProgress] = useState(0);
   const [mapDataStatus, setMapDataStatus] = useState("");
   const [isUsingMockApiFallback, setIsUsingMockApiFallback] = useState(false);
   const [selectedNodeApiTransactions, setSelectedNodeApiTransactions] =
@@ -1015,22 +1284,25 @@ export default function App() {
       const payload = result.payload;
       const metadataMaxSupplyRaw =
         payload?.maxSupplyNormalized ?? payload?.max_supply_normalized;
-      const hasMetadataTotalSupply =
+      const hasMetadataMaxSupply =
         metadataMaxSupplyRaw !== undefined && metadataMaxSupplyRaw !== null;
-      const parsedMetadataTotalSupply = Number(metadataMaxSupplyRaw);
+      const parsedMetadataMaxSupply = Number(metadataMaxSupplyRaw);
       const parsedCurrentSupply = Number(
         payload?.currentSupplyNormalized ?? payload?.current_supply_normalized,
       );
 
       setApiTokenInfo({
         fullName: String(payload?.name || "").trim(),
-        totalSupply: Number.isFinite(parsedMetadataTotalSupply)
-          ? parsedMetadataTotalSupply
+        totalSupply: Number.isFinite(parsedCurrentSupply)
+          ? parsedCurrentSupply
           : null,
         currentSupply: Number.isFinite(parsedCurrentSupply)
           ? parsedCurrentSupply
           : 0,
-        hasMetadataTotalSupply,
+        maxSupply: Number.isFinite(parsedMetadataMaxSupply)
+          ? parsedMetadataMaxSupply
+          : null,
+        hasMetadataMaxSupply,
         decimals: Number(payload?.decimals ?? 0) || 0,
         chain: String(TOKEN_INFO.chain).trim(),
       });
@@ -1217,22 +1489,7 @@ export default function App() {
 
     const resolvedChain = apiTokenInfo?.chain || null || TOKEN_INFO.chain;
 
-    const hasMetadataTotalSupply = Boolean(
-      apiTokenInfo?.hasMetadataTotalSupply,
-    );
-
-    // totalSupply: use token_metadata.max_supply_normalized when provided,
-    // including explicit 0 (infinite supply). Otherwise fall back to
-    // graph-derived supply, then mock/default data.
-    const resolvedTotalSupply = hasMetadataTotalSupply
-      ? Number.isFinite(apiTokenInfo?.totalSupply)
-        ? apiTokenInfo.totalSupply
-        : 0
-      : (trackedTokenSupply > 0 ? trackedTokenSupply : 0) ||
-        (isUsingMockApiFallback
-          ? (fallbackTokenInfo?.totalSupply ??
-            (isSoul ? TOKEN_INFO.totalSupply : 0))
-          : 0);
+    const hasMetadataMaxSupply = Boolean(apiTokenInfo?.hasMetadataMaxSupply);
 
     const resolvedCurrentSupply =
       (Number.isFinite(apiTokenInfo?.currentSupply)
@@ -1244,13 +1501,21 @@ export default function App() {
             (isSoul ? TOKEN_INFO.totalSupply : 0))
           : 0));
 
+    const resolvedTotalSupply = resolvedCurrentSupply;
+    const resolvedMaxSupply = hasMetadataMaxSupply
+      ? Number.isFinite(apiTokenInfo?.maxSupply)
+        ? apiTokenInfo.maxSupply
+        : 0
+      : null;
+
     return {
       name: selectedTokenSymbol,
       fullName: resolvedFullName,
       chain: resolvedChain,
       totalSupply: resolvedTotalSupply,
       currentSupply: resolvedCurrentSupply,
-      hasMetadataTotalSupply,
+      maxSupply: resolvedMaxSupply,
+      hasMetadataMaxSupply,
       price: isSoul
         ? liveTokenInfo.price
         : isUsingMockApiFallback
@@ -1273,10 +1538,41 @@ export default function App() {
   ]);
 
   useEffect(() => {
+    if (!isMapLoading) {
+      setMapLoadingProgress(0);
+      return undefined;
+    }
+
+    let timeoutId;
+    const easeTarget = 92;
+
+    function tickProgress() {
+      setMapLoadingProgress((current) => {
+        if (current >= easeTarget) {
+          return current;
+        }
+
+        const step = Math.max(1, Math.round((easeTarget - current) * 0.09));
+        return Math.min(easeTarget, current + step);
+      });
+
+      timeoutId = window.setTimeout(tickProgress, 170);
+    }
+
+    timeoutId = window.setTimeout(tickProgress, 170);
+    return () => {
+      if (timeoutId) {
+        window.clearTimeout(timeoutId);
+      }
+    };
+  }, [isMapLoading]);
+
+  useEffect(() => {
     let isMounted = true;
 
     async function fetchMapGraph() {
       setIsMapLoading(true);
+      setMapLoadingProgress(8);
       setSelectedNode(null);
       setHoveredNode(null);
       setMapDataStatus(
@@ -1303,6 +1599,8 @@ export default function App() {
         MAPS_API_REQUEST_TIMEOUT_MS,
       );
 
+      setMapLoadingProgress(42);
+
       if (!isMounted) return;
 
       if (!result.ok) {
@@ -1316,6 +1614,7 @@ export default function App() {
               selectedMockTokenData?.tokenInfo?.totalSupply || 0,
             );
             setMapNodes(selectedMockTokenData?.holders || []);
+            setSummaryNodes(selectedMockTokenData?.holders || []);
             setMapLinks(selectedMockTokenData?.links || []);
             setTokenSelectorStatus("API unavailable; showing mock tokens");
             setMapDataStatus("Using fallback map data (API unavailable).");
@@ -1328,6 +1627,7 @@ export default function App() {
             setIsUsingMockApiFallback(false);
             setTrackedTokenSupply(0);
             setMapNodes([]);
+            setSummaryNodes([]);
             setMapLinks([]);
             setMapDataStatus(`Graph request failed (${result.status}).`);
           }
@@ -1337,25 +1637,92 @@ export default function App() {
       }
 
       setIsUsingMockApiFallback(false);
+      setMapLoadingProgress(62);
 
       const graphDecimals = apiTokenInfo?.decimals ?? 0;
       const mappedGraph = buildGraphDataFromApi(result.payload, graphDecimals);
+      const shouldApplyTopHoldersSeed =
+        !isConnectionsView &&
+        !String(searchedRootAddress || "").trim() &&
+        !String(activeGraphRootAddress || "").trim();
+      let seededGraph = null;
+      let topHoldersForSummary = [];
+
+      if (shouldApplyTopHoldersSeed) {
+        try {
+          const topHoldersResult = await fetchTopHoldersFromApi(
+            MAPS_API_BASE_URL,
+            MAPS_API_REQUEST_TIMEOUT_MS,
+            selectedTokenSymbol,
+            10,
+          );
+          topHoldersForSummary = Array.isArray(topHoldersResult.items)
+            ? topHoldersResult.items
+            : [];
+
+          const topHolderAddresses = topHoldersResult.items
+            .map((item) => String(item?.address || "").trim())
+            .filter(Boolean);
+
+          const connectionPayloads = await Promise.all(
+            topHolderAddresses.map(async (address) => {
+              try {
+                const result = await fetchConnectionsForAddressFromApi(
+                  MAPS_API_BASE_URL,
+                  MAPS_API_REQUEST_TIMEOUT_MS,
+                  address,
+                  selectedTokenSymbol,
+                );
+
+                return {
+                  address,
+                  items: result.items,
+                };
+              } catch {
+                return {
+                  address,
+                  items: [],
+                };
+              }
+            }),
+          );
+
+          seededGraph = buildTopHoldersConnectionsGraph({
+            topHolders: topHoldersResult.items,
+            connectionsByAddress: connectionPayloads,
+            fallbackGraph: mappedGraph,
+            currentSupply: mappedGraph?.totalSupply || 0,
+            decimals: graphDecimals,
+          });
+        } catch {
+          seededGraph = null;
+        }
+
+        if (!seededGraph) {
+          seededGraph = buildTopHoldersGraph(mappedGraph, 10);
+        }
+      }
+
+      const baseGraph = seededGraph || mappedGraph;
       const baseFocusedGraph = isConnectionsView
-        ? buildNeighborFocusedGraph(mappedGraph, activeGraphRootAddress)
+        ? buildNeighborFocusedGraph(baseGraph, activeGraphRootAddress)
         : searchedRootAddress
-          ? buildNeighborFocusedGraph(mappedGraph, activeGraphRootAddress)
-          : mappedGraph;
+          ? buildNeighborFocusedGraph(baseGraph, activeGraphRootAddress)
+          : baseGraph;
       let focusedGraph = baseFocusedGraph;
       let usedConnectionsTable = false;
 
       if (isConnectionsView && activeGraphRootAddress) {
         try {
+          setMapLoadingProgress(74);
           const connectionsResult = await fetchConnectionsForAddressFromApi(
             MAPS_API_BASE_URL,
             MAPS_API_REQUEST_TIMEOUT_MS,
             activeGraphRootAddress,
             selectedTokenSymbol,
           );
+
+          setMapLoadingProgress(84);
 
           if (!isMounted) return;
 
@@ -1390,6 +1757,7 @@ export default function App() {
           } else {
             setTrackedTokenSupply(0);
             setMapNodes([]);
+            setSummaryNodes([]);
             setMapLinks([]);
             setMapDataStatus("API returned no graph data.");
           }
@@ -1406,6 +1774,7 @@ export default function App() {
         } else {
           setTrackedTokenSupply(0);
           setMapNodes([]);
+          setSummaryNodes([]);
           setMapLinks([]);
           setMapDataStatus("Searched address not found in graph data.");
         }
@@ -1414,7 +1783,17 @@ export default function App() {
       }
 
       setMapNodes(focusedGraph.nodes);
+      setSummaryNodes(
+        shouldApplyTopHoldersSeed && Array.isArray(mappedGraph?.nodes)
+          ? mergeSummaryNodesWithTopHolders(
+              mappedGraph.nodes,
+              topHoldersForSummary,
+              graphDecimals,
+            )
+          : focusedGraph.nodes,
+      );
       setMapLinks(focusedGraph.links);
+      setMapLoadingProgress(94);
       // Prefer the API's explicit totalSupply; fall back to discovered sum.
       setTrackedTokenSupply(
         mappedGraph?.totalSupply > 0
@@ -1436,6 +1815,7 @@ export default function App() {
             : `Live graph loaded for ${shortenAddress(activeGraphRootAddress)}`
           : `Live graph loaded from ${graphEndpoint}`,
       );
+      setMapLoadingProgress(100);
       setIsMapLoading(false);
     }
 
@@ -1448,6 +1828,7 @@ export default function App() {
         setIsUsingMockApiFallback(false);
         setTrackedTokenSupply(0);
         setMapNodes([]);
+        setSummaryNodes([]);
         setMapLinks([]);
         setMapDataStatus("Unable to process graph data.");
       }
@@ -1620,6 +2001,11 @@ export default function App() {
   const displayNodes = useMemo(
     () => applyCurrentSupplyToNodes(mapNodes, activeTokenInfo.currentSupply),
     [mapNodes, activeTokenInfo.currentSupply],
+  );
+  const displaySummaryNodes = useMemo(
+    () =>
+      applyCurrentSupplyToNodes(summaryNodes, activeTokenInfo.currentSupply),
+    [summaryNodes, activeTokenInfo.currentSupply],
   );
   const maxModeScopeGraph = useMemo(() => {
     if (!activeHolderTypeFilter) {
@@ -2493,13 +2879,29 @@ export default function App() {
               aria-live="polite"
             >
               <div className="map-loading-network" aria-hidden="true">
+                <span
+                  className="map-loading-binary map-loading-binary-left"
+                  data-bits="101001110101001011001110101001"
+                />
+                <span
+                  className="map-loading-binary map-loading-binary-right"
+                  data-bits="110101001011100101011001010111"
+                />
+                <span className="map-loading-world" />
                 <span className="map-loading-link map-loading-link-a" />
                 <span className="map-loading-link map-loading-link-b" />
                 <span className="map-loading-link map-loading-link-c" />
+                <span className="map-loading-link map-loading-link-d" />
+                <span className="map-loading-cube map-loading-cube-a" />
+                <span className="map-loading-cube map-loading-cube-b" />
+                <span className="map-loading-cube map-loading-cube-c" />
+                <span className="map-loading-cube map-loading-cube-d" />
+                <span className="map-loading-cube map-loading-cube-e" />
+                <span className="map-loading-cube map-loading-cube-f" />
+                <span className="map-loading-cube map-loading-cube-g" />
                 <span className="map-loading-node map-loading-node-a" />
                 <span className="map-loading-node map-loading-node-b" />
-                <span className="map-loading-node map-loading-node-c" />
-                <span className="map-loading-node map-loading-node-d" />
+                <span className="map-loading-floor" />
               </div>
               <div className="map-loading-spinner" aria-hidden="true" />
               <div className="map-loading-title">
@@ -2507,6 +2909,17 @@ export default function App() {
               </div>
               <div className="map-loading-copy">
                 Connecting blocks and routing transfers...
+              </div>
+              <div className="map-loading-progress" aria-hidden="true">
+                <div
+                  className="map-loading-progress-bar"
+                  style={{
+                    width: `${Math.max(0, Math.min(100, mapLoadingProgress))}%`,
+                  }}
+                />
+              </div>
+              <div className="map-loading-percent">
+                {Math.max(0, Math.min(100, Math.round(mapLoadingProgress)))}%
               </div>
             </div>
           ) : null}
@@ -2524,18 +2937,6 @@ export default function App() {
                 <span>Amount</span>
                 <strong>
                   {infoNode.value.toLocaleString()} {activeTokenInfo.name}
-                </strong>
-              </div>
-              <div className="map-hover-row">
-                <span>Sent Tx</span>
-                <strong>
-                  {(infoNode.sentTransactions ?? 0).toLocaleString()}
-                </strong>
-              </div>
-              <div className="map-hover-row">
-                <span>Received Tx</span>
-                <strong>
-                  {(infoNode.receivedTransactions ?? 0).toLocaleString()}
                 </strong>
               </div>
               <div className="map-hover-row">
@@ -2585,7 +2986,7 @@ export default function App() {
         </div>
         <StatsPanel
           holders={filteredNodes}
-          summaryHolders={displayNodes}
+          summaryHolders={displaySummaryNodes}
           tokenInfo={activeTokenInfo}
           availableTokens={availableTokenSymbols}
           selectedTokenSymbol={selectedTokenSymbol}

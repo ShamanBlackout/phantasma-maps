@@ -10,6 +10,15 @@ export function createTokenInfoEndpoint(baseUrl, tokenSymbol) {
   return `${base}/tokens/${encodeURIComponent(tokenSymbol)}/metadata`;
 }
 
+export function createTopHoldersEndpoint(baseUrl, tokenSymbol, limit = 10) {
+  const base = baseUrl.replace(/\/+$/, "");
+  const normalizedLimit =
+    Number.isFinite(Number(limit)) && Number(limit) > 0
+      ? Math.floor(Number(limit))
+      : 10;
+  return `${base}/tokens/${encodeURIComponent(tokenSymbol)}/top-holders?limit=${normalizedLimit}`;
+}
+
 export function createGraphEndpoint(
   baseUrl,
   tokenSymbol,
@@ -206,6 +215,28 @@ export async function fetchConnectionsForAddress(
 
   if (!result.ok) {
     throw new Error(`connections request failed with status ${result.status}`);
+  }
+
+  return {
+    items: Array.isArray(result.payload?.items) ? result.payload.items : [],
+  };
+}
+
+export async function fetchTopHolders(
+  baseUrl,
+  timeoutMs,
+  tokenSymbol,
+  limit = 10,
+) {
+  const endpoint = createTopHoldersEndpoint(baseUrl, tokenSymbol, limit);
+  const result = await fetchJsonWithTimeout(
+    endpoint,
+    { cache: "no-store" },
+    timeoutMs,
+  );
+
+  if (!result.ok) {
+    throw new Error(`top holders request failed with status ${result.status}`);
   }
 
   return {

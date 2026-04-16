@@ -82,12 +82,6 @@ export default function SelectedNodeCard({
           <SparklineSvg data={sparklineData} height={36} />
         </div>
       )}
-      <div className="map-selected-tx-row">
-        <span>Sent {node.sentTransactions?.toLocaleString() ?? "0"}</span>
-        <span>
-          Received {node.receivedTransactions?.toLocaleString() ?? "0"}
-        </span>
-      </div>
       <div className="selected-node-actions">
         {canShowConnections ? (
           <button
