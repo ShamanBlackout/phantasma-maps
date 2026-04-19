@@ -15,6 +15,7 @@ export default function Header({
   defaultGraphNodeLimit,
   onGraphSettingsApply,
   isGraphMaxModeEnabled,
+  isConnectionsView,
   availableNodeCount,
   availableEdgeCount,
   renderedNodeCount,
@@ -172,6 +173,17 @@ export default function Header({
   const nodeDraftValue = Number(draftNodeLimit);
   const isEdgeWarningVisible = edgeDraftValue > defaultGraphEdgeLimit;
   const isNodeWarningVisible = nodeDraftValue > defaultGraphNodeLimit;
+  const normalizedAvailableNodeCount = Number(availableNodeCount || 0);
+  const normalizedAvailableEdgeCount = Number(availableEdgeCount || 0);
+  const normalizedRenderedNodeCount = Number(renderedNodeCount || 0);
+  const normalizedRenderedEdgeCount = Number(renderedEdgeCount || 0);
+  const canUseMaxGraph = isConnectionsView
+    ? !(
+        normalizedRenderedNodeCount < defaultGraphNodeLimit &&
+        normalizedRenderedEdgeCount < defaultGraphEdgeLimit
+      )
+    : normalizedAvailableNodeCount > normalizedRenderedNodeCount ||
+      normalizedAvailableEdgeCount > normalizedRenderedEdgeCount;
   const isSettingsFormValid =
     Number.isFinite(edgeDraftValue) &&
     edgeDraftValue > 0 &&
@@ -297,17 +309,15 @@ export default function Header({
                 <div className="header-settings-max-copy">
                   <strong>Max graph</strong>
                   <span>
-                    {`${Number(availableNodeCount || 0).toLocaleString()} wallets and ${Number(availableEdgeCount || 0).toLocaleString()} connections.`}
+                    {isConnectionsView
+                      ? `Current graph max: ${Number(availableNodeCount || 0).toLocaleString()} wallets and ${Number(availableEdgeCount || 0).toLocaleString()} connections.`
+                      : `Overall max: ${Number(availableNodeCount || 0).toLocaleString()} wallets and ${Number(availableEdgeCount || 0).toLocaleString()} connections.`}
                   </span>
                 </div>
                 <button
                   type="button"
                   onClick={handleSettingsUseMax}
-                  disabled={
-                    isGraphMaxModeEnabled ||
-                    (renderedNodeCount < defaultGraphNodeLimit &&
-                      renderedEdgeCount < defaultGraphEdgeLimit)
-                  }
+                  disabled={isGraphMaxModeEnabled || !canUseMaxGraph}
                 >
                   {isGraphMaxModeEnabled ? "Max Enabled" : "Use Max"}
                 </button>
