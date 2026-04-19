@@ -125,6 +125,10 @@ const MAPS_API_SYNC_STATUS_POLL_INTERVAL_MS = parseEnvMs(
   "REACT_APP_MAPS_API_SYNC_STATUS_POLL_INTERVAL_MS",
   30000,
 );
+const TOKEN_METADATA_POLL_INTERVAL_MS = parseEnvMs(
+  "REACT_APP_TOKEN_METADATA_POLL_INTERVAL_MS",
+  60000,
+);
 
 function shortenAddress(address) {
   if (typeof address !== "string" || address.length <= 10)
@@ -545,7 +549,7 @@ function buildTopHoldersConnectionsGraph({
       );
       const linkKey = `${holderId}->${counterpartyId}`;
 
-      addVolume(holderId, normalizedVolume);
+      // Keep holder amount balance-based; connection volume should not inflate it.
       addVolume(counterpartyId, normalizedVolume);
 
       const holderStats = ensureStats(holderId);
@@ -1166,6 +1170,10 @@ export default function App() {
     MAPS_API_GRAPH_NODE_LIMIT,
   );
   const [isGraphMaxModeEnabled, setIsGraphMaxModeEnabled] = useState(false);
+  const [overallMaxGraphStats, setOverallMaxGraphStats] = useState({
+    wallets: 0,
+    connections: 0,
+  });
   const [isConnectionsView, setIsConnectionsView] = useState(false);
   const activeGraphRootAddress = useMemo(
     () => String(searchedRootAddress || MAPS_API_ROOT_ADDRESS || "").trim(),
@@ -1261,11 +1269,13 @@ export default function App() {
     setHoveredNode(null);
     setIsExportMenuOpen(false);
     setIsTransfersModalOpen(false);
+    setOverallMaxGraphStats({ wallets: 0, connections: 0 });
     resetTransactionState();
   }, [resetTransactionState, selectedTokenSymbol]);
 
   useEffect(() => {
     let isMounted = true;
+    let timeoutId = null;
 
     async function fetchTokenInfo() {
       const result = await fetchJsonWithTimeout(
@@ -1290,6 +1300,14 @@ export default function App() {
       const parsedCurrentSupply = Number(
         payload?.currentSupplyNormalized ?? payload?.current_supply_normalized,
       );
+      const parsedMetadataPrice = Number(
+        payload?.priceUsd ?? payload?.price_usd ?? payload?.price,
+      );
+      const parsedMetadataPriceChange24h = Number(
+        payload?.priceChange24h ??
+          payload?.price_change_24h ??
+          payload?.percentChange24h,
+      );
 
       setApiTokenInfo({
         fullName: String(payload?.name || "").trim(),
@@ -1304,17 +1322,39 @@ export default function App() {
           : null,
         hasMetadataMaxSupply,
         decimals: Number(payload?.decimals ?? 0) || 0,
-        chain: String(TOKEN_INFO.chain).trim(),
+        chain: String(payload?.chain || TOKEN_INFO.chain || "").trim(),
+        price: Number.isFinite(parsedMetadataPrice)
+          ? parsedMetadataPrice
+          : null,
+        priceChange24h: Number.isFinite(parsedMetadataPriceChange24h)
+          ? parsedMetadataPriceChange24h
+          : null,
       });
+
+      if (Number.isFinite(parsedMetadataPrice)) {
+        setPriceLastUpdatedAt(Date.now());
+      }
+
+      timeoutId = window.setTimeout(
+        fetchTokenInfo,
+        TOKEN_METADATA_POLL_INTERVAL_MS,
+      );
     }
 
     fetchTokenInfo().catch(() => {
       if (!isMounted) return;
       setApiTokenInfo(null);
+      timeoutId = window.setTimeout(
+        fetchTokenInfo,
+        TOKEN_METADATA_POLL_INTERVAL_MS,
+      );
     });
 
     return () => {
       isMounted = false;
+      if (timeoutId) {
+        window.clearTimeout(timeoutId);
+      }
     };
   }, [selectedTokenSymbol]);
 
@@ -1478,16 +1518,14 @@ export default function App() {
 
   const activeTokenInfo = useMemo(() => {
     const fallbackTokenInfo = selectedMockTokenData?.tokenInfo;
-    const isSoul = selectedTokenSymbol === TOKEN_INFO.name;
 
     // Prefer API-sourced token metadata, then mock fallback, then defaults.
     const resolvedFullName =
       apiTokenInfo?.fullName ||
-      null ||
       (isUsingMockApiFallback ? fallbackTokenInfo?.fullName : null) ||
-      (isSoul ? TOKEN_INFO.fullName : `${selectedTokenSymbol} Token`);
+      `${selectedTokenSymbol} Token`;
 
-    const resolvedChain = apiTokenInfo?.chain || null || TOKEN_INFO.chain;
+    const resolvedChain = apiTokenInfo?.chain || TOKEN_INFO.chain;
 
     const hasMetadataMaxSupply = Boolean(apiTokenInfo?.hasMetadataMaxSupply);
 
@@ -1498,7 +1536,9 @@ export default function App() {
       ((trackedTokenSupply > 0 ? trackedTokenSupply : 0) ||
         (isUsingMockApiFallback
           ? (fallbackTokenInfo?.totalSupply ??
-            (isSoul ? TOKEN_INFO.totalSupply : 0))
+            (selectedTokenSymbol === TOKEN_INFO.name
+              ? TOKEN_INFO.totalSupply
+              : 0))
           : 0));
 
     const resolvedTotalSupply = resolvedCurrentSupply;
@@ -1508,6 +1548,22 @@ export default function App() {
         : 0
       : null;
 
+    const resolvedPrice = Number.isFinite(apiTokenInfo?.price)
+      ? apiTokenInfo.price
+      : selectedTokenSymbol === TOKEN_INFO.name
+        ? liveTokenInfo.price
+        : isUsingMockApiFallback
+          ? (fallbackTokenInfo?.price ?? null)
+          : null;
+
+    const resolvedPriceChange24h = Number.isFinite(apiTokenInfo?.priceChange24h)
+      ? apiTokenInfo.priceChange24h
+      : selectedTokenSymbol === TOKEN_INFO.name
+        ? liveTokenInfo.priceChange24h
+        : isUsingMockApiFallback
+          ? (fallbackTokenInfo?.priceChange24h ?? null)
+          : null;
+
     return {
       name: selectedTokenSymbol,
       fullName: resolvedFullName,
@@ -1516,16 +1572,8 @@ export default function App() {
       currentSupply: resolvedCurrentSupply,
       maxSupply: resolvedMaxSupply,
       hasMetadataMaxSupply,
-      price: isSoul
-        ? liveTokenInfo.price
-        : isUsingMockApiFallback
-          ? (fallbackTokenInfo?.price ?? null)
-          : null,
-      priceChange24h: isSoul
-        ? liveTokenInfo.priceChange24h
-        : isUsingMockApiFallback
-          ? (fallbackTokenInfo?.priceChange24h ?? null)
-          : null,
+      price: resolvedPrice,
+      priceChange24h: resolvedPriceChange24h,
     };
   }, [
     apiTokenInfo,
@@ -1641,7 +1689,9 @@ export default function App() {
 
       const graphDecimals = apiTokenInfo?.decimals ?? 0;
       const mappedGraph = buildGraphDataFromApi(result.payload, graphDecimals);
+
       const shouldApplyTopHoldersSeed =
+        !isGraphMaxModeEnabled &&
         !isConnectionsView &&
         !String(searchedRootAddress || "").trim() &&
         !String(activeGraphRootAddress || "").trim();
@@ -1782,16 +1832,44 @@ export default function App() {
         return;
       }
 
-      setMapNodes(focusedGraph.nodes);
-      setSummaryNodes(
+      const shouldTrackOverallMaxStats =
+        !isConnectionsView && !String(activeGraphRootAddress || "").trim();
+
+      const summaryBaseNodes =
+        shouldApplyTopHoldersSeed && Array.isArray(mappedGraph?.nodes)
+          ? [
+              ...mappedGraph.nodes,
+              ...(Array.isArray(baseGraph?.nodes) ? baseGraph.nodes : []),
+            ]
+          : focusedGraph.nodes;
+
+      const mergedSummaryNodes =
         shouldApplyTopHoldersSeed && Array.isArray(mappedGraph?.nodes)
           ? mergeSummaryNodesWithTopHolders(
-              mappedGraph.nodes,
+              summaryBaseNodes,
               topHoldersForSummary,
               graphDecimals,
             )
-          : focusedGraph.nodes,
-      );
+          : summaryBaseNodes;
+
+      if (shouldTrackOverallMaxStats) {
+        const mappedLinkCount = Array.isArray(mappedGraph?.links)
+          ? mappedGraph.links.length
+          : 0;
+        const baseLinkCount = Array.isArray(baseGraph?.links)
+          ? baseGraph.links.length
+          : 0;
+
+        setOverallMaxGraphStats({
+          wallets: Array.isArray(mergedSummaryNodes)
+            ? mergedSummaryNodes.length
+            : 0,
+          connections: Math.max(mappedLinkCount, baseLinkCount),
+        });
+      }
+
+      setMapNodes(focusedGraph.nodes);
+      setSummaryNodes(mergedSummaryNodes);
       setMapLinks(focusedGraph.links);
       setMapLoadingProgress(94);
       // Prefer the API's explicit totalSupply; fall back to discovered sum.
@@ -1840,8 +1918,9 @@ export default function App() {
     };
   }, [
     activeGraphRootAddress,
-    apiTokenInfo,
+    apiTokenInfo?.decimals,
     graphEdgeLimit,
+    isGraphMaxModeEnabled,
     isConnectionsView,
     searchedRootAddress,
     selectedMockTokenData,
@@ -2835,6 +2914,11 @@ export default function App() {
     return () => document.removeEventListener("mousedown", handlePointerDown);
   }, [activeTransactionFilter, setActiveTransactionFilter]);
 
+  const clampedMapLoadingProgress = Math.max(
+    0,
+    Math.min(100, Math.round(mapLoadingProgress)),
+  );
+
   return (
     <div className={`app-root theme-${colorTheme}`}>
       <Header
@@ -2853,8 +2937,17 @@ export default function App() {
         onGraphSettingsApply={handleGraphSettingsApply}
         isGraphMaxModeEnabled={isTokenGraphMaxModeActive}
         canUseGraphMaxMode={true}
-        availableNodeCount={maxModeScopeGraph.nodes.length}
-        availableEdgeCount={maxModeScopeGraph.links.length}
+        isConnectionsView={isConnectionsView}
+        availableNodeCount={
+          isConnectionsView
+            ? maxModeScopeGraph.nodes.length
+            : overallMaxGraphStats.wallets
+        }
+        availableEdgeCount={
+          isConnectionsView
+            ? maxModeScopeGraph.links.length
+            : overallMaxGraphStats.connections
+        }
         renderedNodeCount={filteredNodes.length}
         renderedEdgeCount={filteredLinks.length}
       />
@@ -2878,48 +2971,173 @@ export default function App() {
               style={loadingThemeStyle}
               aria-live="polite"
             >
-              <div className="map-loading-network" aria-hidden="true">
+              <div
+                className="map-loading-panel"
+                aria-hidden="true"
+                style={{
+                  "--loading-progress": `${clampedMapLoadingProgress}%`,
+                }}
+              >
+                <span className="map-loading-panel-glow" />
+                <span className="map-loading-panel-grid" />
                 <span
-                  className="map-loading-binary map-loading-binary-left"
-                  data-bits="101001110101001011001110101001"
+                  className={`map-loading-panel-scanline ${clampedMapLoadingProgress >= 10 ? "is-energized" : ""}`}
                 />
-                <span
-                  className="map-loading-binary map-loading-binary-right"
-                  data-bits="110101001011100101011001010111"
-                />
-                <span className="map-loading-world" />
-                <span className="map-loading-link map-loading-link-a" />
-                <span className="map-loading-link map-loading-link-b" />
-                <span className="map-loading-link map-loading-link-c" />
-                <span className="map-loading-link map-loading-link-d" />
-                <span className="map-loading-cube map-loading-cube-a" />
-                <span className="map-loading-cube map-loading-cube-b" />
-                <span className="map-loading-cube map-loading-cube-c" />
-                <span className="map-loading-cube map-loading-cube-d" />
-                <span className="map-loading-cube map-loading-cube-e" />
-                <span className="map-loading-cube map-loading-cube-f" />
-                <span className="map-loading-cube map-loading-cube-g" />
-                <span className="map-loading-node map-loading-node-a" />
-                <span className="map-loading-node map-loading-node-b" />
-                <span className="map-loading-floor" />
+                <div className="map-loading-panel-header">
+                  <span className="map-loading-panel-kicker">
+                    Phantasma Map System
+                  </span>
+                  <span className="map-loading-panel-status">
+                    Live Index Uplink
+                  </span>
+                </div>
+                <div className="map-loading-panel-body">
+                  <div className="map-loading-panel-sidebar map-loading-panel-sidebar-left">
+                    <div
+                      className={`map-loading-metric ${clampedMapLoadingProgress >= 12 ? "is-energized" : ""}`}
+                    >
+                      <span className="map-loading-metric-label">Source</span>
+                      <strong>{selectedTokenSymbol}</strong>
+                    </div>
+                    <div
+                      className={`map-loading-metric ${clampedMapLoadingProgress >= 34 ? "is-energized" : ""}`}
+                    >
+                      <span className="map-loading-metric-label">Pipeline</span>
+                      <strong>
+                        {clampedMapLoadingProgress < 34
+                          ? "Balances"
+                          : clampedMapLoadingProgress < 68
+                            ? "Addresses"
+                            : "Clusters"}
+                      </strong>
+                    </div>
+                    <div
+                      className={`map-loading-metric ${clampedMapLoadingProgress >= 62 ? "is-energized" : ""}`}
+                    >
+                      <span className="map-loading-metric-label">Signal</span>
+                      <strong>
+                        {clampedMapLoadingProgress >= 62 ? "Stable" : "Locking"}
+                      </strong>
+                    </div>
+                  </div>
+                  <div className="map-loading-core-wrap">
+                    <div
+                      className={`map-loading-core ${clampedMapLoadingProgress >= 8 ? "is-energized" : ""}`}
+                    >
+                      <span
+                        className={`map-loading-core-ring map-loading-core-ring-outer ${clampedMapLoadingProgress >= 18 ? "is-energized" : ""}`}
+                      />
+                      <span
+                        className={`map-loading-core-ring map-loading-core-ring-middle ${clampedMapLoadingProgress >= 42 ? "is-energized" : ""}`}
+                      />
+                      <span
+                        className={`map-loading-core-ring map-loading-core-ring-inner ${clampedMapLoadingProgress >= 70 ? "is-energized" : ""}`}
+                      />
+                      <span
+                        className={`map-loading-core-node map-loading-core-node-a ${clampedMapLoadingProgress >= 14 ? "is-energized" : ""}`}
+                      />
+                      <span
+                        className={`map-loading-core-node map-loading-core-node-b ${clampedMapLoadingProgress >= 28 ? "is-energized" : ""}`}
+                      />
+                      <span
+                        className={`map-loading-core-node map-loading-core-node-c ${clampedMapLoadingProgress >= 48 ? "is-energized" : ""}`}
+                      />
+                      <span
+                        className={`map-loading-core-node map-loading-core-node-d ${clampedMapLoadingProgress >= 68 ? "is-energized" : ""}`}
+                      />
+                      <span
+                        className={`map-loading-core-link map-loading-core-link-a ${clampedMapLoadingProgress >= 24 ? "is-energized" : ""}`}
+                      />
+                      <span
+                        className={`map-loading-core-link map-loading-core-link-b ${clampedMapLoadingProgress >= 54 ? "is-energized" : ""}`}
+                      />
+                      <span
+                        className={`map-loading-core-link map-loading-core-link-c ${clampedMapLoadingProgress >= 78 ? "is-energized" : ""}`}
+                      />
+                      <span
+                        className={`map-loading-core-center ${clampedMapLoadingProgress >= 88 ? "is-energized" : ""}`}
+                      />
+                    </div>
+                  </div>
+                  <div className="map-loading-panel-sidebar map-loading-panel-sidebar-right">
+                    <div className="map-loading-bars" aria-hidden="true">
+                      <span
+                        className={
+                          clampedMapLoadingProgress >= 16 ? "is-energized" : ""
+                        }
+                      />
+                      <span
+                        className={
+                          clampedMapLoadingProgress >= 30 ? "is-energized" : ""
+                        }
+                      />
+                      <span
+                        className={
+                          clampedMapLoadingProgress >= 44 ? "is-energized" : ""
+                        }
+                      />
+                      <span
+                        className={
+                          clampedMapLoadingProgress >= 58 ? "is-energized" : ""
+                        }
+                      />
+                      <span
+                        className={
+                          clampedMapLoadingProgress >= 72 ? "is-energized" : ""
+                        }
+                      />
+                      <span
+                        className={
+                          clampedMapLoadingProgress >= 86 ? "is-energized" : ""
+                        }
+                      />
+                    </div>
+                    <div
+                      className={`map-loading-readout ${clampedMapLoadingProgress >= 20 ? "is-energized" : ""}`}
+                    >
+                      <span>Address matrix</span>
+                      <strong>
+                        {clampedMapLoadingProgress >= 68
+                          ? "Resolved"
+                          : "Scanning"}
+                      </strong>
+                    </div>
+                    <div
+                      className={`map-loading-readout ${clampedMapLoadingProgress >= 52 ? "is-energized" : ""}`}
+                    >
+                      <span>Graph assembly</span>
+                      <strong>
+                        {clampedMapLoadingProgress >= 84
+                          ? "Render-ready"
+                          : "Compiling"}
+                      </strong>
+                    </div>
+                  </div>
+                </div>
               </div>
-              <div className="map-loading-spinner" aria-hidden="true" />
               <div className="map-loading-title">
-                Generating Maps for {selectedTokenSymbol}...
+                Generating {selectedTokenSymbol} Graph
+              </div>
+              <div className="map-loading-stage">
+                {clampedMapLoadingProgress < 34
+                  ? "Loading token balances"
+                  : clampedMapLoadingProgress < 68
+                    ? "Resolving address graph"
+                    : "Rendering holder clusters"}
               </div>
               <div className="map-loading-copy">
-                Connecting blocks and routing transfers...
+                Building a live cybernetic map from indexed chain activity.
               </div>
               <div className="map-loading-progress" aria-hidden="true">
                 <div
                   className="map-loading-progress-bar"
                   style={{
-                    width: `${Math.max(0, Math.min(100, mapLoadingProgress))}%`,
+                    width: `${clampedMapLoadingProgress}%`,
                   }}
                 />
               </div>
               <div className="map-loading-percent">
-                {Math.max(0, Math.min(100, Math.round(mapLoadingProgress)))}%
+                {clampedMapLoadingProgress}%
               </div>
             </div>
           ) : null}
@@ -2946,6 +3164,16 @@ export default function App() {
                 </strong>
               </div>
             </div>
+          )}
+          {resolvedSelectedNode && (
+            <div
+              className="map-sheet-scrim"
+              onClick={() => {
+                setSelectedNode(null);
+                setHoveredNode(null);
+              }}
+              aria-hidden="true"
+            />
           )}
           {resolvedSelectedNode && (
             <SelectedNodeCard

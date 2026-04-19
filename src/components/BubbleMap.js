@@ -52,6 +52,7 @@ export default function BubbleMap({
   const prevGraphSignatureRef = useRef("");
   const panHintFrameRef = useRef(null);
   const pendingBoundsRef = useRef(null);
+  const lastTouchedIdRef = useRef(null);
   const [hoveredNodeId, setHoveredNodeId] = useState(null);
   const [panHints, setPanHints] = useState({
     left: false,
@@ -315,7 +316,27 @@ export default function BubbleMap({
       })
       .on("click", (event, d) => {
         event.stopPropagation();
-        onNodeClick && onNodeClick(d);
+        // On touch devices: first tap previews (hover), second tap selects
+        const isTouch =
+          event.sourceEvent?.pointerType === "touch" ||
+          (typeof window !== "undefined" &&
+            !window.matchMedia("(pointer: fine)").matches);
+        if (isTouch) {
+          if (lastTouchedIdRef.current === d.id) {
+            // Second tap on same node → select
+            lastTouchedIdRef.current = null;
+            if (onNodeHover) onNodeHover(null);
+            setHoveredNodeId(null);
+            onNodeClick && onNodeClick(d);
+          } else {
+            // First tap → preview (hover)
+            lastTouchedIdRef.current = d.id;
+            setHoveredNodeId(d.id);
+            if (onNodeHover) onNodeHover(d);
+          }
+        } else {
+          onNodeClick && onNodeClick(d);
+        }
       })
       .call(
         d3
@@ -474,7 +495,11 @@ export default function BubbleMap({
 
     zoomRef.current = zoom;
     svg.call(zoom).on("dblclick.zoom", null);
-    svg.on("click", () => onNodeClick && onNodeClick(null));
+    svg.on("click", () => {
+      // Tapping empty canvas clears hover preview and selection
+      lastTouchedIdRef.current = null;
+      onNodeClick && onNodeClick(null);
+    });
     simulation.alpha(0.14).restart();
 
     return () => {
