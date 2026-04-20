@@ -48,7 +48,7 @@ beforeAll(() => {
     value: createMatchMedia(),
   });
 
-  Object.defineProperty(globalThis, "matchMedia", {
+  Object.defineProperty(global, "matchMedia", {
     writable: true,
     value: window.matchMedia,
   });
@@ -73,7 +73,7 @@ beforeAll(() => {
 beforeEach(() => {
   window.localStorage.clear();
   window.matchMedia = createMatchMedia();
-  globalThis.matchMedia = window.matchMedia;
+  global.matchMedia = window.matchMedia;
 
   global.fetch = jest.fn(async (input) => {
     const url = String(input);
@@ -173,7 +173,7 @@ afterEach(() => {
 });
 
 test("renders the current map application shell", async () => {
-  const { container } = render(<App />);
+  render(<App />);
 
   expect(screen.getByRole("button", { name: /search/i })).toBeInTheDocument();
   expect(screen.getByText(/Block Sync/i)).toBeInTheDocument();
