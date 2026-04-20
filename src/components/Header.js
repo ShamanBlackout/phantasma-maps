@@ -126,7 +126,8 @@ export default function Header({
   }
 
   function handleSettingsSubmit(event) {
-    event.preventDefault();
+    event?.preventDefault?.();
+    event?.stopPropagation?.();
     onGraphSettingsApply?.({
       useMaxMode: false,
       edgeLimit: parsePositiveInteger(draftEdgeLimit, defaultGraphEdgeLimit),
@@ -366,7 +367,11 @@ export default function Header({
                 <button type="button" onClick={handleSettingsReset}>
                   Reset Defaults
                 </button>
-                <button type="submit" disabled={!isSettingsFormValid}>
+                <button
+                  type="button"
+                  onClick={handleSettingsSubmit}
+                  disabled={!isSettingsFormValid}
+                >
                   Apply
                 </button>
               </div>

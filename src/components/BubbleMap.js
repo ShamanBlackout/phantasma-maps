@@ -16,6 +16,7 @@ export default function BubbleMap({
   selectedNodeId,
   currentSupply,
   colorTheme,
+  preserveUnconnectedNodes = false,
   onReady,
 }) {
   const holderPalette = getHolderPalette(colorTheme);
@@ -521,6 +522,8 @@ export default function BubbleMap({
     const activeNodeId = selectedNodeId || hoveredNodeId;
     const isSelectionMode = Boolean(selectedNodeId);
     const isHoverMode = !selectedNodeId && Boolean(hoveredNodeId);
+    const shouldHideUnrelatedNodes =
+      isSelectionMode && !preserveUnconnectedNodes;
 
     if (activeNodeId) {
       connectedNodeIds.add(activeNodeId);
@@ -537,12 +540,15 @@ export default function BubbleMap({
     svg
       .selectAll(".bubble-node")
       .style("display", (d) =>
-        !isSelectionMode || connectedNodeIds.has(d.id) ? null : "none",
+        !shouldHideUnrelatedNodes || connectedNodeIds.has(d.id) ? null : "none",
       )
       .style("pointer-events", (d) =>
-        !isSelectionMode || connectedNodeIds.has(d.id) ? null : "none",
+        !shouldHideUnrelatedNodes || connectedNodeIds.has(d.id) ? null : "none",
       )
       .attr("opacity", (d) => {
+        if (isSelectionMode && preserveUnconnectedNodes && activeNodeId) {
+          return connectedNodeIds.has(d.id) ? 1 : 0.42;
+        }
         if (!isHoverMode) return 1;
         return connectedNodeIds.has(d.id) ? 1 : 0.42;
       });
@@ -563,7 +569,7 @@ export default function BubbleMap({
       .style("display", (d) => {
         const srcId = d.source?.id ?? d.source;
         const tgtId = d.target?.id ?? d.target;
-        return !isSelectionMode ||
+        return !shouldHideUnrelatedNodes ||
           srcId === activeNodeId ||
           tgtId === activeNodeId
           ? null
@@ -600,6 +606,7 @@ export default function BubbleMap({
     linkBase,
     linkWidthActive,
     linkWidthBase,
+    preserveUnconnectedNodes,
   ]);
 
   return (
