@@ -107,7 +107,6 @@ const MAPS_API_BASE_URL =
 const DEFAULT_MAPS_API_TOKEN_SYMBOL = (
   parseEnvString("REACT_APP_MAPS_API_TOKEN_SYMBOL", "SOUL") || "SOUL"
 ).toUpperCase();
-const MAPS_API_ROOT_ADDRESS = parseEnvString("REACT_APP_MAPS_API_ROOT_ADDRESS");
 const MAPS_API_GRAPH_DEPTH = parseEnvInt("REACT_APP_MAPS_API_GRAPH_DEPTH", 2);
 const MAPS_API_GRAPH_EDGE_LIMIT = parseEnvInt(
   "REACT_APP_MAPS_API_GRAPH_EDGE_LIMIT",
@@ -116,6 +115,10 @@ const MAPS_API_GRAPH_EDGE_LIMIT = parseEnvInt(
 const MAPS_API_GRAPH_NODE_LIMIT = parseEnvInt(
   "REACT_APP_MAPS_API_GRAPH_NODE_LIMIT",
   300,
+);
+const MAPS_API_GRAPH_TOP_HOLDERS_LIMIT = parseEnvInt(
+  "REACT_APP_MAPS_API_GRAPH_TOP_HOLDERS_LIMIT",
+  100,
 );
 const MAPS_API_REQUEST_TIMEOUT_MS = parseEnvMs(
   "REACT_APP_MAPS_API_REQUEST_TIMEOUT_MS",
@@ -1160,9 +1163,7 @@ export default function App() {
   const [blockSyncTargetHeight, setBlockSyncTargetHeight] = useState(null);
   const [blockSyncUpdatedAt, setBlockSyncUpdatedAt] = useState(null);
   const [searchQuery, setSearchQuery] = useState("");
-  const [searchedRootAddress, setSearchedRootAddress] = useState(
-    MAPS_API_ROOT_ADDRESS || "",
-  );
+  const [searchedRootAddress, setSearchedRootAddress] = useState("");
   const [graphEdgeLimit, setGraphEdgeLimit] = useState(
     MAPS_API_GRAPH_EDGE_LIMIT,
   );
@@ -1176,7 +1177,7 @@ export default function App() {
   });
   const [isConnectionsView, setIsConnectionsView] = useState(false);
   const activeGraphRootAddress = useMemo(
-    () => String(searchedRootAddress || MAPS_API_ROOT_ADDRESS || "").trim(),
+    () => String(searchedRootAddress || "").trim(),
     [searchedRootAddress],
   );
   const [colorTheme, setColorTheme] = useState(() => {
@@ -1262,7 +1263,7 @@ export default function App() {
 
     previousSelectedTokenSymbolRef.current = selectedTokenSymbol;
     setSearchQuery("");
-    setSearchedRootAddress(MAPS_API_ROOT_ADDRESS || "");
+    setSearchedRootAddress("");
     setIsConnectionsView(false);
     setActiveHolderTypeFilter("");
     setSelectedNode(null);
@@ -1368,7 +1369,7 @@ export default function App() {
 
     if (!value) {
       setSearchQuery("");
-      setSearchedRootAddress(MAPS_API_ROOT_ADDRESS || "");
+      setSearchedRootAddress("");
       setIsConnectionsView(false);
       return;
     }
@@ -1384,7 +1385,7 @@ export default function App() {
       return;
     }
 
-    setSearchedRootAddress(MAPS_API_ROOT_ADDRESS || "");
+    setSearchedRootAddress("");
     setIsConnectionsView(false);
     setSearchQuery(value);
   }
@@ -1408,7 +1409,7 @@ export default function App() {
     setHoveredNode(null);
     setSelectedNode(null);
     closeTransfersModal();
-    setSearchedRootAddress(MAPS_API_ROOT_ADDRESS || "");
+    setSearchedRootAddress("");
     setIsConnectionsView(false);
   }
 
@@ -1418,9 +1419,7 @@ export default function App() {
       return;
     }
 
-    const nextRootAddress = String(
-      searchedRootAddress || MAPS_API_ROOT_ADDRESS || "",
-    ).trim();
+    const nextRootAddress = String(searchedRootAddress || "").trim();
 
     pendingMobileFitKeyRef.current = [
       selectedTokenSymbol,
@@ -1635,10 +1634,17 @@ export default function App() {
         MAPS_API_BASE_URL,
         selectedTokenSymbol,
         {
-          rootAddress: activeGraphRootAddress || MAPS_API_ROOT_ADDRESS || "",
+          rootAddress: activeGraphRootAddress || "",
           depth: MAPS_API_GRAPH_DEPTH,
           edgeLimit: effectiveGraphEdgeLimit,
           defaultEdgeLimit: MAPS_API_GRAPH_EDGE_LIMIT,
+          includeTopHolders:
+            !isConnectionsView &&
+            !String(searchedRootAddress || "").trim() &&
+            !String(activeGraphRootAddress || "").trim() &&
+            isGraphMaxModeEnabled
+              ? MAPS_API_GRAPH_TOP_HOLDERS_LIMIT
+              : 0,
         },
       );
       const result = await fetchJsonWithTimeout(
@@ -1690,15 +1696,20 @@ export default function App() {
       const graphDecimals = apiTokenInfo?.decimals ?? 0;
       const mappedGraph = buildGraphDataFromApi(result.payload, graphDecimals);
 
-      const shouldApplyTopHoldersSeed =
-        !isGraphMaxModeEnabled &&
+      const isTopLevelTokenGraph =
         !isConnectionsView &&
         !String(searchedRootAddress || "").trim() &&
         !String(activeGraphRootAddress || "").trim();
+
+      const shouldFetchTopHolders =
+        isTopLevelTokenGraph && !isGraphMaxModeEnabled;
+
+      const shouldApplyTopHoldersSeed = shouldFetchTopHolders;
+
       let seededGraph = null;
       let topHoldersForSummary = [];
 
-      if (shouldApplyTopHoldersSeed) {
+      if (shouldFetchTopHolders) {
         try {
           const topHoldersResult = await fetchTopHoldersFromApi(
             MAPS_API_BASE_URL,
@@ -1710,45 +1721,47 @@ export default function App() {
             ? topHoldersResult.items
             : [];
 
-          const topHolderAddresses = topHoldersResult.items
-            .map((item) => String(item?.address || "").trim())
-            .filter(Boolean);
+          if (shouldApplyTopHoldersSeed) {
+            const topHolderAddresses = topHoldersResult.items
+              .map((item) => String(item?.address || "").trim())
+              .filter(Boolean);
 
-          const connectionPayloads = await Promise.all(
-            topHolderAddresses.map(async (address) => {
-              try {
-                const result = await fetchConnectionsForAddressFromApi(
-                  MAPS_API_BASE_URL,
-                  MAPS_API_REQUEST_TIMEOUT_MS,
-                  address,
-                  selectedTokenSymbol,
-                );
+            const connectionPayloads = await Promise.all(
+              topHolderAddresses.map(async (address) => {
+                try {
+                  const result = await fetchConnectionsForAddressFromApi(
+                    MAPS_API_BASE_URL,
+                    MAPS_API_REQUEST_TIMEOUT_MS,
+                    address,
+                    selectedTokenSymbol,
+                  );
 
-                return {
-                  address,
-                  items: result.items,
-                };
-              } catch {
-                return {
-                  address,
-                  items: [],
-                };
-              }
-            }),
-          );
+                  return {
+                    address,
+                    items: result.items,
+                  };
+                } catch {
+                  return {
+                    address,
+                    items: [],
+                  };
+                }
+              }),
+            );
 
-          seededGraph = buildTopHoldersConnectionsGraph({
-            topHolders: topHoldersResult.items,
-            connectionsByAddress: connectionPayloads,
-            fallbackGraph: mappedGraph,
-            currentSupply: mappedGraph?.totalSupply || 0,
-            decimals: graphDecimals,
-          });
+            seededGraph = buildTopHoldersConnectionsGraph({
+              topHolders: topHoldersResult.items,
+              connectionsByAddress: connectionPayloads,
+              fallbackGraph: mappedGraph,
+              currentSupply: mappedGraph?.totalSupply || 0,
+              decimals: graphDecimals,
+            });
+          }
         } catch {
           seededGraph = null;
         }
 
-        if (!seededGraph) {
+        if (!seededGraph && shouldApplyTopHoldersSeed) {
           seededGraph = buildTopHoldersGraph(mappedGraph, 10);
         }
       }
@@ -1836,7 +1849,7 @@ export default function App() {
         !isConnectionsView && !String(activeGraphRootAddress || "").trim();
 
       const summaryBaseNodes =
-        shouldApplyTopHoldersSeed && Array.isArray(mappedGraph?.nodes)
+        shouldFetchTopHolders && Array.isArray(mappedGraph?.nodes)
           ? [
               ...mappedGraph.nodes,
               ...(Array.isArray(baseGraph?.nodes) ? baseGraph.nodes : []),
@@ -1844,7 +1857,7 @@ export default function App() {
           : focusedGraph.nodes;
 
       const mergedSummaryNodes =
-        shouldApplyTopHoldersSeed && Array.isArray(mappedGraph?.nodes)
+        shouldFetchTopHolders && Array.isArray(mappedGraph?.nodes)
           ? mergeSummaryNodesWithTopHolders(
               summaryBaseNodes,
               topHoldersForSummary,
@@ -1920,6 +1933,7 @@ export default function App() {
     activeGraphRootAddress,
     apiTokenInfo?.decimals,
     graphEdgeLimit,
+    graphNodeLimit,
     isGraphMaxModeEnabled,
     isConnectionsView,
     searchedRootAddress,
@@ -2162,11 +2176,13 @@ export default function App() {
       ? activeGraphRootAddress
       : "";
 
+    // For legend-scoped graphs, include all edges to maximize connectivity
+    // since the node set is already reduced by type filter
     return limitGraphForDisplay(
       scopedNodes,
       scopedLinks,
       effectiveGraphNodeLimit,
-      effectiveGraphEdgeLimit,
+      scopedLinks.length || effectiveGraphEdgeLimit,
       scopedRootAddress,
     );
   }, [
@@ -2961,6 +2977,7 @@ export default function App() {
             selectedNodeId={selectedNode?.id}
             currentSupply={currentSupplyBase}
             colorTheme={colorTheme}
+            preserveUnconnectedNodes={isTokenGraphMaxModeActive}
             onReady={(actions) => {
               bubbleMapActionsRef.current = actions;
             }}

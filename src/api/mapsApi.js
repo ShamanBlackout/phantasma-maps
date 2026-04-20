@@ -22,7 +22,13 @@ export function createTopHoldersEndpoint(baseUrl, tokenSymbol, limit = 10) {
 export function createGraphEndpoint(
   baseUrl,
   tokenSymbol,
-  { rootAddress = "", depth = 2, edgeLimit = 1200, defaultEdgeLimit = 1200 },
+  {
+    rootAddress = "",
+    depth = 2,
+    edgeLimit = 1200,
+    defaultEdgeLimit = 1200,
+    includeTopHolders = 0,
+  },
 ) {
   const base = baseUrl.replace(/\/+$/, "");
   const activeRootAddress = String(rootAddress || "").trim();
@@ -41,7 +47,20 @@ export function createGraphEndpoint(
     return `${base}/graph/address/${encodeURIComponent(activeRootAddress)}?${params.toString()}`;
   }
 
-  return `${base}/graph/token/${encodeURIComponent(tokenSymbol)}`;
+  const normalizedIncludeTopHolders =
+    Number.isFinite(Number(includeTopHolders)) && Number(includeTopHolders) > 0
+      ? Math.floor(Number(includeTopHolders))
+      : 0;
+  const params = new URLSearchParams();
+
+  if (normalizedIncludeTopHolders > 0) {
+    params.set("includeTopHolders", String(normalizedIncludeTopHolders));
+  }
+
+  const query = params.toString();
+  return query
+    ? `${base}/graph/token/${encodeURIComponent(tokenSymbol)}?${query}`
+    : `${base}/graph/token/${encodeURIComponent(tokenSymbol)}`;
 }
 
 export function createConnectionsEndpoint(baseUrl, address, tokenSymbol) {
