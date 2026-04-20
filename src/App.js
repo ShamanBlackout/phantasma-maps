@@ -159,6 +159,14 @@ function normalizePositiveInteger(value, fallbackValue) {
     : fallbackValue;
 }
 
+function getLinkEndpointId(endpoint) {
+  if (endpoint && typeof endpoint === "object") {
+    return String(endpoint.id || "").trim();
+  }
+
+  return String(endpoint || "").trim();
+}
+
 function clampColorChannel(value) {
   return Math.max(0, Math.min(255, Math.round(value)));
 }
@@ -441,8 +449,8 @@ function buildTopHoldersGraph(graphData, holderLimit = 10) {
   const seededLinks = [];
 
   safeLinks.forEach((link) => {
-    const source = String(link?.source || "").trim();
-    const target = String(link?.target || "").trim();
+    const source = getLinkEndpointId(link?.source);
+    const target = getLinkEndpointId(link?.target);
     if (!source || !target) return;
 
     if (seedHolderIds.has(source) || seedHolderIds.has(target)) {
@@ -453,8 +461,8 @@ function buildTopHoldersGraph(graphData, holderLimit = 10) {
   });
 
   const visibleLinks = safeLinks.filter((link) => {
-    const source = String(link?.source || "").trim();
-    const target = String(link?.target || "").trim();
+    const source = getLinkEndpointId(link?.source);
+    const target = getLinkEndpointId(link?.target);
     return visibleNodeIds.has(source) && visibleNodeIds.has(target);
   });
   const visibleNodes = safeNodes.filter((node) => visibleNodeIds.has(node.id));
@@ -685,8 +693,8 @@ function limitGraphForDisplay(
   const limitedNodes = safeNodes.filter((node) => allowedNodeIds.has(node.id));
   const fullyLimitedLinks = limitedLinks.filter(
     (link) =>
-      allowedNodeIds.has(String(link?.source || "").trim()) &&
-      allowedNodeIds.has(String(link?.target || "").trim()),
+      allowedNodeIds.has(getLinkEndpointId(link?.source)) &&
+      allowedNodeIds.has(getLinkEndpointId(link?.target)),
   );
 
   return {
@@ -1701,12 +1709,15 @@ export default function App() {
         !String(searchedRootAddress || "").trim() &&
         !String(activeGraphRootAddress || "").trim();
 
-      const shouldFetchTopHolders =
-        isTopLevelTokenGraph && !isGraphMaxModeEnabled;
+      const shouldFetchTopHolders = isTopLevelTokenGraph;
 
-      const shouldApplyTopHoldersSeed = shouldFetchTopHolders;
+      const shouldApplyTopHoldersSeed =
+        shouldFetchTopHolders && !isGraphMaxModeEnabled;
+      const shouldEnrichMaxModeConnections =
+        shouldFetchTopHolders && isGraphMaxModeEnabled;
 
       let seededGraph = null;
+      let maxModeConnectionGraph = null;
       let topHoldersForSummary = [];
 
       if (shouldFetchTopHolders) {
@@ -1721,7 +1732,7 @@ export default function App() {
             ? topHoldersResult.items
             : [];
 
-          if (shouldApplyTopHoldersSeed) {
+          if (shouldApplyTopHoldersSeed || shouldEnrichMaxModeConnections) {
             const topHolderAddresses = topHoldersResult.items
               .map((item) => String(item?.address || "").trim())
               .filter(Boolean);
@@ -1749,16 +1760,24 @@ export default function App() {
               }),
             );
 
-            seededGraph = buildTopHoldersConnectionsGraph({
+            const topHolderConnectionsGraph = buildTopHoldersConnectionsGraph({
               topHolders: topHoldersResult.items,
               connectionsByAddress: connectionPayloads,
               fallbackGraph: mappedGraph,
               currentSupply: mappedGraph?.totalSupply || 0,
               decimals: graphDecimals,
             });
+
+            if (shouldApplyTopHoldersSeed) {
+              seededGraph = topHolderConnectionsGraph;
+            }
+            if (shouldEnrichMaxModeConnections) {
+              maxModeConnectionGraph = topHolderConnectionsGraph;
+            }
           }
         } catch {
           seededGraph = null;
+          maxModeConnectionGraph = null;
         }
 
         if (!seededGraph && shouldApplyTopHoldersSeed) {
@@ -1849,11 +1868,13 @@ export default function App() {
         !isConnectionsView && !String(activeGraphRootAddress || "").trim();
 
       const summaryBaseNodes =
-        shouldFetchTopHolders && Array.isArray(mappedGraph?.nodes)
-          ? [
-              ...mappedGraph.nodes,
-              ...(Array.isArray(baseGraph?.nodes) ? baseGraph.nodes : []),
-            ]
+        isTopLevelTokenGraph && Array.isArray(mappedGraph?.nodes)
+          ? shouldApplyTopHoldersSeed
+            ? [
+                ...mappedGraph.nodes,
+                ...(Array.isArray(baseGraph?.nodes) ? baseGraph.nodes : []),
+              ]
+            : mappedGraph.nodes
           : focusedGraph.nodes;
 
       const mergedSummaryNodes =
@@ -1864,6 +1885,46 @@ export default function App() {
               graphDecimals,
             )
           : summaryBaseNodes;
+
+      const resolvedMapLinks =
+        isTopLevelTokenGraph &&
+        isGraphMaxModeEnabled &&
+        Array.isArray(mappedGraph?.links) &&
+        Array.isArray(mappedGraph?.nodes) &&
+        Array.isArray(maxModeConnectionGraph?.links)
+          ? (() => {
+              const mappedNodeIds = new Set(
+                mappedGraph.nodes.map((node) => String(node?.id || "").trim()),
+              );
+              const mergedLinksByKey = new Map();
+
+              function appendLinks(links) {
+                (Array.isArray(links) ? links : []).forEach((link) => {
+                  const source = getLinkEndpointId(link?.source);
+                  const target = getLinkEndpointId(link?.target);
+                  if (!source || !target) return;
+                  if (
+                    !mappedNodeIds.has(source) ||
+                    !mappedNodeIds.has(target)
+                  ) {
+                    return;
+                  }
+                  const key = `${source}->${target}`;
+                  if (!mergedLinksByKey.has(key)) {
+                    mergedLinksByKey.set(key, {
+                      source,
+                      target,
+                    });
+                  }
+                });
+              }
+
+              appendLinks(mappedGraph.links);
+              appendLinks(maxModeConnectionGraph.links);
+
+              return [...mergedLinksByKey.values()];
+            })()
+          : focusedGraph.links;
 
       if (shouldTrackOverallMaxStats) {
         const mappedLinkCount = Array.isArray(mappedGraph?.links)
@@ -1883,7 +1944,7 @@ export default function App() {
 
       setMapNodes(focusedGraph.nodes);
       setSummaryNodes(mergedSummaryNodes);
-      setMapLinks(focusedGraph.links);
+      setMapLinks(resolvedMapLinks);
       setMapLoadingProgress(94);
       // Prefer the API's explicit totalSupply; fall back to discovered sum.
       setTrackedTokenSupply(
@@ -2100,43 +2161,78 @@ export default function App() {
       applyCurrentSupplyToNodes(summaryNodes, activeTokenInfo.currentSupply),
     [summaryNodes, activeTokenInfo.currentSupply],
   );
+  const shouldUseSummaryNodesForLegendScope =
+    !isConnectionsView && !String(activeGraphRootAddress || "").trim();
+  const legendScopeNodes = shouldUseSummaryNodesForLegendScope
+    ? displaySummaryNodes
+    : displayNodes;
   const maxModeScopeGraph = useMemo(() => {
     if (!activeHolderTypeFilter) {
       return {
-        nodes: displayNodes,
+        nodes: legendScopeNodes,
         links: mapLinks,
       };
     }
 
-    const scopedNodes = displayNodes.filter(
+    const scopedNodes = legendScopeNodes.filter(
       (node) => String(node?.type || "minor") === activeHolderTypeFilter,
     );
     const scopedNodeIds = new Set(scopedNodes.map((node) => node.id));
     const scopedLinks = mapLinks.filter(
       (link) =>
-        scopedNodeIds.has(String(link?.source || "").trim()) &&
-        scopedNodeIds.has(String(link?.target || "").trim()),
+        scopedNodeIds.has(getLinkEndpointId(link?.source)) &&
+        scopedNodeIds.has(getLinkEndpointId(link?.target)),
     );
 
     return {
       nodes: scopedNodes,
       links: scopedLinks,
     };
-  }, [activeHolderTypeFilter, displayNodes, mapLinks]);
+  }, [activeHolderTypeFilter, legendScopeNodes, mapLinks]);
 
   const isTokenGraphMaxModeActive = isGraphMaxModeEnabled;
+  // In max mode during normal token view, use summary nodes to show all wallets
+  const maxModeNodeSource = useMemo(() => {
+    if (!isTokenGraphMaxModeActive || !shouldUseSummaryNodesForLegendScope) {
+      return displayNodes;
+    }
+    return displaySummaryNodes;
+  }, [
+    isTokenGraphMaxModeActive,
+    shouldUseSummaryNodesForLegendScope,
+    displaySummaryNodes,
+    displayNodes,
+  ]);
+
+  // For max mode, gather all edges that connect nodes in the summary pool
+  const maxModeLinks = useMemo(() => {
+    if (!isTokenGraphMaxModeActive || !shouldUseSummaryNodesForLegendScope) {
+      return mapLinks;
+    }
+    const maxModeNodeIds = new Set(maxModeNodeSource.map((n) => n.id));
+    return mapLinks.filter(
+      (link) =>
+        maxModeNodeIds.has(getLinkEndpointId(link?.source)) &&
+        maxModeNodeIds.has(getLinkEndpointId(link?.target)),
+    );
+  }, [
+    isTokenGraphMaxModeActive,
+    shouldUseSummaryNodesForLegendScope,
+    maxModeNodeSource,
+    mapLinks,
+  ]);
   const effectiveGraphNodeLimit = isTokenGraphMaxModeActive
-    ? displayNodes.length
+    ? maxModeNodeSource.length
     : graphNodeLimit;
   const effectiveGraphEdgeLimit = isTokenGraphMaxModeActive
-    ? mapLinks.length
+    ? maxModeLinks.length
     : graphEdgeLimit;
 
   const limitedDisplayGraph = useMemo(
     () =>
       limitGraphForDisplay(
-        displayNodes,
-        mapLinks,
+        isTokenGraphMaxModeActive ? maxModeNodeSource : displayNodes,
+        isTokenGraphMaxModeActive ? maxModeLinks : mapLinks,
         effectiveGraphNodeLimit,
         effectiveGraphEdgeLimit,
         activeGraphRootAddress,
@@ -2146,7 +2242,10 @@ export default function App() {
       displayNodes,
       effectiveGraphEdgeLimit,
       effectiveGraphNodeLimit,
+      isTokenGraphMaxModeActive,
       mapLinks,
+      maxModeLinks,
+      maxModeNodeSource,
     ],
   );
 
@@ -2155,7 +2254,7 @@ export default function App() {
       return limitedDisplayGraph;
     }
 
-    const scopedNodes = displayNodes.filter(
+    const scopedNodes = legendScopeNodes.filter(
       (node) => String(node?.type || "minor") === activeHolderTypeFilter,
     );
 
@@ -2169,8 +2268,8 @@ export default function App() {
     const scopedNodeIds = new Set(scopedNodes.map((node) => node.id));
     const scopedLinks = mapLinks.filter(
       (link) =>
-        scopedNodeIds.has(String(link?.source || "").trim()) &&
-        scopedNodeIds.has(String(link?.target || "").trim()),
+        scopedNodeIds.has(getLinkEndpointId(link?.source)) &&
+        scopedNodeIds.has(getLinkEndpointId(link?.target)),
     );
     const scopedRootAddress = scopedNodeIds.has(activeGraphRootAddress)
       ? activeGraphRootAddress
@@ -2188,7 +2287,7 @@ export default function App() {
   }, [
     activeGraphRootAddress,
     activeHolderTypeFilter,
-    displayNodes,
+    legendScopeNodes,
     effectiveGraphEdgeLimit,
     effectiveGraphNodeLimit,
     limitedDisplayGraph,
@@ -2212,7 +2311,9 @@ export default function App() {
   const filteredLinks = useMemo(() => {
     const ids = new Set(filteredNodes.map((n) => n.id));
     return legendScopedDisplayGraph.links.filter(
-      (link) => ids.has(link.source) && ids.has(link.target),
+      (link) =>
+        ids.has(getLinkEndpointId(link.source)) &&
+        ids.has(getLinkEndpointId(link.target)),
     );
   }, [filteredNodes, legendScopedDisplayGraph.links]);
 
@@ -2284,13 +2385,13 @@ export default function App() {
 
   useEffect(() => {
     if (!activeHolderTypeFilter) return;
-    const hasMatchingType = displayNodes.some(
+    const hasMatchingType = legendScopeNodes.some(
       (node) => String(node?.type || "minor") === activeHolderTypeFilter,
     );
     if (!hasMatchingType) {
       setActiveHolderTypeFilter("");
     }
-  }, [activeHolderTypeFilter, displayNodes]);
+  }, [activeHolderTypeFilter, legendScopeNodes]);
 
   function handleGraphSettingsApply(nextSettings) {
     const useMaxMode = nextSettings?.useMaxMode === true;
@@ -2957,12 +3058,16 @@ export default function App() {
         availableNodeCount={
           isConnectionsView
             ? maxModeScopeGraph.nodes.length
-            : overallMaxGraphStats.wallets
+            : activeHolderTypeFilter
+              ? maxModeScopeGraph.nodes.length
+              : overallMaxGraphStats.wallets
         }
         availableEdgeCount={
           isConnectionsView
             ? maxModeScopeGraph.links.length
-            : overallMaxGraphStats.connections
+            : activeHolderTypeFilter
+              ? maxModeScopeGraph.links.length
+              : overallMaxGraphStats.connections
         }
         renderedNodeCount={filteredNodes.length}
         renderedEdgeCount={filteredLinks.length}
