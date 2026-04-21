@@ -58,7 +58,7 @@ body,
   flex-direction: column;
   height: 100vh;
   height: 100dvh;
-  width: 100vw;
+  width: 100%;
   overflow: hidden;
   background:
     radial-gradient(
@@ -4615,27 +4615,37 @@ body,
       opacity: 1;
     }
   }
+  html,
+  body,
+  #root {
+    height: auto;
+    min-height: 100%;
+  }
+
   body {
-    overflow: auto;
+    overflow-x: hidden;
+    overflow-y: auto;
   }
 
   .app-root {
     width: 100%;
-    overflow: auto;
+    min-height: 100dvh;
+    height: auto;
+    overflow-x: hidden;
+    overflow-y: auto;
   }
 
   .header {
-    height: auto;
     min-height: 54px;
     padding: 8px 10px;
     gap: 8px;
+    align-items: center;
     flex-wrap: wrap;
-    align-content: center;
   }
 
   .header-logo {
-    order: 1;
     gap: 6px;
+    flex: 0 0 auto;
   }
 
   .header-logo-icon {
@@ -4647,19 +4657,28 @@ body,
     font-size: 14px;
   }
 
-  .header-search-input {
-    font-size: 12px;
-    padding: 6px 0;
+  .header-meta {
+    flex: 1 1 auto;
+    min-width: 0;
+    margin-left: auto;
+    gap: 6px;
+    justify-content: flex-end;
+    align-items: center;
+    flex-wrap: wrap;
   }
 
   .header-sync {
-    min-width: 160px;
+    order: 10;
+    width: 100%;
+    min-width: 0;
     padding: 6px 10px;
     gap: 6px;
+    justify-content: space-between;
   }
 
   .header-sync-heading {
     gap: 4px;
+    flex-wrap: wrap;
   }
 
   .header-sync-label {
@@ -4669,47 +4688,12 @@ body,
   .header-sync-value {
     font-size: 12px;
     padding: 2px 6px;
-  }
-
-  .header-sync-updated {
-    font-size: 9px;
-  }
-
-  .header-meta {
-    order: 2;
-    margin-left: 0;
-    gap: 6px;
-    flex: 0 1 auto;
-    width: auto;
-    justify-content: flex-start;
-    align-items: center;
-    flex-wrap: nowrap;
-  }
-
-  .header-sync {
-    order: 1;
-    flex: 1 0 auto;
-    width: auto;
-    min-width: 0;
-    justify-content: flex-start;
-    flex-wrap: nowrap;
-    gap: 6px;
-    padding: 6px 10px;
-    margin-right: auto;
-  }
-
-  .header-sync-heading {
-    flex-wrap: nowrap;
-  }
-
-  .header-sync-value {
     max-width: 100%;
     overflow-wrap: anywhere;
   }
 
   .header-sync-updated {
-    width: auto;
-    text-align: right;
+    font-size: 9px;
     display: none;
   }
 
@@ -4718,22 +4702,19 @@ body,
   }
 
   .header-theme {
-    order: 2;
-    display: flex;
+    display: inline-flex;
     align-items: center;
     gap: 6px;
-    min-width: 100px;
+    min-width: 94px;
   }
 
   .header-theme-select {
     font-size: 11px;
     padding: 4px 8px;
-    flex: 1;
+    min-width: 0;
   }
 
   .header-settings {
-    order: 3;
-    margin-left: auto;
     max-width: 100%;
   }
 
@@ -4746,13 +4727,13 @@ body,
     text-overflow: ellipsis;
   }
 
-  .header-theme-select {
-    font-size: 10px;
-    padding: 3px 7px;
-  }
-
   .header-settings-stats {
     grid-template-columns: 1fr;
+  }
+
+  .header-settings-popout {
+    border-radius: 12px;
+    padding: 12px;
   }
 
   .header-settings-max-mode {
@@ -4770,7 +4751,6 @@ body,
   }
 
   .header-price {
-    order: 4;
     font-size: 11px;
     gap: 4px;
     margin-left: 0;
@@ -4794,11 +4774,16 @@ body,
   }
 
   .header-search {
-    order: 10;
+    order: 20;
     flex: 1 1 100%;
     max-width: none;
     width: 100%;
     margin-top: 6px;
+  }
+
+  .header-search-input {
+    font-size: 12px;
+    padding: 6px 0;
   }
 
   .header-search-btn {
@@ -4973,9 +4958,9 @@ body,
 /* ── Small Phones ────────────────────────────────────────────────────────── */
 @media (max-width: 420px) {
   .header {
-    min-height: 48px;
-    padding: 5px 6px;
-    gap: 4px;
+    min-height: 50px;
+    padding: 6px 8px;
+    gap: 6px;
   }
 
   .header-logo-icon {
@@ -4988,11 +4973,11 @@ body,
   }
 
   .header-meta {
-    gap: 4px;
+    gap: 6px;
   }
 
   .header-sync {
-    min-width: 120px;
+    min-width: 0;
     padding: 4px 6px;
     gap: 4px;
   }
@@ -5030,7 +5015,7 @@ body,
 
   .header-search-btn {
     font-size: 10px;
-    padding: 4px 6px;
+    padding: 4px 8px;
   }
 
   .header-price {
@@ -5052,8 +5037,8 @@ body,
   }
 
   .header-theme-select {
-    font-size: 9px;
-    padding: 2px 5px;
+    font-size: 10px;
+    padding: 3px 6px;
   }
 
   .header-settings-trigger {
