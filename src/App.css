@@ -4797,14 +4797,15 @@ body,
 
   .map-area {
     flex: 0 0 auto;
-    min-height: 52vh;
-    max-height: 58vh;
+    height: clamp(320px, 52svh, 500px);
+    min-height: 320px;
+    max-height: none;
     border-bottom: 1px solid rgba(100, 140, 255, 0.06);
   }
 
   .bubble-map-shell,
   .bubble-map-shell svg {
-    touch-action: none;
+    touch-action: pan-y pinch-zoom;
   }
 
   .map-hint {
@@ -5052,7 +5053,8 @@ body,
   }
 
   .map-area {
-    min-height: 48vh;
+    height: clamp(280px, 48svh, 420px);
+    min-height: 280px;
   }
 
   .stats-token-name {
