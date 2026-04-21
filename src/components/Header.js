@@ -50,13 +50,38 @@ export default function Header({
 
       const viewportWidth = window.innerWidth;
       const viewportHeight = window.innerHeight;
-      const desiredWidth = Math.min(320, viewportWidth - 24);
+      const isMobileViewport = viewportWidth <= 768;
+
+      if (isMobileViewport) {
+        const mobileInset = 10;
+        const maxHeight = Math.max(220, viewportHeight - mobileInset * 2);
+
+        setSettingsPopoverStyle({
+          left: `${mobileInset}px`,
+          top: `${mobileInset}px`,
+          width: `${Math.max(240, viewportWidth - mobileInset * 2)}px`,
+          maxHeight: `${maxHeight}px`,
+        });
+        return;
+      }
+
+      const sideInset = 12;
+      const topInset = 8;
+      const bottomInset = 12;
+      const desiredWidth = Math.min(320, viewportWidth - sideInset * 2);
       const left = Math.min(
-        Math.max(12, triggerRect.right - desiredWidth),
-        Math.max(12, viewportWidth - desiredWidth - 12),
+        Math.max(sideInset, triggerRect.right - desiredWidth),
+        Math.max(sideInset, viewportWidth - desiredWidth - sideInset),
       );
-      const top = Math.min(triggerRect.bottom + 10, viewportHeight - 24);
-      const maxHeight = Math.max(220, viewportHeight - top - 12);
+      const maxHeight = Math.min(
+        560,
+        Math.max(220, viewportHeight - topInset - bottomInset),
+      );
+      const topPreferred = triggerRect.bottom + 10;
+      const top = Math.min(
+        Math.max(topInset, topPreferred),
+        Math.max(topInset, viewportHeight - maxHeight - bottomInset),
+      );
 
       setSettingsPopoverStyle({
         left: `${left}px`,
