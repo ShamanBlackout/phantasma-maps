@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 
 export default function Header({
   onSearch,
+  searchInputValue,
   tokenInfo,
   priceUpdatedAt,
   blockSyncHeight,
@@ -40,6 +41,11 @@ export default function Header({
     setDraftEdgeLimit(String(graphEdgeLimit));
     setDraftNodeLimit(String(graphNodeLimit));
   }, [graphEdgeLimit, graphNodeLimit, isSettingsOpen]);
+
+  useEffect(() => {
+    const normalizedSearchValue = String(searchInputValue || "");
+    setInput(normalizedSearchValue);
+  }, [searchInputValue]);
 
   useEffect(() => {
     if (!isSettingsOpen) return undefined;

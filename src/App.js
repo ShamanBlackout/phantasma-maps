@@ -722,7 +722,6 @@ function buildConnectionsGraphFromConnections(
   );
   const nodeStats = new Map();
   const nodeTransactionCounts = new Map();
-  const nodeVolumes = new Map();
 
   function ensureNodeStats(nodeId) {
     if (!nodeStats.has(nodeId)) {
@@ -732,10 +731,6 @@ function buildConnectionsGraphFromConnections(
       });
     }
     return nodeStats.get(nodeId);
-  }
-
-  function addNodeVolume(nodeId, amount) {
-    nodeVolumes.set(nodeId, (nodeVolumes.get(nodeId) || 0) + amount);
   }
 
   function addNodeTransactionCount(nodeId, count) {
@@ -774,7 +769,6 @@ function buildConnectionsGraphFromConnections(
     nodeIds.add(counterparty);
     ensureNodeStats(counterparty).receivedTransactions += transactionCount;
     addNodeTransactionCount(counterparty, transactionCount);
-    addNodeVolume(counterparty, volume);
     rootTransactionCount += transactionCount;
   });
 
@@ -783,16 +777,11 @@ function buildConnectionsGraphFromConnections(
   ensureNodeStats(normalizedRoot).sentTransactions = rootTransactionCount;
   ensureNodeStats(normalizedRoot).receivedTransactions = rootTransactionCount;
   nodeTransactionCounts.set(normalizedRoot, rootTransactionCount);
-  addNodeVolume(normalizedRoot, nodeVolumes.get(normalizedRoot) || 0);
 
   const baseNodes = [...nodeIds].map((nodeId) => {
     const fallbackNode = fallbackNodeById.get(nodeId);
-    const volume = nodeVolumes.get(nodeId) || 0;
     const knownValue = Number(fallbackNode?.value);
-    const value =
-      Number.isFinite(knownValue) && knownValue > 0
-        ? knownValue
-        : Math.max(volume, 1);
+    const value = Number.isFinite(knownValue) ? Math.max(knownValue, 0) : 0;
     const pct =
       Number.isFinite(currentSupply) && currentSupply > 0
         ? (value / currentSupply) * 100
@@ -818,7 +807,7 @@ function buildConnectionsGraphFromConnections(
 
   const counterpartyVisualValues = baseNodes
     .filter((node) => node.id !== normalizedRoot)
-    .map((node) => Math.max(nodeVolumes.get(node.id) || node.value || 1, 1));
+    .map((node) => Math.max(node.value || 1, 1));
   const maxCounterpartyVisual = counterpartyVisualValues.length
     ? Math.max(...counterpartyVisualValues)
     : 1;
@@ -827,16 +816,13 @@ function buildConnectionsGraphFromConnections(
     if (node.id === normalizedRoot) {
       return {
         ...node,
-        visualValue: Math.max(
-          nodeVolumes.get(node.id) || node.value || 1,
-          maxCounterpartyVisual * 2.1,
-        ),
+        visualValue: Math.max(node.value || 1, maxCounterpartyVisual * 2.1),
       };
     }
 
     return {
       ...node,
-      visualValue: Math.max(nodeVolumes.get(node.id) || node.value || 1, 1),
+      visualValue: Math.max(node.value || 1, 1),
     };
   });
 
@@ -1140,6 +1126,7 @@ export default function App() {
   });
   const previousSelectedTokenSymbolRef = useRef(selectedTokenSymbol);
   const initialNodeIdFromUrlRef = useRef(readUrlParams().nodeId);
+  const initialRootAddressFromUrlRef = useRef(readUrlParams().rootAddress);
   const [apiTokenSymbols, setApiTokenSymbols] = useState([]);
   const [apiTokenInfo, setApiTokenInfo] = useState(null);
   const [trackedTokenSupply, setTrackedTokenSupply] = useState(0);
@@ -1171,7 +1158,9 @@ export default function App() {
   const [blockSyncTargetHeight, setBlockSyncTargetHeight] = useState(null);
   const [blockSyncUpdatedAt, setBlockSyncUpdatedAt] = useState(null);
   const [searchQuery, setSearchQuery] = useState("");
-  const [searchedRootAddress, setSearchedRootAddress] = useState("");
+  const [searchedRootAddress, setSearchedRootAddress] = useState(() =>
+    String(readUrlParams().rootAddress || "").trim(),
+  );
   const [graphEdgeLimit, setGraphEdgeLimit] = useState(
     MAPS_API_GRAPH_EDGE_LIMIT,
   );
@@ -1183,7 +1172,9 @@ export default function App() {
     wallets: 0,
     connections: 0,
   });
-  const [isConnectionsView, setIsConnectionsView] = useState(false);
+  const [isConnectionsView, setIsConnectionsView] = useState(() =>
+    Boolean(String(readUrlParams().rootAddress || "").trim()),
+  );
   const activeGraphRootAddress = useMemo(
     () => String(searchedRootAddress || "").trim(),
     [searchedRootAddress],
@@ -1262,7 +1253,7 @@ export default function App() {
     }
   }, [selectedTokenSymbol]);
 
-  useUrlState(selectedTokenSymbol, selectedNode);
+  useUrlState(selectedTokenSymbol, selectedNode, searchedRootAddress);
 
   useEffect(() => {
     if (previousSelectedTokenSymbolRef.current === selectedTokenSymbol) {
@@ -1666,6 +1657,83 @@ export default function App() {
       if (!isMounted) return;
 
       if (!result.ok) {
+        if (isConnectionsView && activeGraphRootAddress) {
+          try {
+            const connectionsResult = await fetchConnectionsForAddressFromApi(
+              MAPS_API_BASE_URL,
+              MAPS_API_REQUEST_TIMEOUT_MS,
+              activeGraphRootAddress,
+              selectedTokenSymbol,
+            );
+
+            let balanceFallbackGraph = null;
+            const tokenGraphFallbackEndpoint = buildGraphEndpoint(
+              MAPS_API_BASE_URL,
+              selectedTokenSymbol,
+              {
+                rootAddress: "",
+                depth: MAPS_API_GRAPH_DEPTH,
+                edgeLimit: effectiveGraphEdgeLimit,
+                defaultEdgeLimit: MAPS_API_GRAPH_EDGE_LIMIT,
+                includeTopHolders: MAPS_API_GRAPH_TOP_HOLDERS_LIMIT,
+              },
+            );
+            const tokenGraphFallbackResult = await fetchJsonWithTimeout(
+              tokenGraphFallbackEndpoint,
+              { cache: "no-store" },
+              MAPS_API_REQUEST_TIMEOUT_MS,
+            );
+
+            if (tokenGraphFallbackResult.ok) {
+              const graphDecimals = apiTokenInfo?.decimals ?? 0;
+              balanceFallbackGraph = buildGraphDataFromApi(
+                tokenGraphFallbackResult.payload,
+                graphDecimals,
+              );
+            }
+
+            if (!isMounted) return;
+
+            const tableFocusedGraph = buildConnectionsGraphFromConnections(
+              connectionsResult.items,
+              activeGraphRootAddress,
+              balanceFallbackGraph,
+              Number(balanceFallbackGraph?.totalSupply) ||
+                Number(activeTokenInfo?.currentSupply) ||
+                Number(activeTokenInfo?.totalSupply) ||
+                0,
+            );
+
+            if (
+              tableFocusedGraph &&
+              Array.isArray(tableFocusedGraph.nodes) &&
+              tableFocusedGraph.nodes.length
+            ) {
+              setIsUsingMockApiFallback(false);
+              setMapNodes(tableFocusedGraph.nodes);
+              setSummaryNodes(tableFocusedGraph.nodes);
+              setMapLinks(tableFocusedGraph.links);
+              setTrackedTokenSupply(tableFocusedGraph.totalValue || 0);
+
+              if (tableFocusedGraph.rootNodeId) {
+                const focusedRootNode = tableFocusedGraph.nodes.find(
+                  (node) => node.id === tableFocusedGraph.rootNodeId,
+                );
+                setSelectedNode(focusedRootNode || null);
+              }
+
+              setMapDataStatus(
+                `Live graph loaded for ${shortenAddress(activeGraphRootAddress)} [connections-phase:table-only]`,
+              );
+              setMapLoadingProgress(100);
+              setIsMapLoading(false);
+              return;
+            }
+          } catch {
+            // Fall through to status handling below.
+          }
+        }
+
         if (result.status === 0) {
           if (isConnectionsView) {
             setIsUsingMockApiFallback(false);
@@ -1787,7 +1855,7 @@ export default function App() {
 
       const baseGraph = seededGraph || mappedGraph;
       const baseFocusedGraph = isConnectionsView
-        ? buildNeighborFocusedGraph(baseGraph, activeGraphRootAddress)
+        ? baseGraph
         : searchedRootAddress
           ? buildNeighborFocusedGraph(baseGraph, activeGraphRootAddress)
           : baseGraph;
@@ -1992,6 +2060,8 @@ export default function App() {
     };
   }, [
     activeGraphRootAddress,
+    activeTokenInfo?.currentSupply,
+    activeTokenInfo?.totalSupply,
     apiTokenInfo?.decimals,
     graphEdgeLimit,
     graphNodeLimit,
@@ -2190,7 +2260,10 @@ export default function App() {
     };
   }, [activeHolderTypeFilter, legendScopeNodes, mapLinks]);
 
-  const isTokenGraphMaxModeActive = isGraphMaxModeEnabled;
+  const isTokenGraphMaxModeActive =
+    isGraphMaxModeEnabled &&
+    !isConnectionsView &&
+    !String(activeGraphRootAddress || "").trim();
   // In max mode during normal token view, use summary nodes to show all wallets
   const maxModeNodeSource = useMemo(() => {
     if (!isTokenGraphMaxModeActive || !shouldUseSummaryNodesForLegendScope) {
@@ -2341,47 +2414,11 @@ export default function App() {
     ? nodeById.get(hoveredNode.id) || hoveredNode
     : null;
 
-  const selectedNodeVisibleLinkCounts = useMemo(() => {
-    if (!resolvedSelectedNode?.id) {
-      return {
-        sentTransactions: 0,
-        receivedTransactions: 0,
-      };
-    }
-
-    return filteredLinks.reduce(
-      (totals, link) => {
-        if (link.source === resolvedSelectedNode.id) {
-          totals.sentTransactions += 1;
-        }
-        if (link.target === resolvedSelectedNode.id) {
-          totals.receivedTransactions += 1;
-        }
-        return totals;
-      },
-      {
-        sentTransactions: 0,
-        receivedTransactions: 0,
-      },
-    );
-  }, [filteredLinks, resolvedSelectedNode]);
-
   const canShowSelectedNodeConnections = useMemo(() => {
     if (!resolvedSelectedNode?.id) return false;
     if (resolvedSelectedNode.id === activeGraphRootAddress) return false;
-
-    return (
-      Number(resolvedSelectedNode.sentTransactions ?? 0) >
-        selectedNodeVisibleLinkCounts.sentTransactions ||
-      Number(resolvedSelectedNode.receivedTransactions ?? 0) >
-        selectedNodeVisibleLinkCounts.receivedTransactions
-    );
-  }, [
-    activeGraphRootAddress,
-    resolvedSelectedNode,
-    selectedNodeVisibleLinkCounts.receivedTransactions,
-    selectedNodeVisibleLinkCounts.sentTransactions,
-  ]);
+    return true;
+  }, [activeGraphRootAddress, resolvedSelectedNode]);
 
   useEffect(() => {
     if (!activeHolderTypeFilter) return;
@@ -2769,6 +2806,23 @@ export default function App() {
     resetAllTransactionFilters();
   }, [resetAllTransactionFilters]);
 
+  useEffect(() => {
+    const initialRootAddress = String(
+      initialRootAddressFromUrlRef.current || "",
+    ).trim();
+    if (!initialRootAddress) return;
+
+    setSearchQuery("");
+    setActiveHolderTypeFilter("");
+    setHoveredNode(null);
+    setSelectedNode(null);
+    closeTransfersModal();
+    setSearchedRootAddress(initialRootAddress);
+    setIsConnectionsView(true);
+
+    initialRootAddressFromUrlRef.current = null;
+  }, [closeTransfersModal]);
+
   function handleTransactionSortToggle(nextSortBy) {
     if (nextSortBy !== "amount" && nextSortBy !== "time") return;
     setTransactionPage(0);
@@ -3040,6 +3094,7 @@ export default function App() {
     <div className={`app-root theme-${colorTheme}`}>
       <Header
         onSearch={handleHeaderSearch}
+        searchInputValue={isConnectionsView ? searchedRootAddress : searchQuery}
         tokenInfo={activeTokenInfo}
         priceUpdatedAt={priceLastUpdatedAt}
         blockSyncHeight={blockSyncHeight}
