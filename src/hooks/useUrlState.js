@@ -10,16 +10,21 @@ export function readUrlParams() {
     return {
       tokenSymbol: params.get("token")?.toUpperCase() || null,
       nodeId: params.get("node") || null,
+      rootAddress: params.get("address") || null,
     };
   } catch {
-    return { tokenSymbol: null, nodeId: null };
+    return { tokenSymbol: null, nodeId: null, rootAddress: null };
   }
 }
 
 /**
- * Keeps the browser URL in sync with the selected token and node.
+ * Keeps the browser URL in sync with the selected token, node, and root address.
  */
-export default function useUrlState(selectedTokenSymbol, selectedNode) {
+export default function useUrlState(
+  selectedTokenSymbol,
+  selectedNode,
+  rootAddress,
+) {
   useEffect(() => {
     try {
       const params = new URLSearchParams(window.location.search);
@@ -29,9 +34,17 @@ export default function useUrlState(selectedTokenSymbol, selectedNode) {
       } else {
         params.delete("node");
       }
+
+      const normalizedRootAddress = String(rootAddress || "").trim();
+      if (normalizedRootAddress) {
+        params.set("address", normalizedRootAddress);
+      } else {
+        params.delete("address");
+      }
+
       window.history.replaceState(null, "", `?${params.toString()}`);
     } catch {
       // Ignore if history API is unavailable.
     }
-  }, [selectedTokenSymbol, selectedNode]);
+  }, [selectedTokenSymbol, selectedNode, rootAddress]);
 }
