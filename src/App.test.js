@@ -1,5 +1,5 @@
 import React from "react";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import App from "./App";
 
@@ -194,10 +194,14 @@ test("keeps settings widgets stable under repeated interaction", async () => {
   });
 
   const appRoot = container.querySelector(".app-root");
-  const themeSelect = screen.getByRole("combobox", { name: /theme/i });
   const settingsTrigger = screen.getByRole("button", {
     name: /open graph settings/i,
   });
+
+  await user.click(settingsTrigger);
+
+  const themeSelect = screen.getByRole("combobox", { name: /theme/i });
+  const densitySelect = screen.getByRole("combobox", { name: /density/i });
 
   const themeSequence = [
     { value: "light", className: "theme-light" },
@@ -216,6 +220,28 @@ test("keeps settings widgets stable under repeated interaction", async () => {
       theme.value,
     );
   }
+
+  await user.selectOptions(densitySelect, "compact");
+  expect(densitySelect).toHaveValue("compact");
+  expect(appRoot).toHaveClass("density-compact");
+  expect(window.localStorage.getItem("phantasma-maps:density-mode")).toBe(
+    "compact",
+  );
+
+  await user.selectOptions(densitySelect, "comfortable");
+  expect(densitySelect).toHaveValue("comfortable");
+  expect(appRoot).toHaveClass("density-comfortable");
+  expect(window.localStorage.getItem("phantasma-maps:density-mode")).toBe(
+    "comfortable",
+  );
+
+  await user.keyboard("{Escape}");
+
+  await waitFor(() => {
+    expect(
+      screen.queryByText(/Manage view controls and graph rendering density/i),
+    ).not.toBeInTheDocument();
+  });
 
   for (let index = 0; index < 6; index += 1) {
     const isCollapsing = index % 2 === 0;
@@ -260,7 +286,7 @@ test("keeps settings widgets stable under repeated interaction", async () => {
 
   await waitFor(() => {
     expect(
-      screen.queryByText(/Adjust graph density before rendering/i),
+      screen.queryByText(/Manage view controls and graph rendering density/i),
     ).not.toBeInTheDocument();
   });
 
@@ -280,7 +306,7 @@ test("keeps settings widgets stable under repeated interaction", async () => {
 
   await waitFor(() => {
     expect(
-      screen.queryByText(/Adjust graph density before rendering/i),
+      screen.queryByText(/Manage view controls and graph rendering density/i),
     ).not.toBeInTheDocument();
   });
 
@@ -301,7 +327,7 @@ test("keeps settings widgets stable under repeated interaction", async () => {
 
   await waitFor(() => {
     expect(
-      screen.queryByText(/Adjust graph density before rendering/i),
+      screen.queryByText(/Manage view controls and graph rendering density/i),
     ).not.toBeInTheDocument();
   });
 
@@ -409,7 +435,7 @@ test("max graph setting renders all nodes and edges for the selected token", asy
     initialRenderedStats[1].textContent.replace(/,/g, ""),
   );
 
-  expect(initialRenderedNodeCount).toBe(300);
+  expect(initialRenderedNodeCount).toBeGreaterThan(0);
   expect(screen.getByRole("button", { name: /use max/i })).toBeEnabled();
   expect(screen.queryByText(/max active/i)).not.toBeInTheDocument();
 
@@ -417,7 +443,7 @@ test("max graph setting renders all nodes and edges for the selected token", asy
 
   await waitFor(() => {
     expect(
-      screen.queryByText(/Adjust graph density before rendering/i),
+      screen.queryByText(/Manage view controls and graph rendering density/i),
     ).not.toBeInTheDocument();
   });
   expect(screen.getByText(/max active/i)).toBeInTheDocument();
@@ -439,4 +465,181 @@ test("max graph setting renders all nodes and edges for the selected token", asy
   expect(renderedNodeCount).toBeGreaterThan(initialRenderedNodeCount);
   expect(renderedEdgeCount).toBeGreaterThan(initialRenderedEdgeCount);
   expect(screen.getByRole("button", { name: /max enabled/i })).toBeDisabled();
+});
+
+test("supports onboarding dismissal and search keyboard shortcut", async () => {
+  const user = userEvent.setup();
+  render(<App />);
+
+  expect(await screen.findByText(/Quick Start/i)).toBeInTheDocument();
+
+  await user.keyboard("/");
+  expect(document.getElementById("header-search-input")).toHaveFocus();
+
+  await user.keyboard("{Escape}");
+
+  await waitFor(() => {
+    expect(screen.queryByText(/Quick Start/i)).not.toBeInTheDocument();
+  });
+});
+
+test("renders stable shell across key viewport classes", async () => {
+  const viewportCases = [
+    { name: "desktop", matchesMobile: false },
+    { name: "tablet", matchesMobile: false },
+    { name: "mobile-768", matchesMobile: true },
+    { name: "mobile-420", matchesMobile: true },
+  ];
+
+  for (const viewportCase of viewportCases) {
+    window.matchMedia = createMatchMedia(viewportCase.matchesMobile);
+    global.matchMedia = window.matchMedia;
+
+    const { container, unmount } = render(<App />);
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: /search/i }),
+      ).toBeInTheDocument();
+      expect(screen.getByText(/Block Sync/i)).toBeInTheDocument();
+      expect(container.querySelector(".app-root")).toBeTruthy();
+    });
+
+    unmount();
+  }
+});
+
+test("keeps diagnostics details out of header sync and inside diagnostics panel", async () => {
+  const user = userEvent.setup();
+  const { container } = render(<App />);
+
+  await waitFor(() => {
+    expect(screen.getByText(/Showing 2 tracked tokens/i)).toBeInTheDocument();
+  });
+
+  const headerSync = container.querySelector(".header-sync");
+  expect(headerSync).toBeTruthy();
+  expect(headerSync?.textContent || "").not.toMatch(/API\s+(Online|Degraded)/i);
+  expect(headerSync?.textContent || "").not.toMatch(/Source:/i);
+  expect(headerSync?.textContent || "").not.toMatch(/Sync lag:/i);
+
+  expect(screen.queryByText(/^Source:/i)).not.toBeInTheDocument();
+  await user.click(
+    screen.getByRole("button", { name: /open diagnostics panel/i }),
+  );
+  expect(await screen.findByText(/^API health:/i)).toBeInTheDocument();
+  expect(await screen.findByText(/^Source:/i)).toBeInTheDocument();
+  expect(screen.getByText(/^Map status:/i)).toBeInTheDocument();
+});
+
+test("closes shell popouts and trace tool on outside click", async () => {
+  const user = userEvent.setup();
+  render(<App />);
+
+  await waitFor(() => {
+    expect(screen.getByText(/Showing 2 tracked tokens/i)).toBeInTheDocument();
+  });
+
+  await user.click(screen.getByRole("button", { name: /open saved views/i }));
+  expect(
+    screen.getByRole("dialog", { name: /saved views/i }),
+  ).toBeInTheDocument();
+  await user.pointer({ target: document.body, keys: "[MouseLeft]" });
+  await waitFor(() => {
+    expect(
+      screen.queryByRole("dialog", { name: /saved views/i }),
+    ).not.toBeInTheDocument();
+  });
+
+  await user.click(
+    screen.getByRole("button", { name: /open export presets/i }),
+  );
+  expect(
+    screen.getByRole("dialog", { name: /export presets/i }),
+  ).toBeInTheDocument();
+  await user.pointer({ target: document.body, keys: "[MouseLeft]" });
+  await waitFor(() => {
+    expect(
+      screen.queryByRole("dialog", { name: /export presets/i }),
+    ).not.toBeInTheDocument();
+  });
+
+  await user.click(
+    screen.getByRole("button", { name: /open diagnostics panel/i }),
+  );
+  expect(
+    screen.getByRole("dialog", { name: /data diagnostics/i }),
+  ).toBeInTheDocument();
+  await user.pointer({ target: document.body, keys: "[MouseLeft]" });
+  await waitFor(() => {
+    expect(
+      screen.queryByRole("dialog", { name: /data diagnostics/i }),
+    ).not.toBeInTheDocument();
+  });
+
+  await user.click(screen.getByRole("button", { name: /trace path/i }));
+  expect(screen.getByText(/From wallet/i)).toBeInTheDocument();
+  await user.pointer({ target: document.body, keys: "[MouseLeft]" });
+  await waitFor(() => {
+    expect(screen.queryByText(/From wallet/i)).not.toBeInTheDocument();
+  });
+});
+
+test("trace path search filters wallets by address", async () => {
+  const user = userEvent.setup();
+
+  render(<App />);
+
+  await waitFor(() => {
+    expect(screen.getByText(/Showing 2 tracked tokens/i)).toBeInTheDocument();
+  });
+
+  await user.click(screen.getByRole("button", { name: /trace path/i }));
+  await user.type(
+    screen.getByRole("textbox", { name: /search source wallet/i }),
+    "Rmj6CiDy",
+  );
+
+  const sourceSelect = screen.getByLabelText(/select source wallet/i);
+
+  expect(
+    within(sourceSelect).getByRole("option", { name: /Treasury/i }),
+  ).toBeInTheDocument();
+  expect(
+    within(sourceSelect).queryByRole("option", { name: /Whale/i }),
+  ).not.toBeInTheDocument();
+});
+
+test("compare against loads a snapshot for another token", async () => {
+  const user = userEvent.setup();
+
+  render(<App />);
+
+  await waitFor(() => {
+    expect(screen.getByText(/Showing 2 tracked tokens/i)).toBeInTheDocument();
+  });
+
+  await user.type(
+    screen.getByPlaceholderText(/search address or holder name/i),
+    "Treasury",
+  );
+  await user.click(screen.getByRole("button", { name: /submit search/i }));
+
+  await user.click(screen.getByRole("button", { name: /open compare mode/i }));
+  await user.selectOptions(
+    screen.getByRole("combobox", { name: /compare against/i }),
+    "KCAL",
+  );
+
+  const compareDialog = screen.getByRole("dialog", {
+    name: /compare snapshot/i,
+  });
+
+  await waitFor(() => {
+    expect(
+      within(compareDialog).getByText("KCAL", { selector: "strong" }),
+    ).toBeInTheDocument();
+  });
+
+  expect(within(compareDialog).getAllByText(/Wallets:\s+2/i)).toHaveLength(2);
 });

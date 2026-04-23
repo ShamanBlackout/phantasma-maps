@@ -25,6 +25,27 @@ phantasma-maps is a single-page React application that renders a token holder gr
     2. Bubble map: D3-driven graph visualization with hover, selection, drag, zoom, and fit-to-view behavior.
     3. Stats panel: token metadata, legend filtering, holder summaries, selected-node details, and connection controls.
 
+INTERACTION MODEL
+The top shell now includes fast-access controls for command/search workflows and advanced analysis features:
+
+    1. Command palette for high-frequency actions.
+    2. Saved views for restoring named analysis context.
+    3. Compare mode for token snapshot comparison.
+    4. Export presets for visible graph, holders, and filtered transaction datasets.
+    5. Diagnostics panel for source/sync/update details.
+
+    Header sync intentionally shows high-level health/status only. Detailed diagnostics are shown in the Diagnostics panel rather than duplicated in the header.
+
+KEYBOARD SHORTCUTS
+The app provides direct keyboard navigation for common actions:
+
+    /         Focus search input.
+    Ctrl+K    Open command palette.
+    ?         Open shortcuts legend.
+    G         Fit graph to viewport.
+    F         Toggle Focus Mode.
+    Esc       Close overlays and active popouts.
+
 RUNTIME OVERVIEW
 Application startup proceeds in this order:
 
@@ -68,6 +89,17 @@ Live graph path:
     2. If the transaction endpoint fails, the app synthesizes graph-derived transactions from visible links.
     3. The transaction modal supports filtering by direction, counterparty, time range, token amount, and USD value.
     4. Filtered transactions can be exported to JSON or CSV.
+
+    Compare behavior:
+
+    1. Compare mode builds full-token snapshots for both Current and Selected tokens from the token-wide graph path rather than the currently visible, filtered map.
+    2. Snapshot metrics include wallet count, link count, Top 10 concentration, and Top wallet share.
+    3. Percentage denominator priority is:
+       metadata current supply from GET /tokens/:tokenSymbol/metadata,
+       then graph totalSupply from GET /graph/token/:tokenSymbol,
+       then discovered node-sum fallback.
+    4. This denominator order keeps compare percentages aligned with the supply basis used in token metadata views and prevents inflated percentages when graph payload totals are partial.
+    5. If live compare snapshot fetch fails, the app uses mock snapshot fallback data when available and surfaces fallback status in compare messaging.
 
 API CONTRACT
 The frontend expects the backend to expose the following routes:

@@ -7,8 +7,9 @@ const PREWARM_TICKS = 220;
 const BOUNDS_UPDATE_EVERY = 5;
 
 const FIT_DURATION_MS = 220;
+const RESIZE_REFIT_IDLE_MS = 1800;
 
-export default function BubbleMap({
+function BubbleMap({
   nodes,
   links,
   onNodeClick,
@@ -17,6 +18,10 @@ export default function BubbleMap({
   currentSupply,
   colorTheme,
   preserveUnconnectedNodes = false,
+  physicsMode = "balanced",
+  labelDensityMode = "balanced",
+  traceNodeIds = [],
+  traceLinkKeys = [],
   onReady,
 }) {
   const holderPalette = getHolderPalette(colorTheme);
@@ -52,8 +57,10 @@ export default function BubbleMap({
   const zoomRef = useRef(null);
   const prevGraphSignatureRef = useRef("");
   const panHintFrameRef = useRef(null);
+  const resizeFitFrameRef = useRef(null);
   const pendingBoundsRef = useRef(null);
   const lastTouchedIdRef = useRef(null);
+  const lastManualViewportChangeAtRef = useRef(0);
   const [hoveredNodeId, setHoveredNodeId] = useState(null);
   const [panHints, setPanHints] = useState({
     left: false,
@@ -116,7 +123,7 @@ export default function BubbleMap({
         return `${src}>${tgt}`;
       })
       .join("|");
-    return `${nodeSig}__${linkSig}__${theme}`;
+    return `${nodeSig}__${linkSig}__${theme}__${physicsMode}__${labelDensityMode}`;
   }
 
   // ── Fit all nodes into the current viewport ─────────────────────────────
@@ -160,19 +167,48 @@ export default function BubbleMap({
       for (const entry of entries) {
         const { width, height } = entry.contentRect;
         if (!width || !height) continue;
+        const prevViewport = viewportRef.current;
+        const didViewportChange =
+          prevViewport.width !== width || prevViewport.height !== height;
         viewportRef.current = { width, height };
         schedulePanHintUpdate();
+
+        if (!didViewportChange) continue;
+
+        if (resizeFitFrameRef.current !== null) {
+          window.cancelAnimationFrame(resizeFitFrameRef.current);
+        }
+
+        resizeFitFrameRef.current = window.requestAnimationFrame(() => {
+          resizeFitFrameRef.current = null;
+          if (
+            Date.now() - lastManualViewportChangeAtRef.current <
+            RESIZE_REFIT_IDLE_MS
+          ) {
+            return;
+          }
+          fitToViewRef.current();
+        });
       }
     });
 
     observer.observe(el);
-    return () => observer.disconnect();
+    return () => {
+      observer.disconnect();
+      if (resizeFitFrameRef.current !== null) {
+        window.cancelAnimationFrame(resizeFitFrameRef.current);
+        resizeFitFrameRef.current = null;
+      }
+    };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     return () => {
       if (panHintFrameRef.current !== null) {
         window.cancelAnimationFrame(panHintFrameRef.current);
+      }
+      if (resizeFitFrameRef.current !== null) {
+        window.cancelAnimationFrame(resizeFitFrameRef.current);
       }
     };
   }, []);
@@ -225,9 +261,22 @@ export default function BubbleMap({
       .map((l) => ({ source: l.source, target: l.target }));
 
     // ── Force simulation ──────────────────────────────────────────────────
+    const resolvedPrewarmTicks =
+      physicsMode === "fast"
+        ? 120
+        : physicsMode === "detailed"
+          ? 320
+          : PREWARM_TICKS;
+    const resolvedChargeMultiplier =
+      physicsMode === "fast" ? 4.3 : physicsMode === "detailed" ? 6.2 : 5.5;
+    const resolvedLinkStrength =
+      physicsMode === "fast" ? 0.2 : physicsMode === "detailed" ? 0.32 : 0.25;
+    const resolvedCollisionIterations =
+      physicsMode === "fast" ? 1 : physicsMode === "detailed" ? 2 : 1;
+
     const simulation = d3
       .forceSimulation(simNodes)
-      .alphaDecay(0.04)
+      .alphaDecay(physicsMode === "detailed" ? 0.032 : 0.04)
       .alphaMin(0.02)
       .force(
         "link",
@@ -240,11 +289,15 @@ export default function BubbleMap({
               rScale(getRenderValue(l.target)) +
               18,
           )
-          .strength(0.25),
+          .strength(resolvedLinkStrength),
       )
       .force(
         "charge",
-        d3.forceManyBody().strength((d) => -rScale(getRenderValue(d)) * 5.5),
+        d3
+          .forceManyBody()
+          .strength(
+            (d) => -rScale(getRenderValue(d)) * resolvedChargeMultiplier,
+          ),
       )
       .force("center", d3.forceCenter(width / 2, height / 2))
       .force("x", d3.forceX(width / 2).strength(0.035))
@@ -255,11 +308,11 @@ export default function BubbleMap({
           .forceCollide()
           .radius((d) => rScale(getRenderValue(d)) + 3)
           .strength(0.5)
-          .iterations(1),
+          .iterations(resolvedCollisionIterations),
       );
 
     simulation.stop();
-    for (let i = 0; i < PREWARM_TICKS; i += 1) {
+    for (let i = 0; i < resolvedPrewarmTicks; i += 1) {
       simulation.tick();
     }
 
@@ -396,8 +449,21 @@ export default function BubbleMap({
       .attr("stroke-opacity", (d) => (d.isSearchRoot ? 1 : 0.85));
 
     // Primary label (for bubbles large enough)
+    const labelThreshold =
+      labelDensityMode === "minimal"
+        ? 30
+        : labelDensityMode === "detailed"
+          ? 18
+          : 22;
+    const pctThreshold =
+      labelDensityMode === "minimal"
+        ? 42
+        : labelDensityMode === "detailed"
+          ? 30
+          : 36;
+
     nodeSel
-      .filter((d) => rScale(getRenderValue(d)) > 22)
+      .filter((d) => rScale(getRenderValue(d)) > labelThreshold)
       .append("text")
       .attr("class", "bubble-label")
       .text((d) => (d.label.length > 13 ? d.label.slice(0, 11) + "…" : d.label))
@@ -410,7 +476,7 @@ export default function BubbleMap({
 
     // Percentage sub-label (only for large bubbles)
     nodeSel
-      .filter((d) => rScale(getRenderValue(d)) > 36)
+      .filter((d) => rScale(getRenderValue(d)) > pctThreshold)
       .append("text")
       .attr("class", "bubble-pct")
       .text((d) => formatSharePct(d))
@@ -489,6 +555,9 @@ export default function BubbleMap({
       .zoom()
       .scaleExtent([0.2, 8])
       .on("zoom", (event) => {
+        if (event.sourceEvent) {
+          lastManualViewportChangeAtRef.current = Date.now();
+        }
         transformRef.current = event.transform;
         container.attr("transform", event.transform);
         schedulePanHintUpdate();
@@ -512,7 +581,7 @@ export default function BubbleMap({
       }
       simulation.stop();
     };
-  }, [nodes, links, colorTheme]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [colorTheme, labelDensityMode, links, nodes, physicsMode]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Focus effect (selection + hover): update visuals only ───────────────
   useEffect(() => {
@@ -609,6 +678,46 @@ export default function BubbleMap({
     preserveUnconnectedNodes,
   ]);
 
+  useEffect(() => {
+    if (!svgRef.current) return;
+    const svg = d3.select(svgRef.current);
+    const traceNodeSet = new Set(
+      (Array.isArray(traceNodeIds) ? traceNodeIds : []).map((id) =>
+        String(id || "").trim(),
+      ),
+    );
+    const traceLinkSet = new Set(
+      (Array.isArray(traceLinkKeys) ? traceLinkKeys : []).map((key) =>
+        String(key || "").trim(),
+      ),
+    );
+    const hasTrace = traceNodeSet.size > 0;
+
+    svg.selectAll(".bubble-node").classed("is-trace-node", (d) => {
+      const nodeId = String(d?.id || "").trim();
+      return hasTrace && traceNodeSet.has(nodeId);
+    });
+
+    svg.selectAll(".bubble-node").attr("opacity", (d) => {
+      if (!hasTrace) return null;
+      const nodeId = String(d?.id || "").trim();
+      return traceNodeSet.has(nodeId) ? 1 : 0.24;
+    });
+
+    svg.selectAll(".bubble-link").classed("is-trace-link", (d) => {
+      const source = String(d?.source?.id ?? d?.source ?? "").trim();
+      const target = String(d?.target?.id ?? d?.target ?? "").trim();
+      return hasTrace && traceLinkSet.has(`${source}->${target}`);
+    });
+
+    svg.selectAll(".bubble-link").attr("stroke-opacity", (d) => {
+      if (!hasTrace) return null;
+      const source = String(d?.source?.id ?? d?.source ?? "").trim();
+      const target = String(d?.target?.id ?? d?.target ?? "").trim();
+      return traceLinkSet.has(`${source}->${target}`) ? 1 : 0.08;
+    });
+  }, [traceLinkKeys, traceNodeIds]);
+
   return (
     <div className="bubble-map-shell">
       <svg
@@ -644,3 +753,5 @@ export default function BubbleMap({
     </div>
   );
 }
+
+export default React.memo(BubbleMap);

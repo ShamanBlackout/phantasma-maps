@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { HOLDER_TYPES } from "../data/mockData";
 import { getHolderPalette } from "../theme/holderPalettes";
 
@@ -36,6 +36,10 @@ export default function StatsPanel({
   onLegendFilterChange,
   isCollapsed,
   onToggleCollapse,
+  isLoading,
+  executiveSummary,
+  mapDataStatus,
+  onRetryMapLoad,
 }) {
   const holderPalette = getHolderPalette(colorTheme);
   const allHolders = Array.isArray(summaryHolders) ? summaryHolders : holders;
@@ -62,7 +66,23 @@ export default function StatsPanel({
       : (Number(selectedNode.pct) || 0).toFixed(2)
     : "0.00";
 
-  const sorted = holders.slice().sort((a, b) => b.value - a.value);
+  const sorted = useMemo(() => {
+    const byId = new Map();
+    holders.forEach((holder) => {
+      const holderId = String(holder?.id || "").trim();
+      if (!holderId) return;
+
+      const existing = byId.get(holderId);
+      if (
+        !existing ||
+        Number(holder?.value || 0) > Number(existing?.value || 0)
+      ) {
+        byId.set(holderId, holder);
+      }
+    });
+
+    return [...byId.values()].sort((a, b) => b.value - a.value);
+  }, [holders]);
   const legendCounts = allHolders.reduce((counts, holder) => {
     const key = String(holder?.type || "minor");
     counts[key] = (counts[key] || 0) + 1;
@@ -92,6 +112,10 @@ export default function StatsPanel({
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [isTokenMenuOpen]);
+
+  const hasMapStatusError = String(mapDataStatus || "")
+    .toLowerCase()
+    .match(/failed|unavailable|unable/);
 
   useEffect(() => {
     if (!isTokenMenuOpen) {
@@ -132,7 +156,14 @@ export default function StatsPanel({
   return (
     <aside className={`stats-panel ${isCollapsed ? "is-collapsed" : ""}`}>
       <div className="stats-panel-toolbar">
-        <div className="stats-panel-title">Insights</div>
+        <div>
+          <div className="stats-panel-title">Insights</div>
+          {!isCollapsed ? (
+            <div className="stats-panel-subtitle">
+              Live distribution, legend scope, and wallet context
+            </div>
+          ) : null}
+        </div>
         <button
           type="button"
           className="stats-panel-toggle"
@@ -153,13 +184,127 @@ export default function StatsPanel({
 
       {!isCollapsed && (
         <div className="stats-panel-content">
+          {isLoading ? (
+            <>
+              <div
+                className="stats-card stats-card-skeleton"
+                aria-hidden="true"
+              >
+                <div className="skeleton-line skeleton-line-title" />
+                <div className="skeleton-line" />
+                <div className="skeleton-line" />
+                <div className="skeleton-line" />
+              </div>
+              <div
+                className="stats-card stats-card-skeleton"
+                aria-hidden="true"
+              >
+                <div className="skeleton-line skeleton-line-title" />
+                <div className="skeleton-line" />
+                <div className="skeleton-line" />
+                <div className="skeleton-line" />
+              </div>
+            </>
+          ) : null}
+
           {/* Token Info */}
-          <div className="stats-card">
+          <div
+            className="stats-card stats-executive-summary"
+            style={{ display: isLoading ? "none" : "block" }}
+            title="High-level summary of current graph concentration and visibility"
+          >
+            <div className="stats-card-head">
+              <div>
+                <div className="stats-card-kicker">Executive snapshot</div>
+                <div className="stats-card-summary">
+                  Immediate signal quality and concentration metrics
+                </div>
+              </div>
+            </div>
+            <div className="stats-token-summary-grid">
+              <div
+                className="stats-token-summary-card"
+                title="Total wallets currently rendered on the map"
+              >
+                <span>Visible wallets</span>
+                <strong>
+                  {Number(
+                    executiveSummary?.visibleWallets || 0,
+                  ).toLocaleString()}
+                </strong>
+              </div>
+              <div
+                className="stats-token-summary-card"
+                title="Total visible graph links between rendered wallets"
+              >
+                <span>Visible links</span>
+                <strong>
+                  {Number(
+                    executiveSummary?.visibleConnections || 0,
+                  ).toLocaleString()}
+                </strong>
+              </div>
+              <div
+                className="stats-token-summary-card"
+                title="Largest wallet share of current supply within the visible graph"
+              >
+                <span>Top wallet share</span>
+                <strong>
+                  {Number(executiveSummary?.topWalletShare || 0).toFixed(2)}%
+                </strong>
+              </div>
+            </div>
+            <div
+              className="stats-token-row"
+              title="Share of current supply held by the top ten visible wallets"
+            >
+              <span className="stats-label">Top concentration (Top 10)</span>
+              <span className="stats-value stats-value-highlight">
+                {Number(executiveSummary?.concentrationTop10 || 0).toFixed(1)}%
+              </span>
+            </div>
+            <div
+              className="stats-token-row"
+              title="Largest wallet currently visible in this graph context"
+            >
+              <span className="stats-label">Largest visible wallet</span>
+              <span className="stats-value">
+                {executiveSummary?.topWalletLabel || "N/A"}
+              </span>
+            </div>
+          </div>
+
+          <div
+            className="stats-card"
+            style={{ display: isLoading ? "none" : "block" }}
+          >
+            <div className="stats-card-head">
+              <div>
+                <div className="stats-card-kicker">Token intelligence</div>
+                <div className="stats-card-summary">
+                  Market and supply context for the current graph
+                </div>
+              </div>
+            </div>
             <div className="stats-token-header">
               <div className="stats-token-icon">◈</div>
               <div className="stats-token-meta">
                 <div className="stats-token-name">{tokenInfo.name}</div>
                 <div className="stats-token-fullname">{tokenInfo.fullName}</div>
+              </div>
+            </div>
+            <div className="stats-token-summary-grid">
+              <div className="stats-token-summary-card">
+                <span>Wallets tracked</span>
+                <strong>{allHolders.length.toLocaleString()}</strong>
+              </div>
+              <div className="stats-token-summary-card">
+                <span>Top 10 hold</span>
+                <strong>{top10share}%</strong>
+              </div>
+              <div className="stats-token-summary-card">
+                <span>Market state</span>
+                <strong>{hasPrice ? "Live quote" : "No feed"}</strong>
               </div>
             </div>
             <div className="stats-token-select-row">
@@ -193,7 +338,12 @@ export default function StatsPanel({
               </span>
             </div>
             <div className="stats-token-row">
-              <span className="stats-label">Max Supply</span>
+              <span
+                className="stats-label"
+                title="Maximum token supply from metadata; infinity means uncapped"
+              >
+                Max Supply
+              </span>
               <span className="stats-value">
                 {hasMetadataMaxSupply
                   ? maxSupply > 0
@@ -209,7 +359,12 @@ export default function StatsPanel({
               </span>
             </div>
             <div className="stats-token-row">
-              <span className="stats-label">Top 10 Hold</span>
+              <span
+                className="stats-label"
+                title="Combined percentage of current supply held by the top ten wallets"
+              >
+                Top 10 Hold
+              </span>
               <span className="stats-value stats-value-highlight">
                 {top10share}%
               </span>
@@ -218,6 +373,17 @@ export default function StatsPanel({
 
           {selectedNode || isConnectionsView ? (
             <div className="stats-card stats-clear-connections-card">
+              <div className="stats-card-head">
+                <div>
+                  <div className="stats-card-kicker">Connection focus</div>
+                  <div className="stats-card-summary">
+                    Move from token distribution to wallet-level network tracing
+                  </div>
+                </div>
+                <span className="stats-card-badge">
+                  {isConnectionsView ? "Focused" : "Available"}
+                </span>
+              </div>
               <div className="stats-clear-connections-copy">
                 <div className="stats-section-title stats-clear-connections-title">
                   Connections
@@ -251,8 +417,45 @@ export default function StatsPanel({
             </div>
           ) : null}
 
+          {hasMapStatusError ? (
+            <div className="stats-card stats-recovery-card">
+              <div className="stats-card-head">
+                <div>
+                  <div className="stats-card-kicker">Recovery</div>
+                  <div className="stats-card-summary">
+                    Data source reported an error. Retry the current graph or
+                    switch token context.
+                  </div>
+                </div>
+              </div>
+              <div className="stats-clear-connections-text">
+                {mapDataStatus}
+              </div>
+              <div className="selected-node-actions">
+                <button
+                  type="button"
+                  className="map-selected-show-transfers"
+                  onClick={() => onRetryMapLoad?.()}
+                >
+                  Retry Graph Load
+                </button>
+              </div>
+            </div>
+          ) : null}
+
           {/* Legend */}
-          <div className="stats-card">
+          <div
+            className="stats-card"
+            style={{ display: isLoading ? "none" : "block" }}
+          >
+            <div className="stats-card-head">
+              <div>
+                <div className="stats-card-kicker">Distribution legend</div>
+                <div className="stats-card-summary">
+                  Filter the map by concentration tier
+                </div>
+              </div>
+            </div>
             <div className="stats-section-title">Legend</div>
             {orderedLegendItems.map(({ key, label, count }) => {
               const isActive = activeLegendFilter === key;
@@ -292,6 +495,17 @@ export default function StatsPanel({
           {/* Selected Node Info */}
           {selectedNode && isMobileViewport && (
             <div className="stats-card stats-card-selected stats-node-detail-card">
+              <div className="stats-card-head">
+                <div>
+                  <div className="stats-card-kicker">Wallet selected</div>
+                  <div className="stats-card-summary">
+                    Quick actions for the current holder
+                  </div>
+                </div>
+                <span className="stats-card-badge">
+                  {HOLDER_TYPES[selectedNode.type]?.label || selectedNode.type}
+                </span>
+              </div>
               <div className="stats-section-title">Selected</div>
               <div className="stats-node-detail-head">
                 <div>
@@ -380,7 +594,10 @@ export default function StatsPanel({
           )}
 
           {/* Top Holders List */}
-          <div className="stats-card stats-card-holders">
+          <div
+            className="stats-card stats-card-holders"
+            style={{ display: isLoading ? "none" : "block" }}
+          >
             <div className="stats-section-title">Top Holders</div>
             <div className="holders-list">
               {sorted.slice(0, 15).map((h, i) => {

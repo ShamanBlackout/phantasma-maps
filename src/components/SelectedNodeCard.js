@@ -1,7 +1,7 @@
 import React from "react";
 import SparklineSvg from "./SparklineSvg";
 
-export default function SelectedNodeCard({
+function SelectedNodeCard({
   node,
   copiedAddress,
   onCopyAddress,
@@ -18,11 +18,18 @@ export default function SelectedNodeCard({
   canShowConnections,
   onShowConnections,
   onOpenTransactions,
+  isTransactionsLoading,
 }) {
   return (
     <div className="map-selected-info is-active">
       <div className="map-selected-head">
         <div>
+          <div className="map-selected-kicker-row">
+            <span className="map-selected-kicker">Wallet profile</span>
+            <span className="map-selected-type-pill">
+              {node.type || "holder"}
+            </span>
+          </div>
           <div className="map-selected-title">{node.label}</div>
           <div className="map-selected-addr-row">
             <div className="map-selected-addr">{node.shortAddr}</div>
@@ -73,8 +80,16 @@ export default function SelectedNodeCard({
         </div>
         <div className="map-selected-stat">
           <span>Transactions</span>
-          <strong>{totalTransactionCount.toLocaleString()}</strong>
+          <strong>
+            {isTransactionsLoading
+              ? "Loading..."
+              : totalTransactionCount.toLocaleString()}
+          </strong>
         </div>
+      </div>
+      <div className="map-selected-note">
+        This wallet is shown in the context of the active token graph and
+        current view filters.
       </div>
       {sparklineData.length >= 2 && (
         <div className="map-selected-sparkline">
@@ -83,6 +98,7 @@ export default function SelectedNodeCard({
         </div>
       )}
       <div className="selected-node-actions">
+        <div className="map-selected-actions-title">Actions</div>
         {canShowConnections ? (
           <button
             type="button"
@@ -94,7 +110,7 @@ export default function SelectedNodeCard({
         ) : null}
         <button
           type="button"
-          className="map-selected-show-transfers"
+          className="map-selected-show-transfers is-secondary"
           onClick={onOpenTransactions}
         >
           Show All Transactions
@@ -103,3 +119,5 @@ export default function SelectedNodeCard({
     </div>
   );
 }
+
+export default React.memo(SelectedNodeCard);
