@@ -30,10 +30,18 @@ import {
   TOKEN_INFO,
 } from "./data/mockData";
 import "./App.css";
+import "./styles/feature-polish.css";
 
 const STATS_PANEL_STORAGE_KEY = "phantasma-maps:stats-panel-collapsed";
 const COLOR_THEME_STORAGE_KEY = "phantasma-maps:color-theme";
 const TOKEN_SYMBOL_STORAGE_KEY = "phantasma-maps:selected-token-symbol";
+const DENSITY_MODE_STORAGE_KEY = "phantasma-maps:density-mode";
+const ONBOARDING_DISMISSED_STORAGE_KEY = "phantasma-maps:onboarding-dismissed";
+const FOCUS_MODE_STORAGE_KEY = "phantasma-maps:focus-mode";
+const SAVED_VIEWS_STORAGE_KEY = "phantasma-maps:saved-views";
+const KEYBOARD_TIPS_DISMISSED_STORAGE_KEY =
+  "phantasma-maps:keyboard-tips-dismissed";
+const TOKEN_SNAPSHOTS_STORAGE_KEY = "phantasma-maps:token-snapshots";
 const MOBILE_MEDIA_QUERY = "(max-width: 768px)";
 const ALLOWED_COLOR_THEMES = new Set([
   "dark",
@@ -223,6 +231,21 @@ function hashToHue(value) {
     hash = (hash * 31 + source.charCodeAt(i)) % 360;
   }
   return hash;
+}
+
+function getLinkKey(source, target) {
+  return `${String(source || "").trim()}->${String(target || "").trim()}`;
+}
+
+function escapeCsvCell(value) {
+  return `"${String(value ?? "").replace(/"/g, '""')}"`;
+}
+
+function rowsToCsv(headers, rows) {
+  const lines = [headers, ...rows]
+    .map((line) => line.map((value) => escapeCsvCell(value)).join(","))
+    .join("\n");
+  return `\uFEFF${lines}`;
 }
 
 function applyCurrentSupplyToNodes(nodes, currentSupply) {
@@ -423,6 +446,145 @@ function buildNeighborFocusedGraph(graphData, rootAddress) {
     links: scopedLinks,
     totalValue: scopedTotal,
     rootNodeId: normalizedRoot,
+  };
+}
+
+function buildTokenSnapshot(tokenSymbol, nodes, links, currentSupplyBase) {
+  const normalizedNodes = Array.isArray(nodes) ? nodes : [];
+  const normalizedLinks = Array.isArray(links) ? links : [];
+  const topWallet = normalizedNodes.length
+    ? normalizedNodes.reduce((best, holder) =>
+        Number(holder?.value || 0) > Number(best?.value || 0) ? holder : best,
+      )
+    : null;
+  const topWalletShare =
+    currentSupplyBase > 0 && topWallet
+      ? (Number(topWallet.value || 0) / currentSupplyBase) * 100
+      : Number(topWallet?.pct || 0);
+  const topTenTotal = normalizedNodes
+    .slice()
+    .sort((a, b) => Number(b?.value || 0) - Number(a?.value || 0))
+    .slice(0, 10)
+    .reduce((sum, holder) => sum + Number(holder?.value || 0), 0);
+  const concentrationTop10 =
+    currentSupplyBase > 0 ? (topTenTotal / currentSupplyBase) * 100 : 0;
+  const topWalletLabel = topWallet
+    ? topWallet.shortAddr ||
+      topWallet.label ||
+      shortenAddress(topWallet.id || topWallet.address || "")
+    : "N/A";
+
+  return {
+    token: tokenSymbol,
+    wallets: normalizedNodes.length,
+    links: normalizedLinks.length,
+    top10: Number(concentrationTop10 || 0),
+    topWalletLabel,
+    topWalletShare: Number(topWalletShare || 0),
+    recordedAt: Date.now(),
+  };
+}
+
+function normalizeTokenSnapshot(snapshot) {
+  if (!snapshot || typeof snapshot !== "object") {
+    return null;
+  }
+
+  const wallets = Number(snapshot.wallets ?? snapshot.visibleWallets ?? 0);
+  const links = Number(snapshot.links ?? snapshot.visibleLinks ?? 0);
+  const { visibleWallets, visibleLinks, ...rest } = snapshot;
+
+  return {
+    ...rest,
+    wallets: Number.isFinite(wallets) && wallets >= 0 ? wallets : 0,
+    links: Number.isFinite(links) && links >= 0 ? links : 0,
+  };
+}
+
+function getSnapshotWalletCount(snapshot) {
+  return Number(snapshot?.wallets ?? snapshot?.visibleWallets ?? 0);
+}
+
+function getSnapshotLinkCount(snapshot) {
+  return Number(snapshot?.links ?? snapshot?.visibleLinks ?? 0);
+}
+
+async function fetchTokenSnapshot(baseUrl, timeoutMs, tokenSymbol) {
+  const normalizedTokenSymbol = String(tokenSymbol || "").trim();
+  if (!normalizedTokenSymbol) {
+    return {
+      snapshot: null,
+      fallbackUsed: false,
+    };
+  }
+
+  const metadataResult = await fetchJsonWithTimeout(
+    buildTokenInfoEndpoint(baseUrl, normalizedTokenSymbol),
+    { cache: "no-store" },
+    timeoutMs,
+  );
+  const graphResult = await fetchJsonWithTimeout(
+    buildGraphEndpoint(baseUrl, normalizedTokenSymbol, {
+      rootAddress: "",
+      depth: MAPS_API_GRAPH_DEPTH,
+      edgeLimit: MAPS_API_GRAPH_EDGE_LIMIT,
+      defaultEdgeLimit: MAPS_API_GRAPH_EDGE_LIMIT,
+      includeTopHolders: MAPS_API_GRAPH_TOP_HOLDERS_LIMIT,
+    }),
+    { cache: "no-store" },
+    timeoutMs,
+  );
+
+  const metadataSupply = Number(
+    metadataResult.payload?.currentSupplyNormalized ??
+      metadataResult.payload?.current_supply_normalized,
+  );
+
+  if (graphResult.ok) {
+    const graphDecimals = Number(metadataResult.payload?.decimals ?? 0) || 0;
+    const mappedGraph = buildGraphDataFromApi(
+      graphResult.payload,
+      graphDecimals,
+    );
+    const resolvedSupplyBase =
+      (Number.isFinite(metadataSupply) && metadataSupply > 0
+        ? metadataSupply
+        : 0) ||
+      Number(mappedGraph?.totalSupply) ||
+      Number(mappedGraph?.totalValue) ||
+      0;
+
+    if (mappedGraph?.nodes?.length) {
+      return {
+        snapshot: buildTokenSnapshot(
+          normalizedTokenSymbol,
+          mappedGraph.nodes,
+          mappedGraph.links,
+          resolvedSupplyBase,
+        ),
+        fallbackUsed: false,
+      };
+    }
+  }
+
+  const fallbackMockToken = getMockTokenData(normalizedTokenSymbol);
+  if (fallbackMockToken?.holders?.length) {
+    return {
+      snapshot: buildTokenSnapshot(
+        normalizedTokenSymbol,
+        fallbackMockToken.holders,
+        fallbackMockToken.links,
+        Number(fallbackMockToken.tokenInfo?.currentSupply) ||
+          Number(fallbackMockToken.tokenInfo?.totalSupply) ||
+          0,
+      ),
+      fallbackUsed: true,
+    };
+  }
+
+  return {
+    snapshot: null,
+    fallbackUsed: false,
   };
 }
 
@@ -1071,7 +1233,19 @@ function makeExportFileName(selectedNode, ext) {
 }
 
 export default function App() {
+  const initialUrlParams = useMemo(() => readUrlParams(), []);
   const bubbleMapActionsRef = useRef(null);
+  const commandButtonRef = useRef(null);
+  const savedViewsButtonRef = useRef(null);
+  const compareButtonRef = useRef(null);
+  const exportPresetsButtonRef = useRef(null);
+  const diagnosticsButtonRef = useRef(null);
+  const traceToggleButtonRef = useRef(null);
+  const savedViewsPopoutRef = useRef(null);
+  const comparePopoutRef = useRef(null);
+  const diagnosticsPopoutRef = useRef(null);
+  const exportPresetsPopoutRef = useRef(null);
+  const traceToolPanelRef = useRef(null);
   const pendingMobileFitKeyRef = useRef(null);
   const exportMenuRef = useRef(null);
   const dirFilterRef = useRef(null);
@@ -1084,7 +1258,9 @@ export default function App() {
   const [isTransfersModalOpen, setIsTransfersModalOpen] = useState(false);
   const [copiedAddress, setCopiedAddress] = useState(null);
   const [copiedTxHash, setCopiedTxHash] = useState(null);
-  const [activeHolderTypeFilter, setActiveHolderTypeFilter] = useState("");
+  const [activeHolderTypeFilter, setActiveHolderTypeFilter] = useState(() =>
+    String(initialUrlParams.legend || "").trim(),
+  );
   const [isExportMenuOpen, setIsExportMenuOpen] = useState(false);
   const {
     activeTransactionFilter,
@@ -1115,7 +1291,7 @@ export default function App() {
   } = useTransactionState();
   const [liveTokenInfo, setLiveTokenInfo] = useState(TOKEN_INFO);
   const [selectedTokenSymbol, setSelectedTokenSymbol] = useState(() => {
-    const { tokenSymbol: urlToken } = readUrlParams();
+    const urlToken = initialUrlParams.tokenSymbol;
     if (urlToken) return urlToken;
     try {
       const stored = window.localStorage.getItem(TOKEN_SYMBOL_STORAGE_KEY);
@@ -1125,8 +1301,8 @@ export default function App() {
     }
   });
   const previousSelectedTokenSymbolRef = useRef(selectedTokenSymbol);
-  const initialNodeIdFromUrlRef = useRef(readUrlParams().nodeId);
-  const initialRootAddressFromUrlRef = useRef(readUrlParams().rootAddress);
+  const initialNodeIdFromUrlRef = useRef(initialUrlParams.nodeId);
+  const initialRootAddressFromUrlRef = useRef(initialUrlParams.rootAddress);
   const [apiTokenSymbols, setApiTokenSymbols] = useState([]);
   const [apiTokenInfo, setApiTokenInfo] = useState(null);
   const [trackedTokenSupply, setTrackedTokenSupply] = useState(0);
@@ -1157,9 +1333,11 @@ export default function App() {
   const [blockSyncHeight, setBlockSyncHeight] = useState(null);
   const [blockSyncTargetHeight, setBlockSyncTargetHeight] = useState(null);
   const [blockSyncUpdatedAt, setBlockSyncUpdatedAt] = useState(null);
-  const [searchQuery, setSearchQuery] = useState("");
+  const [searchQuery, setSearchQuery] = useState(() =>
+    String(initialUrlParams.query || "").trim(),
+  );
   const [searchedRootAddress, setSearchedRootAddress] = useState(() =>
-    String(readUrlParams().rootAddress || "").trim(),
+    String(initialUrlParams.rootAddress || "").trim(),
   );
   const [graphEdgeLimit, setGraphEdgeLimit] = useState(
     MAPS_API_GRAPH_EDGE_LIMIT,
@@ -1172,8 +1350,10 @@ export default function App() {
     wallets: 0,
     connections: 0,
   });
-  const [isConnectionsView, setIsConnectionsView] = useState(() =>
-    Boolean(String(readUrlParams().rootAddress || "").trim()),
+  const [isConnectionsView, setIsConnectionsView] = useState(
+    () =>
+      String(initialUrlParams.view || "token").trim() === "connections" ||
+      Boolean(String(initialUrlParams.rootAddress || "").trim()),
   );
   const activeGraphRootAddress = useMemo(
     () => String(searchedRootAddress || "").trim(),
@@ -1194,6 +1374,32 @@ export default function App() {
       return false;
     }
   });
+  const [densityMode, setDensityMode] = useState(() => {
+    const urlDensity = String(initialUrlParams.density || "").trim();
+    if (urlDensity === "compact" || urlDensity === "comfortable") {
+      return urlDensity;
+    }
+
+    try {
+      const stored = window.localStorage.getItem(DENSITY_MODE_STORAGE_KEY);
+      if (stored === "compact" || stored === "comfortable") {
+        return stored;
+      }
+    } catch {
+      // Ignore storage access issues.
+    }
+
+    return "comfortable";
+  });
+  const [isOnboardingVisible, setIsOnboardingVisible] = useState(() => {
+    try {
+      return (
+        window.localStorage.getItem(ONBOARDING_DISMISSED_STORAGE_KEY) !== "true"
+      );
+    } catch {
+      return true;
+    }
+  });
   const [isMobileViewport, setIsMobileViewport] = useState(() => {
     if (typeof window === "undefined" || !window.matchMedia) {
       return false;
@@ -1201,6 +1407,76 @@ export default function App() {
 
     return window.matchMedia(MOBILE_MEDIA_QUERY).matches;
   });
+  const [isFocusMode, setIsFocusMode] = useState(() => {
+    try {
+      return window.localStorage.getItem(FOCUS_MODE_STORAGE_KEY) === "true";
+    } catch {
+      return false;
+    }
+  });
+  const [mapRefreshNonce, setMapRefreshNonce] = useState(0);
+  const [activeMotionCue, setActiveMotionCue] = useState("");
+  const motionCueTimerRef = useRef(null);
+  const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
+  const [commandPaletteQuery, setCommandPaletteQuery] = useState("");
+  const [isSavedViewsOpen, setIsSavedViewsOpen] = useState(false);
+  const [savedViews, setSavedViews] = useState(() => {
+    try {
+      const raw = window.localStorage.getItem(SAVED_VIEWS_STORAGE_KEY);
+      const parsed = JSON.parse(raw || "[]");
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  });
+  const [savedViewName, setSavedViewName] = useState("");
+  const [isKeyboardLegendOpen, setIsKeyboardLegendOpen] = useState(false);
+  const [isKeyboardLegendDismissed, setIsKeyboardLegendDismissed] = useState(
+    () => {
+      try {
+        return (
+          window.localStorage.getItem(KEYBOARD_TIPS_DISMISSED_STORAGE_KEY) ===
+          "true"
+        );
+      } catch {
+        return false;
+      }
+    },
+  );
+  const [physicsMode, setPhysicsMode] = useState("balanced");
+  const [labelDensityMode, setLabelDensityMode] = useState("balanced");
+  const [traceFromNodeId, setTraceFromNodeId] = useState("");
+  const [traceToNodeId, setTraceToNodeId] = useState("");
+  const [traceFromQuery, setTraceFromQuery] = useState("");
+  const [traceToQuery, setTraceToQuery] = useState("");
+  const [isTraceToolOpen, setIsTraceToolOpen] = useState(false);
+  const [traceStatusMessage, setTraceStatusMessage] = useState("");
+  const [isDiagnosticsOpen, setIsDiagnosticsOpen] = useState(false);
+  const [isCompareModeOpen, setIsCompareModeOpen] = useState(false);
+  const [compareTokenSymbol, setCompareTokenSymbol] = useState("");
+  const [currentSnapshotStatus, setCurrentSnapshotStatus] = useState("");
+  const [compareSnapshotStatus, setCompareSnapshotStatus] = useState("");
+  const [tokenSnapshots, setTokenSnapshots] = useState(() => {
+    try {
+      const raw = window.localStorage.getItem(TOKEN_SNAPSHOTS_STORAGE_KEY);
+      const parsed = JSON.parse(raw || "{}");
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        return {};
+      }
+
+      return Object.entries(parsed).reduce((acc, [token, snapshot]) => {
+        const normalizedSnapshot = normalizeTokenSnapshot(snapshot);
+        if (normalizedSnapshot) {
+          acc[token] = normalizedSnapshot;
+        }
+        return acc;
+      }, {});
+    } catch {
+      return {};
+    }
+  });
+  const [isExportPresetsOpen, setIsExportPresetsOpen] = useState(false);
+  const [isMobileInspectOpen, setIsMobileInspectOpen] = useState(false);
 
   useEffect(() => {
     if (typeof window === "undefined" || !window.matchMedia) {
@@ -1253,7 +1529,141 @@ export default function App() {
     }
   }, [selectedTokenSymbol]);
 
-  useUrlState(selectedTokenSymbol, selectedNode, searchedRootAddress);
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(DENSITY_MODE_STORAGE_KEY, densityMode);
+    } catch {
+      // Ignore storage access issues and keep density mode in memory.
+    }
+  }, [densityMode]);
+
+  useEffect(() => {
+    if (!isOnboardingVisible) {
+      try {
+        window.localStorage.setItem(ONBOARDING_DISMISSED_STORAGE_KEY, "true");
+      } catch {
+        // Ignore storage access issues and keep onboarding in memory.
+      }
+    }
+  }, [isOnboardingVisible]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        SAVED_VIEWS_STORAGE_KEY,
+        JSON.stringify(savedViews),
+      );
+    } catch {
+      // Ignore storage issues and keep views in memory.
+    }
+  }, [savedViews]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        TOKEN_SNAPSHOTS_STORAGE_KEY,
+        JSON.stringify(tokenSnapshots),
+      );
+    } catch {
+      // Ignore storage issues and keep snapshots in memory.
+    }
+  }, [tokenSnapshots]);
+
+  useEffect(() => {
+    if (!isKeyboardLegendDismissed) {
+      try {
+        window.localStorage.setItem(
+          KEYBOARD_TIPS_DISMISSED_STORAGE_KEY,
+          "false",
+        );
+      } catch {
+        // Ignore storage issues.
+      }
+    }
+  }, [isKeyboardLegendDismissed]);
+
+  useEffect(() => {
+    if (isKeyboardLegendDismissed) return;
+    const timeoutId = window.setTimeout(() => {
+      setIsKeyboardLegendOpen(true);
+    }, 800);
+    return () => window.clearTimeout(timeoutId);
+  }, [isKeyboardLegendDismissed]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(FOCUS_MODE_STORAGE_KEY, String(isFocusMode));
+    } catch {
+      // Ignore storage access issues and keep focus mode in memory.
+    }
+  }, [isFocusMode]);
+
+  const triggerMotionCue = useCallback((cue) => {
+    if (!cue) return;
+    if (motionCueTimerRef.current) {
+      window.clearTimeout(motionCueTimerRef.current);
+    }
+    setActiveMotionCue(cue);
+    motionCueTimerRef.current = window.setTimeout(() => {
+      setActiveMotionCue("");
+      motionCueTimerRef.current = null;
+    }, 420);
+  }, []);
+
+  useEffect(
+    () => () => {
+      if (motionCueTimerRef.current) {
+        window.clearTimeout(motionCueTimerRef.current);
+      }
+    },
+    [],
+  );
+
+  useEffect(() => {
+    const urlTxDir = String(initialUrlParams.txDir || "").trim();
+    const urlTxCounterparty = String(
+      initialUrlParams.txCounterparty || "",
+    ).trim();
+
+    if (urlTxDir === "from" || urlTxDir === "to" || urlTxDir === "all") {
+      setTransactionDirFilter(urlTxDir);
+    }
+
+    if (urlTxCounterparty) {
+      setTransactionCounterpartyFilter(urlTxCounterparty);
+    }
+  }, [
+    initialUrlParams.txCounterparty,
+    initialUrlParams.txDir,
+    setTransactionCounterpartyFilter,
+    setTransactionDirFilter,
+  ]);
+
+  const urlStateOptions = useMemo(
+    () => ({
+      isConnectionsView,
+      searchQuery,
+      activeLegendFilter: activeHolderTypeFilter,
+      densityMode,
+      transactionDirFilter,
+      transactionCounterpartyFilter,
+    }),
+    [
+      activeHolderTypeFilter,
+      densityMode,
+      isConnectionsView,
+      searchQuery,
+      transactionCounterpartyFilter,
+      transactionDirFilter,
+    ],
+  );
+
+  useUrlState(
+    selectedTokenSymbol,
+    selectedNode,
+    searchedRootAddress,
+    urlStateOptions,
+  );
 
   useEffect(() => {
     if (previousSelectedTokenSymbolRef.current === selectedTokenSymbol) {
@@ -1261,6 +1671,7 @@ export default function App() {
     }
 
     previousSelectedTokenSymbolRef.current = selectedTokenSymbol;
+    triggerMotionCue("token");
     setSearchQuery("");
     setSearchedRootAddress("");
     setIsConnectionsView(false);
@@ -1271,7 +1682,7 @@ export default function App() {
     setIsTransfersModalOpen(false);
     setOverallMaxGraphStats({ wallets: 0, connections: 0 });
     resetTransactionState();
-  }, [resetTransactionState, selectedTokenSymbol]);
+  }, [resetTransactionState, selectedTokenSymbol, triggerMotionCue]);
 
   useEffect(() => {
     let isMounted = true;
@@ -1381,6 +1792,7 @@ export default function App() {
       closeTransfersModal();
       setSearchedRootAddress(value);
       setIsConnectionsView(true);
+      triggerMotionCue("connections");
       return;
     }
 
@@ -1400,6 +1812,7 @@ export default function App() {
     closeTransfersModal();
     setSearchedRootAddress(value);
     setIsConnectionsView(true);
+    triggerMotionCue("connections");
   }
 
   function handleClearConnections() {
@@ -1410,6 +1823,11 @@ export default function App() {
     closeTransfersModal();
     setSearchedRootAddress("");
     setIsConnectionsView(false);
+  }
+
+  function handleRetryGraphLoad() {
+    setMapRefreshNonce((current) => current + 1);
+    setMapDataStatus("Retrying graph request...");
   }
 
   useEffect(() => {
@@ -2070,6 +2488,7 @@ export default function App() {
     searchedRootAddress,
     selectedMockTokenData,
     selectedTokenSymbol,
+    mapRefreshNonce,
   ]);
 
   useEffect(() => {
@@ -2413,6 +2832,59 @@ export default function App() {
   const resolvedHoveredNode = hoveredNode
     ? nodeById.get(hoveredNode.id) || hoveredNode
     : null;
+
+  function buildTraceOptionLabel(node) {
+    const primaryLabel = String(
+      node?.label || node?.shortAddr || node?.id || "",
+    );
+    const secondaryLabel = String(node?.shortAddr || node?.id || "");
+
+    if (!secondaryLabel || secondaryLabel === primaryLabel) {
+      return primaryLabel;
+    }
+
+    return `${primaryLabel} - ${secondaryLabel}`;
+  }
+
+  function buildTraceSearchOptions(query, selectedId) {
+    const normalizedQuery = String(query || "")
+      .trim()
+      .toLowerCase();
+    const matchedNodes = normalizedQuery
+      ? filteredNodes.filter((node) => {
+          const id = String(node?.id || "").toLowerCase();
+          const label = String(node?.label || "").toLowerCase();
+          const shortAddr = String(node?.shortAddr || "").toLowerCase();
+          return (
+            id.includes(normalizedQuery) ||
+            label.includes(normalizedQuery) ||
+            shortAddr.includes(normalizedQuery)
+          );
+        })
+      : filteredNodes;
+
+    const limitedNodes = matchedNodes.slice(0, 160);
+    if (!selectedId || limitedNodes.some((node) => node.id === selectedId)) {
+      return limitedNodes;
+    }
+
+    const selectedNode = filteredNodes.find((node) => node.id === selectedId);
+    if (!selectedNode) {
+      return limitedNodes;
+    }
+
+    return [selectedNode, ...limitedNodes].slice(0, 160);
+  }
+
+  const traceFromOptions = useMemo(
+    () => buildTraceSearchOptions(traceFromQuery, traceFromNodeId),
+    [filteredNodes, traceFromNodeId, traceFromQuery],
+  );
+
+  const traceToOptions = useMemo(
+    () => buildTraceSearchOptions(traceToQuery, traceToNodeId),
+    [filteredNodes, traceToNodeId, traceToQuery],
+  );
 
   const canShowSelectedNodeConnections = useMemo(() => {
     if (!resolvedSelectedNode?.id) return false;
@@ -2992,6 +3464,73 @@ export default function App() {
     };
   }, [selectedNode?.id, selectedTokenSymbol]);
 
+  const clearActiveContext = useCallback(() => {
+    if (isCommandPaletteOpen) {
+      setIsCommandPaletteOpen(false);
+      return true;
+    }
+    if (isKeyboardLegendOpen) {
+      setIsKeyboardLegendOpen(false);
+      return true;
+    }
+    if (isSavedViewsOpen) {
+      setIsSavedViewsOpen(false);
+      return true;
+    }
+    if (isTraceToolOpen) {
+      setIsTraceToolOpen(false);
+      return true;
+    }
+    if (isCompareModeOpen) {
+      setIsCompareModeOpen(false);
+      return true;
+    }
+    if (isDiagnosticsOpen) {
+      setIsDiagnosticsOpen(false);
+      return true;
+    }
+    if (isExportPresetsOpen) {
+      setIsExportPresetsOpen(false);
+      return true;
+    }
+    if (isMobileInspectOpen) {
+      setIsMobileInspectOpen(false);
+      return true;
+    }
+    if (isOnboardingVisible) {
+      setIsOnboardingVisible(false);
+      return true;
+    }
+    if (isExportMenuOpen) {
+      setIsExportMenuOpen(false);
+      return true;
+    }
+    if (isTransfersModalOpen) {
+      closeTransfersModal();
+      return true;
+    }
+    if (selectedNode) {
+      setSelectedNode(null);
+      return true;
+    }
+
+    return false;
+  }, [
+    closeTransfersModal,
+    isCommandPaletteOpen,
+    isCompareModeOpen,
+    isDiagnosticsOpen,
+    isExportMenuOpen,
+    isExportPresetsOpen,
+    isKeyboardLegendOpen,
+    isMobileInspectOpen,
+    isOnboardingVisible,
+    isSavedViewsOpen,
+    isTraceToolOpen,
+    isTransfersModalOpen,
+    selectedNode,
+  ]);
+
   async function copyTextToClipboard(value) {
     if (!value) return false;
     try {
@@ -3029,28 +3568,735 @@ export default function App() {
 
   useEffect(() => {
     function onKeyDown(event) {
-      if (event.key !== "Escape") return;
-      if (isExportMenuOpen) {
-        setIsExportMenuOpen(false);
+      const targetTag = String(event.target?.tagName || "").toLowerCase();
+      const isTypingTarget =
+        targetTag === "input" ||
+        targetTag === "textarea" ||
+        targetTag === "select" ||
+        event.target?.isContentEditable;
+
+      if (event.key === "/" && !isTypingTarget) {
+        event.preventDefault();
+        document.getElementById("header-search-input")?.focus();
         return;
       }
-      if (isTransfersModalOpen) {
-        closeTransfersModal();
+
+      if (
+        !isTypingTarget &&
+        (event.ctrlKey || event.metaKey) &&
+        String(event.key || "").toLowerCase() === "k"
+      ) {
+        event.preventDefault();
+        setIsCommandPaletteOpen(true);
         return;
       }
-      if (selectedNode) {
-        setSelectedNode(null);
+
+      if (
+        !isTypingTarget &&
+        (event.key === "?" || (event.shiftKey && event.key === "/"))
+      ) {
+        event.preventDefault();
+        setIsKeyboardLegendOpen(true);
+        return;
+      }
+
+      if (String(event.key || "").toLowerCase() === "g" && !isTypingTarget) {
+        event.preventDefault();
+        bubbleMapActionsRef.current?.fitToView?.();
+        return;
+      }
+
+      if (String(event.key || "").toLowerCase() === "f" && !isTypingTarget) {
+        event.preventDefault();
+        setIsFocusMode((current) => !current);
+        return;
+      }
+
+      if (event.key === "Escape") {
+        if (clearActiveContext()) return;
       }
     }
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
+  }, [clearActiveContext]);
+
+  const trustStatus = useMemo(() => {
+    const apiHealthy =
+      !isUsingMockApiFallback &&
+      !String(mapDataStatus || "")
+        .toLowerCase()
+        .includes("failed") &&
+      !String(mapDataStatus || "")
+        .toLowerCase()
+        .includes("unavailable");
+
+    return {
+      apiHealthy,
+    };
+  }, [isUsingMockApiFallback, mapDataStatus]);
+
+  const executiveSummary = useMemo(() => {
+    const summaryPool = Array.isArray(displaySummaryNodes)
+      ? displaySummaryNodes
+      : [];
+    const visibleWallets = filteredNodes.length;
+    const visibleConnections = filteredLinks.length;
+    const topWallet = summaryPool.length
+      ? summaryPool.reduce((best, holder) =>
+          Number(holder?.value || 0) > Number(best?.value || 0) ? holder : best,
+        )
+      : null;
+    const topWalletShare =
+      currentSupplyBase > 0 && topWallet
+        ? (Number(topWallet.value || 0) / currentSupplyBase) * 100
+        : Number(topWallet?.pct || 0);
+    const topTenTotal = summaryPool
+      .slice()
+      .sort((a, b) => Number(b?.value || 0) - Number(a?.value || 0))
+      .slice(0, 10)
+      .reduce((sum, holder) => sum + Number(holder?.value || 0), 0);
+    const concentrationTop10 =
+      currentSupplyBase > 0 ? (topTenTotal / currentSupplyBase) * 100 : 0;
+
+    return {
+      visibleWallets,
+      visibleConnections,
+      topWalletLabel: topWallet?.shortAddr || topWallet?.label || "N/A",
+      topWalletShare,
+      concentrationTop10,
+    };
   }, [
-    closeTransfersModal,
-    isExportMenuOpen,
-    isTransfersModalOpen,
-    selectedNode,
+    currentSupplyBase,
+    displaySummaryNodes,
+    filteredLinks.length,
+    filteredNodes.length,
   ]);
+
+  const hasMapError = useMemo(() => {
+    const statusText = String(mapDataStatus || "").toLowerCase();
+    return (
+      statusText.includes("failed") ||
+      statusText.includes("unavailable") ||
+      statusText.includes("unable")
+    );
+  }, [mapDataStatus]);
+
+  const mapRecoveryState = useMemo(() => {
+    if (isMapLoading || filteredNodes.length > 0) {
+      return null;
+    }
+
+    const canClearSearch = Boolean(searchQuery);
+    const canClearLegend = Boolean(activeHolderTypeFilter);
+    const canClearConnections = Boolean(isConnectionsView);
+
+    if (hasMapError) {
+      return {
+        title: "Live data is temporarily unavailable",
+        copy: "The graph request failed or timed out. Retry the request or reset filters to continue with a stable view.",
+        actions: [
+          {
+            key: "retry",
+            label: "Retry",
+            onClick: handleRetryGraphLoad,
+          },
+          {
+            key: "reset",
+            label: "Reset View",
+            onClick: handleClearConnections,
+          },
+        ],
+      };
+    }
+
+    if (isConnectionsView) {
+      return {
+        title: "No connected wallets for this address",
+        copy: "Try another root wallet or return to token overview to continue exploring holder distribution.",
+        actions: [
+          {
+            key: "clear-connections",
+            label: "Back to Token Overview",
+            onClick: handleClearConnections,
+          },
+          {
+            key: "retry-connections",
+            label: "Retry Connections",
+            onClick: handleRetryGraphLoad,
+          },
+        ],
+      };
+    }
+
+    if (canClearSearch || canClearLegend || canClearConnections) {
+      return {
+        title: "No wallets match current filters",
+        copy: "Clear one or more filters to recover the graph and continue analysis.",
+        actions: [
+          canClearSearch
+            ? {
+                key: "clear-search",
+                label: "Clear Search",
+                onClick: () => setSearchQuery(""),
+              }
+            : null,
+          canClearLegend
+            ? {
+                key: "clear-legend",
+                label: "Clear Legend Filter",
+                onClick: () => setActiveHolderTypeFilter(""),
+              }
+            : null,
+          {
+            key: "reset-all",
+            label: "Reset View",
+            onClick: handleClearConnections,
+          },
+        ].filter(Boolean),
+      };
+    }
+
+    return {
+      title: "No graph data available",
+      copy: "The selected token did not return a renderable graph yet. Retry or switch tokens.",
+      actions: [
+        {
+          key: "retry-empty",
+          label: "Retry",
+          onClick: handleRetryGraphLoad,
+        },
+      ],
+    };
+  }, [
+    activeHolderTypeFilter,
+    filteredNodes.length,
+    handleClearConnections,
+    hasMapError,
+    isConnectionsView,
+    isMapLoading,
+    searchQuery,
+  ]);
+
+  const traceComputation = useMemo(() => {
+    const fromId = String(traceFromNodeId || "").trim();
+    const toId = String(traceToNodeId || "").trim();
+    if (!fromId || !toId || fromId === toId) {
+      return {
+        nodeIds: [],
+        linkKeys: [],
+        status:
+          fromId && toId && fromId === toId
+            ? "Select two different wallets to trace a path."
+            : "",
+      };
+    }
+
+    const adjacency = new Map();
+    filteredLinks.forEach((link) => {
+      const source = getLinkEndpointId(link?.source);
+      const target = getLinkEndpointId(link?.target);
+      if (!source || !target) return;
+      if (!adjacency.has(source)) adjacency.set(source, []);
+      if (!adjacency.has(target)) adjacency.set(target, []);
+      adjacency.get(source).push(target);
+      adjacency.get(target).push(source);
+    });
+
+    if (!adjacency.has(fromId) || !adjacency.has(toId)) {
+      return {
+        nodeIds: [],
+        linkKeys: [],
+        status:
+          "Selected wallets are not connected in the current visible graph.",
+      };
+    }
+
+    const queue = [fromId];
+    const visited = new Set([fromId]);
+    const prev = new Map();
+
+    while (queue.length) {
+      const current = queue.shift();
+      if (current === toId) break;
+      (adjacency.get(current) || []).forEach((nextNodeId) => {
+        if (visited.has(nextNodeId)) return;
+        visited.add(nextNodeId);
+        prev.set(nextNodeId, current);
+        queue.push(nextNodeId);
+      });
+    }
+
+    if (!visited.has(toId)) {
+      return {
+        nodeIds: [],
+        linkKeys: [],
+        status: "No path found between these wallets in the current view.",
+      };
+    }
+
+    const pathNodeIds = [];
+    let cursor = toId;
+    while (cursor) {
+      pathNodeIds.push(cursor);
+      if (cursor === fromId) break;
+      cursor = prev.get(cursor);
+    }
+    pathNodeIds.reverse();
+
+    const pathLinkKeys = [];
+    for (let index = 0; index < pathNodeIds.length - 1; index += 1) {
+      const left = pathNodeIds[index];
+      const right = pathNodeIds[index + 1];
+      pathLinkKeys.push(getLinkKey(left, right));
+      pathLinkKeys.push(getLinkKey(right, left));
+    }
+
+    return {
+      nodeIds: pathNodeIds,
+      linkKeys: pathLinkKeys,
+      status: `Trace path found across ${Math.max(0, pathNodeIds.length - 1)} hop(s).`,
+    };
+  }, [filteredLinks, traceFromNodeId, traceToNodeId]);
+
+  const diagnosticsDetails = useMemo(() => {
+    const syncLag =
+      Number.isFinite(blockSyncTargetHeight) && Number.isFinite(blockSyncHeight)
+        ? Math.max(0, Number(blockSyncTargetHeight) - Number(blockSyncHeight))
+        : null;
+    return {
+      apiHealth: trustStatus.apiHealthy ? "Online" : "Degraded",
+      source: isUsingMockApiFallback ? "Mock fallback" : "Live API",
+      syncLag,
+      mapStatus: mapDataStatus || "Ready",
+      indexerUpdated: Number.isFinite(blockSyncUpdatedAt)
+        ? new Date(blockSyncUpdatedAt).toISOString()
+        : "Waiting",
+      marketUpdated: Number.isFinite(priceLastUpdatedAt)
+        ? new Date(priceLastUpdatedAt).toISOString()
+        : "Waiting",
+    };
+  }, [
+    blockSyncHeight,
+    blockSyncTargetHeight,
+    blockSyncUpdatedAt,
+    isUsingMockApiFallback,
+    mapDataStatus,
+    priceLastUpdatedAt,
+    trustStatus.apiHealthy,
+  ]);
+
+  useEffect(() => {
+    setTraceStatusMessage(traceComputation.status || "");
+  }, [traceComputation.status]);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    async function refreshCurrentTokenSnapshot() {
+      const currentKey = String(selectedTokenSymbol || "").trim();
+      if (!currentKey) {
+        setCurrentSnapshotStatus("");
+        return;
+      }
+
+      setCurrentSnapshotStatus(`Loading ${currentKey} snapshot...`);
+
+      const result = await fetchTokenSnapshot(
+        MAPS_API_BASE_URL,
+        MAPS_API_REQUEST_TIMEOUT_MS,
+        currentKey,
+      );
+
+      if (!isMounted) return;
+
+      if (result.snapshot) {
+        setTokenSnapshots((current) => ({
+          ...current,
+          [currentKey]:
+            normalizeTokenSnapshot(result.snapshot) || result.snapshot,
+        }));
+        setCurrentSnapshotStatus(
+          result.fallbackUsed ? "Using fallback snapshot data." : "",
+        );
+        return;
+      }
+
+      setCurrentSnapshotStatus(`Unable to load ${currentKey} snapshot.`);
+    }
+
+    refreshCurrentTokenSnapshot().catch(() => {
+      if (!isMounted) return;
+      const currentKey = String(selectedTokenSymbol || "").trim();
+      if (!currentKey) return;
+      setCurrentSnapshotStatus(`Unable to load ${currentKey} snapshot.`);
+    });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [selectedTokenSymbol]);
+
+  const currentTokenSnapshot = useMemo(() => {
+    const currentKey = String(selectedTokenSymbol || "").trim();
+    if (!currentKey) return null;
+    return tokenSnapshots[currentKey] || null;
+  }, [selectedTokenSymbol, tokenSnapshots]);
+
+  const compareSnapshot = useMemo(() => {
+    const compareKey = String(compareTokenSymbol || "").trim();
+    if (!compareKey) return null;
+    return tokenSnapshots[compareKey] || null;
+  }, [compareTokenSymbol, tokenSnapshots]);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    async function ensureCompareSnapshot() {
+      const compareKey = String(compareTokenSymbol || "").trim();
+      if (!compareKey) {
+        setCompareSnapshotStatus("");
+        return;
+      }
+
+      setCompareSnapshotStatus(`Loading ${compareKey} snapshot...`);
+
+      const result = await fetchTokenSnapshot(
+        MAPS_API_BASE_URL,
+        MAPS_API_REQUEST_TIMEOUT_MS,
+        compareKey,
+      );
+
+      if (!isMounted) return;
+
+      if (result.snapshot) {
+        setTokenSnapshots((current) => ({
+          ...current,
+          [compareKey]:
+            normalizeTokenSnapshot(result.snapshot) || result.snapshot,
+        }));
+        setCompareSnapshotStatus(
+          result.fallbackUsed ? "Using fallback snapshot data." : "",
+        );
+        return;
+      }
+
+      setCompareSnapshotStatus(`Unable to load ${compareKey} snapshot.`);
+    }
+
+    ensureCompareSnapshot().catch(() => {
+      if (!isMounted) return;
+      const compareKey = String(compareTokenSymbol || "").trim();
+      if (!compareKey) return;
+      setCompareSnapshotStatus(`Unable to load ${compareKey} snapshot.`);
+    });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [compareTokenSymbol]);
+
+  const saveCurrentView = useCallback(() => {
+    const label = String(savedViewName || "").trim();
+    if (!label) return;
+    const entry = {
+      id: `${Date.now()}-${Math.random().toString(16).slice(2, 8)}`,
+      name: label,
+      token: selectedTokenSymbol,
+      searchQuery,
+      rootAddress: searchedRootAddress,
+      isConnectionsView,
+      legendFilter: activeHolderTypeFilter,
+      densityMode,
+      physicsMode,
+      labelDensityMode,
+      createdAt: Date.now(),
+    };
+    setSavedViews((current) => [entry, ...current].slice(0, 16));
+    setSavedViewName("");
+    setIsSavedViewsOpen(true);
+  }, [
+    activeHolderTypeFilter,
+    densityMode,
+    isConnectionsView,
+    labelDensityMode,
+    physicsMode,
+    savedViewName,
+    searchQuery,
+    searchedRootAddress,
+    selectedTokenSymbol,
+  ]);
+
+  const applySavedView = useCallback(
+    (view) => {
+      if (!view) return;
+      setSelectedTokenSymbol(String(view.token || selectedTokenSymbol));
+      setSearchQuery(String(view.searchQuery || ""));
+      setSearchedRootAddress(String(view.rootAddress || ""));
+      setIsConnectionsView(Boolean(view.isConnectionsView));
+      setActiveHolderTypeFilter(String(view.legendFilter || ""));
+      setDensityMode(
+        String(view.densityMode || "comfortable") === "compact"
+          ? "compact"
+          : "comfortable",
+      );
+      setPhysicsMode(
+        String(view.physicsMode || "balanced") === "fast"
+          ? "fast"
+          : String(view.physicsMode || "balanced") === "detailed"
+            ? "detailed"
+            : "balanced",
+      );
+      setLabelDensityMode(
+        String(view.labelDensityMode || "balanced") === "minimal"
+          ? "minimal"
+          : String(view.labelDensityMode || "balanced") === "detailed"
+            ? "detailed"
+            : "balanced",
+      );
+      setIsSavedViewsOpen(false);
+    },
+    [selectedTokenSymbol],
+  );
+
+  const removeSavedView = useCallback((viewId) => {
+    setSavedViews((current) => current.filter((view) => view.id !== viewId));
+  }, []);
+
+  function exportVisibleGraphPreset() {
+    const graphPayload = {
+      token: selectedTokenSymbol,
+      nodes: filteredNodes,
+      links: filteredLinks,
+      exportedAt: new Date().toISOString(),
+    };
+    downloadBlobFile(
+      JSON.stringify(graphPayload, null, 2),
+      "application/json;charset=utf-8",
+      `phantasma-visible-graph-${selectedTokenSymbol.toLowerCase()}.json`,
+    );
+    setIsExportPresetsOpen(false);
+  }
+
+  function exportTopHoldersPreset() {
+    const headers = ["Rank", "Address", "Label", "Amount", "Share (%)", "Type"];
+    const rows = filteredNodes.slice(0, 50).map((node, index) => {
+      const share =
+        currentSupplyBase > 0
+          ? ((Number(node?.value || 0) / currentSupplyBase) * 100).toFixed(4)
+          : Number(node?.pct || 0).toFixed(4);
+      return [
+        index + 1,
+        node.id,
+        node.label,
+        Number(node.value || 0),
+        share,
+        node.type,
+      ];
+    });
+    downloadBlobFile(
+      rowsToCsv(headers, rows),
+      "text/csv;charset=utf-8",
+      `phantasma-top-holders-${selectedTokenSymbol.toLowerCase()}.csv`,
+    );
+    setIsExportPresetsOpen(false);
+  }
+
+  function exportFilteredTransactionsPreset() {
+    const rows = buildExportRows();
+    const headers = [
+      "Direction",
+      "Counterparty",
+      "Address",
+      "Time",
+      "Token",
+      "Amount",
+      "USD (Now)",
+      "Transaction Hash",
+      "Sent Tx",
+      "Received Tx",
+    ];
+    const csvRows = rows.map((row) => [
+      row.direction,
+      row.counterparty,
+      row.address,
+      row.time,
+      row.token,
+      row.amount,
+      row.usdNow,
+      row.transactionHash,
+      row.sentTransactions,
+      row.receivedTransactions,
+    ]);
+    downloadBlobFile(
+      rowsToCsv(headers, csvRows),
+      "text/csv;charset=utf-8",
+      `phantasma-filtered-transactions-${selectedTokenSymbol.toLowerCase()}.csv`,
+    );
+    setIsExportPresetsOpen(false);
+  }
+
+  useEffect(() => {
+    if (
+      !isSavedViewsOpen &&
+      !isCompareModeOpen &&
+      !isDiagnosticsOpen &&
+      !isExportPresetsOpen
+    ) {
+      return undefined;
+    }
+
+    function handlePointerDown(event) {
+      const target = event.target;
+      const popoutConfigs = [
+        {
+          isOpen: isSavedViewsOpen,
+          popoutRef: savedViewsPopoutRef,
+          triggerRef: savedViewsButtonRef,
+          close: () => setIsSavedViewsOpen(false),
+        },
+        {
+          isOpen: isCompareModeOpen,
+          popoutRef: comparePopoutRef,
+          triggerRef: compareButtonRef,
+          close: () => setIsCompareModeOpen(false),
+        },
+        {
+          isOpen: isDiagnosticsOpen,
+          popoutRef: diagnosticsPopoutRef,
+          triggerRef: diagnosticsButtonRef,
+          close: () => setIsDiagnosticsOpen(false),
+        },
+        {
+          isOpen: isExportPresetsOpen,
+          popoutRef: exportPresetsPopoutRef,
+          triggerRef: exportPresetsButtonRef,
+          close: () => setIsExportPresetsOpen(false),
+        },
+      ];
+
+      popoutConfigs.forEach((config) => {
+        if (!config.isOpen) return;
+
+        const isInsidePopout = config.popoutRef.current?.contains(target);
+        const isOnTrigger = config.triggerRef.current?.contains(target);
+        if (isInsidePopout || isOnTrigger) return;
+
+        config.close();
+      });
+    }
+
+    document.addEventListener("pointerdown", handlePointerDown, true);
+    return () =>
+      document.removeEventListener("pointerdown", handlePointerDown, true);
+  }, [
+    isCompareModeOpen,
+    isDiagnosticsOpen,
+    isExportPresetsOpen,
+    isSavedViewsOpen,
+  ]);
+
+  useEffect(() => {
+    if (!isTraceToolOpen) return undefined;
+
+    function handlePointerDown(event) {
+      const target = event.target;
+      const isInsideTracePanel = traceToolPanelRef.current?.contains(target);
+      const isOnTraceToggle = traceToggleButtonRef.current?.contains(target);
+      if (isInsideTracePanel || isOnTraceToggle) return;
+      setIsTraceToolOpen(false);
+    }
+
+    document.addEventListener("pointerdown", handlePointerDown, true);
+    return () =>
+      document.removeEventListener("pointerdown", handlePointerDown, true);
+  }, [isTraceToolOpen]);
+
+  const commandPaletteActions = useMemo(
+    () => [
+      {
+        id: "search-focus",
+        label: "Focus search input",
+        shortcut: "/",
+        run: () => document.getElementById("header-search-input")?.focus(),
+      },
+      {
+        id: "fit",
+        label: "Fit graph to view",
+        shortcut: "G",
+        run: () => bubbleMapActionsRef.current?.fitToView?.(),
+      },
+      {
+        id: "focus",
+        label: isFocusMode ? "Disable Focus Mode" : "Enable Focus Mode",
+        shortcut: "F",
+        run: () => setIsFocusMode((current) => !current),
+      },
+      {
+        id: "clear-context",
+        label: "Clear active context",
+        shortcut: "Esc",
+        run: clearActiveContext,
+      },
+      {
+        id: "connections-clear",
+        label: "Clear connections mode",
+        run: handleClearConnections,
+      },
+      {
+        id: "legend-clear",
+        label: "Clear legend filter",
+        run: () => setActiveHolderTypeFilter(""),
+      },
+      {
+        id: "retry",
+        label: "Retry graph load",
+        run: handleRetryGraphLoad,
+      },
+      {
+        id: "keyboard",
+        label: "Open keyboard shortcuts legend",
+        run: () => setIsKeyboardLegendOpen(true),
+      },
+      {
+        id: "diagnostics",
+        label: "Open diagnostics details",
+        run: () => setIsDiagnosticsOpen(true),
+      },
+      {
+        id: "trace",
+        label: "Open node-to-node trace tool",
+        run: () => setIsTraceToolOpen(true),
+      },
+      {
+        id: "compare",
+        label: "Open token compare mode",
+        run: () => setIsCompareModeOpen(true),
+      },
+      {
+        id: "export-graph",
+        label: "Export visible graph preset",
+        run: exportVisibleGraphPreset,
+      },
+    ],
+    [
+      clearActiveContext,
+      handleClearConnections,
+      isFocusMode,
+      setIsFocusMode,
+      setActiveHolderTypeFilter,
+    ],
+  );
+
+  const filteredCommandPaletteActions = useMemo(() => {
+    const query = String(commandPaletteQuery || "")
+      .trim()
+      .toLowerCase();
+    if (!query) return commandPaletteActions;
+    return commandPaletteActions.filter((action) =>
+      action.label.toLowerCase().includes(query),
+    );
+  }, [commandPaletteActions, commandPaletteQuery]);
 
   useEffect(() => {
     if (!isExportMenuOpen) return undefined;
@@ -3089,17 +4335,42 @@ export default function App() {
     0,
     Math.min(100, Math.round(mapLoadingProgress)),
   );
+  const activeViewLabel = isConnectionsView
+    ? activeGraphRootAddress
+      ? `Connections around ${shortenAddress(activeGraphRootAddress)}`
+      : "Connections view"
+    : searchedRootAddress
+      ? `Focused on ${shortenAddress(searchedRootAddress)}`
+      : "Token overview";
+  const activeLegendLabel = activeHolderTypeFilter
+    ? HOLDER_TYPES[activeHolderTypeFilter]?.label || activeHolderTypeFilter
+    : "All wallet tiers";
+  const shellStatusLabel = isMapLoading
+    ? `Loading ${selectedTokenSymbol} graph`
+    : mapDataStatus || "Ready";
+  const footerMapStatus = useMemo(() => {
+    const statusText = String(mapDataStatus || "").trim();
+    if (!statusText) return "";
+
+    if (statusText.toLowerCase().startsWith("live graph loaded from ")) {
+      return "";
+    }
+
+    return statusText;
+  }, [mapDataStatus]);
+
+  const effectiveStatsCollapsed = isFocusMode ? true : isStatsCollapsed;
 
   return (
-    <div className={`app-root theme-${colorTheme}`}>
+    <div
+      className={`app-root theme-${colorTheme} density-${densityMode} ${isFocusMode ? "is-focus-mode" : ""} ${activeMotionCue ? `motion-${activeMotionCue}` : ""}`}
+    >
       <Header
         onSearch={handleHeaderSearch}
         searchInputValue={isConnectionsView ? searchedRootAddress : searchQuery}
         tokenInfo={activeTokenInfo}
-        priceUpdatedAt={priceLastUpdatedAt}
         blockSyncHeight={blockSyncHeight}
         blockSyncTargetHeight={blockSyncTargetHeight}
-        blockSyncUpdatedAt={blockSyncUpdatedAt}
         colorTheme={colorTheme}
         onThemeChange={setColorTheme}
         graphEdgeLimit={graphEdgeLimit}
@@ -3126,7 +4397,418 @@ export default function App() {
         }
         renderedNodeCount={filteredNodes.length}
         renderedEdgeCount={filteredLinks.length}
+        densityMode={densityMode}
+        onDensityModeChange={setDensityMode}
+        trustStatus={trustStatus}
+        isFocusMode={isFocusMode}
+        onFocusModeChange={setIsFocusMode}
+        physicsMode={physicsMode}
+        onPhysicsModeChange={setPhysicsMode}
+        labelDensityMode={labelDensityMode}
+        onLabelDensityModeChange={setLabelDensityMode}
       />
+      <div className="app-shell-bar" aria-live="polite">
+        <div className="app-shell-bar-primary">
+          <span
+            className="app-shell-pill"
+            title="Currently selected token symbol"
+          >
+            {selectedTokenSymbol}
+          </span>
+          <span className="app-shell-kicker" title="Current graph perspective">
+            {activeViewLabel}
+          </span>
+          <span
+            className="app-shell-copy"
+            title="Latest map loading or data status"
+          >
+            {shellStatusLabel}
+          </span>
+        </div>
+        <div className="app-shell-bar-secondary">
+          <span
+            className="app-shell-metric"
+            title="How many wallets and links are currently visible in the graph"
+          >
+            <span className="app-shell-metric-label">Visible</span>
+            <strong>
+              {filteredNodes.length.toLocaleString()} wallets /{" "}
+              {filteredLinks.length.toLocaleString()} links
+            </strong>
+          </span>
+          <span
+            className="app-shell-metric"
+            title="Current legend filter scope used to display wallet tiers"
+          >
+            <span className="app-shell-metric-label">Legend</span>
+            <strong>{activeLegendLabel}</strong>
+          </span>
+          <button
+            type="button"
+            ref={commandButtonRef}
+            className="app-shell-action-btn"
+            onClick={() => setIsCommandPaletteOpen(true)}
+            aria-label="Open command palette"
+            title="Open command palette (Ctrl+K)"
+          >
+            Command
+          </button>
+          <button
+            type="button"
+            ref={savedViewsButtonRef}
+            className="app-shell-action-btn"
+            onClick={() => setIsSavedViewsOpen((open) => !open)}
+            aria-label="Open saved views"
+            title="Save or load a named graph view"
+          >
+            Views
+          </button>
+          <button
+            type="button"
+            ref={compareButtonRef}
+            className="app-shell-action-btn"
+            onClick={() => setIsCompareModeOpen((open) => !open)}
+            aria-label="Open compare mode"
+            title="Compare this token snapshot with another token"
+          >
+            Compare
+          </button>
+          <button
+            type="button"
+            ref={exportPresetsButtonRef}
+            className="app-shell-action-btn"
+            onClick={() => setIsExportPresetsOpen((open) => !open)}
+            aria-label="Open export presets"
+            title="Export common reporting presets"
+          >
+            Exports
+          </button>
+          <button
+            type="button"
+            ref={diagnosticsButtonRef}
+            className="app-shell-action-btn"
+            onClick={() => setIsDiagnosticsOpen((open) => !open)}
+            aria-label="Open diagnostics panel"
+            title="Show source and sync diagnostics details"
+          >
+            Diagnostics
+          </button>
+        </div>
+      </div>
+      {isSavedViewsOpen ? (
+        <div
+          ref={savedViewsPopoutRef}
+          className="app-shell-popout app-shell-views-popout"
+          role="dialog"
+          aria-modal="false"
+          aria-labelledby="saved-views-heading"
+        >
+          <div className="app-shell-popout-head">
+            <strong id="saved-views-heading">Saved Views</strong>
+            <button
+              type="button"
+              aria-label="Close saved views"
+              onClick={() => setIsSavedViewsOpen(false)}
+            >
+              Close
+            </button>
+          </div>
+          <div className="app-shell-views-create-row">
+            <input
+              type="text"
+              value={savedViewName}
+              onChange={(event) => setSavedViewName(event.target.value)}
+              placeholder="Name this view"
+            />
+            <button type="button" onClick={saveCurrentView}>
+              Save
+            </button>
+          </div>
+          <div className="app-shell-views-list">
+            {savedViews.length ? (
+              savedViews.map((view) => (
+                <div key={view.id} className="app-shell-view-row">
+                  <button type="button" onClick={() => applySavedView(view)}>
+                    {view.name}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => removeSavedView(view.id)}
+                    className="app-shell-view-delete"
+                    aria-label="Delete saved view"
+                  >
+                    ✕
+                  </button>
+                </div>
+              ))
+            ) : (
+              <div className="app-shell-empty-copy">No saved views yet.</div>
+            )}
+          </div>
+        </div>
+      ) : null}
+      {isCompareModeOpen ? (
+        <div
+          ref={comparePopoutRef}
+          className="app-shell-popout app-shell-compare-popout"
+          role="dialog"
+          aria-modal="false"
+          aria-labelledby="compare-heading"
+        >
+          <div className="app-shell-popout-head">
+            <strong id="compare-heading">Compare Snapshot</strong>
+            <button
+              type="button"
+              aria-label="Close compare snapshot"
+              onClick={() => setIsCompareModeOpen(false)}
+            >
+              Close
+            </button>
+          </div>
+          <label className="app-shell-compare-picker">
+            <span>Compare against</span>
+            <select
+              value={compareTokenSymbol}
+              onChange={(event) => setCompareTokenSymbol(event.target.value)}
+            >
+              <option value="">Select token</option>
+              {availableTokenSymbols
+                .filter((token) => token !== selectedTokenSymbol)
+                .map((token) => (
+                  <option key={token} value={token}>
+                    {token}
+                  </option>
+                ))}
+            </select>
+          </label>
+          <div className="app-shell-compare-grid">
+            <div>
+              <div className="app-shell-compare-kicker">Current</div>
+              <strong>
+                {currentTokenSnapshot?.token || selectedTokenSymbol}
+              </strong>
+              {currentSnapshotStatus ? <p>{currentSnapshotStatus}</p> : null}
+              <p>
+                Wallets:{" "}
+                {getSnapshotWalletCount(currentTokenSnapshot).toLocaleString()}
+              </p>
+              <p>
+                Links:{" "}
+                {getSnapshotLinkCount(currentTokenSnapshot).toLocaleString()}
+              </p>
+              <p>
+                Top 10: {Number(currentTokenSnapshot?.top10 || 0).toFixed(1)}%
+              </p>
+              <p>
+                Top wallet: {currentTokenSnapshot?.topWalletLabel || "N/A"} (
+                {Number(currentTokenSnapshot?.topWalletShare || 0).toFixed(2)}%)
+              </p>
+            </div>
+            <div>
+              <div className="app-shell-compare-kicker">Selected</div>
+              <strong>{compareSnapshot?.token || "N/A"}</strong>
+              {compareSnapshotStatus ? <p>{compareSnapshotStatus}</p> : null}
+              <p>
+                Wallets:{" "}
+                {getSnapshotWalletCount(compareSnapshot).toLocaleString()}
+              </p>
+              <p>
+                Links: {getSnapshotLinkCount(compareSnapshot).toLocaleString()}
+              </p>
+              <p>Top 10: {Number(compareSnapshot?.top10 || 0).toFixed(1)}%</p>
+              <p>
+                Top wallet: {compareSnapshot?.topWalletLabel || "N/A"} (
+                {Number(compareSnapshot?.topWalletShare || 0).toFixed(2)}%)
+              </p>
+            </div>
+          </div>
+        </div>
+      ) : null}
+      {isDiagnosticsOpen ? (
+        <div
+          ref={diagnosticsPopoutRef}
+          className="app-shell-popout app-shell-diagnostics-popout"
+          role="dialog"
+          aria-modal="false"
+          aria-labelledby="diagnostics-heading"
+        >
+          <div className="app-shell-popout-head">
+            <strong id="diagnostics-heading">Data Diagnostics</strong>
+            <button
+              type="button"
+              aria-label="Close diagnostics"
+              onClick={() => setIsDiagnosticsOpen(false)}
+            >
+              Close
+            </button>
+          </div>
+          <div className="app-shell-diagnostics-list">
+            <p>API health: {diagnosticsDetails.apiHealth}</p>
+            <p>Source: {diagnosticsDetails.source}</p>
+            <p>
+              Sync lag:{" "}
+              {Number.isFinite(diagnosticsDetails.syncLag)
+                ? `${diagnosticsDetails.syncLag} blocks`
+                : "Waiting"}
+            </p>
+            <p>Map status: {diagnosticsDetails.mapStatus}</p>
+            <p>Indexer update: {diagnosticsDetails.indexerUpdated}</p>
+            <p>Market update: {diagnosticsDetails.marketUpdated}</p>
+          </div>
+        </div>
+      ) : null}
+      {isExportPresetsOpen ? (
+        <div
+          ref={exportPresetsPopoutRef}
+          className="app-shell-popout app-shell-export-popout"
+          role="dialog"
+          aria-modal="false"
+          aria-labelledby="export-presets-heading"
+        >
+          <div className="app-shell-popout-head">
+            <strong id="export-presets-heading">Export Presets</strong>
+            <button
+              type="button"
+              aria-label="Close export presets"
+              onClick={() => setIsExportPresetsOpen(false)}
+            >
+              Close
+            </button>
+          </div>
+          <div className="app-shell-export-actions">
+            <button type="button" onClick={exportVisibleGraphPreset}>
+              Visible Graph JSON
+            </button>
+            <button type="button" onClick={exportTopHoldersPreset}>
+              Top Holders CSV
+            </button>
+            <button type="button" onClick={exportFilteredTransactionsPreset}>
+              Filtered Transactions CSV
+            </button>
+          </div>
+        </div>
+      ) : null}
+      {isKeyboardLegendOpen ? (
+        <div
+          className="keyboard-legend-overlay"
+          role="dialog"
+          aria-modal="false"
+          aria-labelledby="keyboard-shortcuts-heading"
+        >
+          <div className="keyboard-legend-card">
+            <h3 id="keyboard-shortcuts-heading">Keyboard Shortcuts</h3>
+            <ul>
+              <li>/ Focus search</li>
+              <li>G Fit graph to view</li>
+              <li>F Toggle focus mode</li>
+              <li>Ctrl+K Open command palette</li>
+              <li>? Open this shortcuts legend</li>
+              <li>Esc Close overlays</li>
+            </ul>
+            <div className="keyboard-legend-actions">
+              <button
+                type="button"
+                onClick={() => setIsKeyboardLegendOpen(false)}
+              >
+                Close
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsKeyboardLegendDismissed(true);
+                  setIsKeyboardLegendOpen(false);
+                  try {
+                    window.localStorage.setItem(
+                      KEYBOARD_TIPS_DISMISSED_STORAGE_KEY,
+                      "true",
+                    );
+                  } catch {
+                    // Ignore storage issues.
+                  }
+                }}
+              >
+                Don't show again
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+      {isCommandPaletteOpen ? (
+        <div
+          className="command-palette-overlay"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="command-palette-heading"
+          onClick={() => setIsCommandPaletteOpen(false)}
+        >
+          <div
+            className="command-palette"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <h3 id="command-palette-heading" className="visually-hidden">
+              Command Palette
+            </h3>
+            <input
+              type="text"
+              value={commandPaletteQuery}
+              onChange={(event) => setCommandPaletteQuery(event.target.value)}
+              placeholder="Type a command"
+              aria-label="Search commands"
+              autoFocus
+            />
+            <div className="command-palette-list">
+              {filteredCommandPaletteActions.map((action) => (
+                <button
+                  key={action.id}
+                  type="button"
+                  title={
+                    action.shortcut ? `Shortcut: ${action.shortcut}` : undefined
+                  }
+                  onClick={() => {
+                    action.run();
+                    setIsCommandPaletteOpen(false);
+                    setCommandPaletteQuery("");
+                  }}
+                >
+                  <span>{action.label}</span>
+                  {action.shortcut ? (
+                    <span
+                      className="command-palette-shortcut"
+                      aria-hidden="true"
+                    >
+                      {action.shortcut}
+                    </span>
+                  ) : null}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      ) : null}
+      {isOnboardingVisible ? (
+        <div
+          className="onboarding-overlay"
+          role="dialog"
+          aria-modal="false"
+          aria-labelledby="quick-start-heading"
+        >
+          <div className="onboarding-card">
+            <h3 id="quick-start-heading">Quick Start</h3>
+            <ol>
+              <li>Press / to jump to search.</li>
+              <li>Click a wallet bubble to inspect holdings.</li>
+              <li>Use Show Connections to focus a wallet network.</li>
+            </ol>
+            <button
+              type="button"
+              className="map-selected-show-transfers"
+              onClick={() => setIsOnboardingVisible(false)}
+            >
+              Got it
+            </button>
+          </div>
+        </div>
+      ) : null}
       <div className="main-layout">
         <div className="map-area">
           <BubbleMap
@@ -3138,10 +4820,144 @@ export default function App() {
             currentSupply={currentSupplyBase}
             colorTheme={colorTheme}
             preserveUnconnectedNodes={isTokenGraphMaxModeActive}
+            physicsMode={physicsMode}
+            labelDensityMode={labelDensityMode}
+            traceNodeIds={traceComputation.nodeIds}
+            traceLinkKeys={traceComputation.linkKeys}
             onReady={(actions) => {
               bubbleMapActionsRef.current = actions;
             }}
           />
+          <div className="map-global-filter-chips" aria-live="polite">
+            {searchQuery ? (
+              <button
+                type="button"
+                className="map-global-filter-chip"
+                onClick={() => setSearchQuery("")}
+              >
+                Search: {searchQuery} ×
+              </button>
+            ) : null}
+            {activeHolderTypeFilter ? (
+              <button
+                type="button"
+                className="map-global-filter-chip"
+                onClick={() => setActiveHolderTypeFilter("")}
+              >
+                Tier: {activeHolderTypeFilter} ×
+              </button>
+            ) : null}
+            {isConnectionsView ? (
+              <button
+                type="button"
+                className="map-global-filter-chip"
+                onClick={handleClearConnections}
+              >
+                Connections mode ×
+              </button>
+            ) : null}
+            {traceComputation.nodeIds.length ? (
+              <button
+                type="button"
+                className="map-global-filter-chip"
+                onClick={() => {
+                  setTraceFromNodeId("");
+                  setTraceToNodeId("");
+                }}
+              >
+                Trace active ×
+              </button>
+            ) : null}
+          </div>
+          <div className="map-trace-tool-wrap">
+            <button
+              type="button"
+              ref={traceToggleButtonRef}
+              className="map-trace-toggle"
+              onClick={() => setIsTraceToolOpen((open) => !open)}
+              aria-expanded={isTraceToolOpen}
+              aria-controls="map-trace-tool"
+            >
+              {isTraceToolOpen ? "Hide Trace" : "Trace Path"}
+            </button>
+            {isTraceToolOpen ? (
+              <div
+                ref={traceToolPanelRef}
+                id="map-trace-tool"
+                className="map-trace-tool"
+                role="group"
+                aria-label="Trace path tool"
+              >
+                <label>
+                  <span>From wallet</span>
+                  <input
+                    type="text"
+                    className="map-trace-search"
+                    value={traceFromQuery}
+                    onChange={(event) => setTraceFromQuery(event.target.value)}
+                    placeholder="Search label or address"
+                    aria-label="Search source wallet"
+                  />
+                  <select
+                    className="map-trace-select"
+                    size={isMobileViewport ? 4 : 6}
+                    value={traceFromNodeId}
+                    onChange={(event) => setTraceFromNodeId(event.target.value)}
+                    aria-label="Select source wallet"
+                  >
+                    <option value="">Select</option>
+                    {traceFromOptions.length ? (
+                      traceFromOptions.map((node) => (
+                        <option key={node.id} value={node.id}>
+                          {buildTraceOptionLabel(node)}
+                        </option>
+                      ))
+                    ) : (
+                      <option value="" disabled>
+                        No wallets match that search
+                      </option>
+                    )}
+                  </select>
+                </label>
+                <label>
+                  <span>To wallet</span>
+                  <input
+                    type="text"
+                    className="map-trace-search"
+                    value={traceToQuery}
+                    onChange={(event) => setTraceToQuery(event.target.value)}
+                    placeholder="Search label or address"
+                    aria-label="Search destination wallet"
+                  />
+                  <select
+                    className="map-trace-select"
+                    size={isMobileViewport ? 4 : 6}
+                    value={traceToNodeId}
+                    onChange={(event) => setTraceToNodeId(event.target.value)}
+                    aria-label="Select destination wallet"
+                  >
+                    <option value="">Select</option>
+                    {traceToOptions.length ? (
+                      traceToOptions.map((node) => (
+                        <option key={node.id} value={node.id}>
+                          {buildTraceOptionLabel(node)}
+                        </option>
+                      ))
+                    ) : (
+                      <option value="" disabled>
+                        No wallets match that search
+                      </option>
+                    )}
+                  </select>
+                </label>
+                <div className="map-trace-status" aria-live="polite">
+                  {traceComputation.status ||
+                    traceStatusMessage ||
+                    "Search by wallet label or address, then select two wallets to trace."}
+                </div>
+              </div>
+            ) : null}
+          </div>
           {isMapLoading ? (
             <div
               className="map-loading-overlay"
@@ -3318,6 +5134,28 @@ export default function App() {
               </div>
             </div>
           ) : null}
+          {mapRecoveryState ? (
+            <div className="map-empty-state" aria-live="polite">
+              <div className="map-empty-state-title">
+                {mapRecoveryState.title}
+              </div>
+              <div className="map-empty-state-copy">
+                {mapRecoveryState.copy}
+              </div>
+              <div className="map-empty-state-actions">
+                {mapRecoveryState.actions.map((action) => (
+                  <button
+                    key={action.key}
+                    type="button"
+                    className="map-empty-state-button"
+                    onClick={action.onClick}
+                  >
+                    {action.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : null}
           {infoNode && (
             <div className="map-hover-info is-active">
               <div className="map-hover-title">{infoNode.label}</div>
@@ -3369,15 +5207,83 @@ export default function App() {
               sparklineData={selectedNodeSparkline}
               canShowConnections={canShowSelectedNodeConnections}
               onShowConnections={handleShowNodeConnections}
-              onOpenTransactions={() => setIsTransfersModalOpen(true)}
+              onOpenTransactions={() => {
+                setIsTransfersModalOpen(true);
+                triggerMotionCue("modal");
+              }}
+              isTransactionsLoading={isSelectedNodeTransactionsLoading}
             />
           )}
+          {isMobileViewport && resolvedSelectedNode ? (
+            <div className="mobile-inspect-entry">
+              <button
+                type="button"
+                className="mobile-inspect-toggle"
+                onClick={() => setIsMobileInspectOpen((open) => !open)}
+              >
+                {isMobileInspectOpen ? "Hide Inspect" : "Inspect"}
+              </button>
+            </div>
+          ) : null}
+          {isMobileViewport && resolvedSelectedNode && isMobileInspectOpen ? (
+            <div
+              className="mobile-inspect-sheet"
+              role="dialog"
+              aria-modal="false"
+              aria-labelledby="mobile-inspect-heading"
+            >
+              <div className="mobile-inspect-head">
+                <strong id="mobile-inspect-heading">
+                  {resolvedSelectedNode.label}
+                </strong>
+                <button
+                  type="button"
+                  aria-label="Close mobile inspect panel"
+                  onClick={() => setIsMobileInspectOpen(false)}
+                >
+                  Close
+                </button>
+              </div>
+              <p>{resolvedSelectedNode.shortAddr}</p>
+              <p>
+                Share:{" "}
+                {fmtSharePct(
+                  resolvedSelectedNode.value,
+                  currentSupplyBase,
+                  resolvedSelectedNode.pct,
+                )}
+              </p>
+              <p>
+                Amount: {fmtTokenAmount(resolvedSelectedNode.value)}{" "}
+                {activeTokenInfo.name}
+              </p>
+              <div className="mobile-inspect-actions">
+                <button
+                  type="button"
+                  onClick={() =>
+                    handleShowNodeConnections(resolvedSelectedNode.id)
+                  }
+                >
+                  Show Connections
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsTransfersModalOpen(true);
+                    setIsMobileInspectOpen(false);
+                  }}
+                >
+                  Transactions
+                </button>
+              </div>
+            </div>
+          ) : null}
           <div className="map-hint">
             <span className="map-hint-text">
               Scroll to zoom · Drag to pan · Click a bubble for details
             </span>
-            {mapDataStatus ? (
-              <span className="map-hint-text">{mapDataStatus}</span>
+            {footerMapStatus ? (
+              <span className="map-hint-text">{footerMapStatus}</span>
             ) : null}
             <button
               type="button"
@@ -3401,7 +5307,10 @@ export default function App() {
           onNodeSelect={setSelectedNode}
           copiedAddress={copiedAddress}
           onCopyAddress={handleCopyAddress}
-          onOpenTransactions={() => setIsTransfersModalOpen(true)}
+          onOpenTransactions={() => {
+            setIsTransfersModalOpen(true);
+            triggerMotionCue("modal");
+          }}
           isConnectionsView={isConnectionsView}
           onClearConnections={handleClearConnections}
           canShowConnections={canShowSelectedNodeConnections}
@@ -3416,10 +5325,14 @@ export default function App() {
               current === typeKey ? "" : typeKey,
             )
           }
-          isCollapsed={isStatsCollapsed}
+          isCollapsed={effectiveStatsCollapsed}
           onToggleCollapse={() =>
             setIsStatsCollapsed((collapsed) => !collapsed)
           }
+          isLoading={isMapLoading}
+          executiveSummary={executiveSummary}
+          mapDataStatus={mapDataStatus}
+          onRetryMapLoad={handleRetryGraphLoad}
         />
       </div>
       <TransactionsModal
