@@ -1928,6 +1928,9 @@ export default function App() {
       const parsedMetadataPrice = Number(
         payload?.priceUsd ?? payload?.price_usd ?? payload?.price,
       );
+      const parsedHolderCount = Number(
+        payload?.holderCount ?? payload?.holder_count,
+      );
       const parsedMetadataPriceChange24h = Number(
         payload?.priceChange24h ??
           payload?.price_change_24h ??
@@ -1948,6 +1951,9 @@ export default function App() {
         hasMetadataMaxSupply,
         decimals: Number(payload?.decimals ?? 0) || 0,
         chain: String(payload?.chain || TOKEN_INFO.chain || "").trim(),
+        globalHolderCount: Number.isFinite(parsedHolderCount)
+          ? Math.max(0, Math.floor(parsedHolderCount))
+          : null,
         price: Number.isFinite(parsedMetadataPrice)
           ? parsedMetadataPrice
           : null,
@@ -2212,6 +2218,9 @@ export default function App() {
       currentSupply: resolvedCurrentSupply,
       maxSupply: resolvedMaxSupply,
       hasMetadataMaxSupply,
+      globalHolderCount: Number.isFinite(apiTokenInfo?.globalHolderCount)
+        ? apiTokenInfo.globalHolderCount
+        : null,
       price: resolvedPrice,
       priceChange24h: resolvedPriceChange24h,
     };
@@ -4953,7 +4962,9 @@ export default function App() {
             ? maxModeScopeGraph.nodes.length
             : activeHolderTypeFilter
               ? maxModeScopeGraph.nodes.length
-              : overallMaxGraphStats.wallets
+              : Number.isFinite(activeTokenInfo?.globalHolderCount)
+                ? activeTokenInfo.globalHolderCount
+                : overallMaxGraphStats.wallets
         }
         availableEdgeCount={
           isConnectionsView
