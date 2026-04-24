@@ -43,6 +43,9 @@ export default function StatsPanel({
 }) {
   const holderPalette = getHolderPalette(colorTheme);
   const allHolders = Array.isArray(summaryHolders) ? summaryHolders : holders;
+  const walletsTracked = Number.isFinite(tokenInfo?.globalHolderCount)
+    ? Math.max(0, Math.floor(Number(tokenInfo.globalHolderCount)))
+    : allHolders.length;
   const totalSupply = Number(tokenInfo.totalSupply) || 0;
   const currentSupply = Number(tokenInfo.currentSupply) || 0;
   const maxSupply = Number(tokenInfo.maxSupply) || 0;
@@ -296,7 +299,7 @@ export default function StatsPanel({
             <div className="stats-token-summary-grid">
               <div className="stats-token-summary-card">
                 <span>Wallets tracked</span>
-                <strong>{allHolders.length.toLocaleString()}</strong>
+                <strong>{walletsTracked.toLocaleString()}</strong>
               </div>
               <div className="stats-token-summary-card">
                 <span>Top 10 hold</span>
