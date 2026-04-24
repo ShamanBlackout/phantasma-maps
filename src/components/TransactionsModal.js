@@ -147,8 +147,12 @@ function TransactionsModal({
         onClick={(event) => event.stopPropagation()}
       >
         <div className="transfers-modal-head">
+          <div className="transfers-modal-head-rail" aria-hidden="true" />
           <div className="transfers-modal-head-top">
             <div className="transfers-modal-head-info">
+              <div className="transfers-modal-kicker">
+                LCARS Transaction Console
+              </div>
               <div className="transfers-modal-head-title-row">
                 <h3 className="transfers-modal-title">All Transactions</h3>
                 <p className="transfers-modal-subtitle">
@@ -552,8 +556,12 @@ function TransactionsModal({
               </thead>
               <tbody>
                 {filteredTransactions.length ? (
-                  pagedTransactions.map((transfer) => (
-                    <tr key={transfer.id}>
+                  pagedTransactions.map((transfer, rowIndex) => (
+                    <tr
+                      key={transfer.id}
+                      className="transactions-row"
+                      style={{ "--tx-row-index": Math.min(rowIndex, 10) }}
+                    >
                       <td
                         className={`transfer-dir ${transfer.direction === "From" ? "from" : "to"}`}
                       >

@@ -27,6 +27,8 @@ export default function Header({
   onPhysicsModeChange,
   labelDensityMode,
   onLabelDensityModeChange,
+  onReplayTutorial,
+  tutorialHighlightTarget,
 }) {
   const themeOptions = [
     { value: "dark", label: "Dark" },
@@ -231,7 +233,10 @@ export default function Header({
         </div>
       </div>
 
-      <form className="header-search" onSubmit={handleSubmit}>
+      <form
+        className={`header-search ${tutorialHighlightTarget === "search" ? "tutorial-highlight" : ""}`}
+        onSubmit={handleSubmit}
+      >
         <span className="header-search-icon" aria-hidden="true">
           <svg viewBox="0 0 24 24" role="presentation">
             <path
@@ -291,7 +296,7 @@ export default function Header({
         <button
           type="button"
           ref={settingsTriggerRef}
-          className={`header-settings-trigger ${isSettingsOpen ? "is-active" : ""}`}
+          className={`header-settings-trigger ${isSettingsOpen ? "is-active" : ""} ${tutorialHighlightTarget === "settings" ? "tutorial-highlight" : ""}`}
           onClick={() => setIsSettingsOpen((current) => !current)}
           aria-label="Open graph settings"
           aria-expanded={isSettingsOpen}
@@ -397,6 +402,24 @@ export default function Header({
                   </select>
                 </label>
               </div>
+            </div>
+            <div className="header-settings-section header-settings-help-section">
+              <strong className="header-settings-section-title">
+                Guided Tour
+              </strong>
+              <span className="header-settings-help-copy">
+                Replay the interactive walkthrough of features and controls.
+              </span>
+              <button
+                type="button"
+                className={`header-settings-help-button ${tutorialHighlightTarget === "settings" ? "tutorial-highlight" : ""}`}
+                onClick={() => {
+                  onReplayTutorial?.();
+                  setIsSettingsOpen(false);
+                }}
+              >
+                Replay Tutorial
+              </button>
             </div>
             <div className="header-settings-stats" aria-live="polite">
               <div className="header-settings-stat">

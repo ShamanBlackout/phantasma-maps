@@ -1,0 +1,707 @@
+/* ─────────────────────────────────────────────────────────────────────────── */
+/* UX Improvements: Tooltips, Loading States, Better Hierarchy, Accessibility  */
+/* ─────────────────────────────────────────────────────────────────────────── */
+
+/* ── Tooltips ─────────────────────────────────────────────────────────────── */
+
+.tooltip-trigger {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: help;
+}
+
+.tooltip-wrapper {
+  position: relative;
+}
+
+.tooltip-icon {
+  width: 16px;
+  height: 16px;
+  margin-left: 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  font-size: 12px;
+  font-weight: 600;
+  opacity: 0.6;
+  transition: opacity 0.2s ease;
+}
+
+.tooltip-trigger:hover .tooltip-icon {
+  opacity: 1;
+}
+
+.tooltip-box {
+  position: absolute;
+  background: rgba(30, 32, 50, 0.98);
+  color: #e8eaed;
+  border: 1px solid rgba(100, 150, 255, 0.3);
+  border-radius: 6px;
+  padding: 8px 12px;
+  font-size: 12px;
+  line-height: 1.4;
+  white-space: nowrap;
+  z-index: 10000;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  pointer-events: none;
+  opacity: 0;
+  transform: translateY(-4px);
+  transition:
+    opacity 0.2s,
+    transform 0.2s;
+  bottom: 100%;
+  left: 50%;
+  transform: translate(-50%, -8px);
+  margin-bottom: 4px;
+}
+
+.tooltip-trigger:hover .tooltip-box {
+  opacity: 1;
+  transform: translate(-50%, -8px);
+}
+
+/* Light theme tooltip */
+.app-root.theme-light .tooltip-box {
+  background: rgba(250, 248, 244, 0.96);
+  color: #5a4330;
+  border-color: rgba(152, 130, 94, 0.3);
+  box-shadow: 0 4px 12px rgba(132, 110, 94, 0.15);
+}
+
+/* ── Help Badge ──────────────────────────────────────────────────────────── */
+
+.help-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(100, 150, 255, 0.1);
+  border: 1px solid rgba(100, 150, 255, 0.25);
+  border-radius: 4px;
+  padding: 4px 10px;
+  font-size: 11px;
+  font-weight: 500;
+  color: #7db9ff;
+  margin-left: 8px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.help-badge:hover {
+  background: rgba(100, 150, 255, 0.15);
+  border-color: rgba(100, 150, 255, 0.4);
+}
+
+.app-root.theme-light .help-badge {
+  background: rgba(176, 156, 125, 0.1);
+  border-color: rgba(152, 130, 94, 0.25);
+  color: #5a4330;
+}
+
+.app-root.theme-light .help-badge:hover {
+  background: rgba(176, 156, 125, 0.15);
+  border-color: rgba(152, 130, 94, 0.4);
+}
+
+/* ── Loading Skeleton ────────────────────────────────────────────────────── */
+
+@keyframes skeleton-pulse {
+  0% {
+    opacity: 0.6;
+  }
+  50% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0.6;
+  }
+}
+
+.skeleton {
+  background: linear-gradient(
+    90deg,
+    rgba(100, 150, 255, 0.1) 0%,
+    rgba(100, 150, 255, 0.2) 50%,
+    rgba(100, 150, 255, 0.1) 100%
+  );
+  background-size: 200% 100%;
+  animation: skeleton-pulse 2s ease-in-out infinite;
+  border-radius: 4px;
+}
+
+.skeleton-text {
+  height: 14px;
+  width: 100%;
+  margin-bottom: 8px;
+}
+
+.skeleton-avatar {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+}
+
+.skeleton-card {
+  padding: 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(100, 150, 255, 0.15);
+}
+
+.app-root.theme-light .skeleton {
+  background: linear-gradient(
+    90deg,
+    rgba(152, 130, 94, 0.06) 0%,
+    rgba(152, 130, 94, 0.12) 50%,
+    rgba(152, 130, 94, 0.06) 100%
+  );
+}
+
+/* ── Empty State ─────────────────────────────────────────────────────────── */
+
+.empty-state-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 48px 24px;
+  text-align: center;
+  min-height: 280px;
+  color: #a0aec0;
+  border-radius: 8px;
+  border: 1px dashed rgba(100, 150, 255, 0.15);
+  background: rgba(15, 20, 40, 0.3);
+}
+
+.empty-state-icon {
+  font-size: 48px;
+  margin-bottom: 16px;
+  opacity: 0.6;
+}
+
+.empty-state-heading {
+  font-size: 16px;
+  font-weight: 600;
+  color: #cbd5e0;
+  margin-bottom: 8px;
+}
+
+.empty-state-description {
+  font-size: 13px;
+  margin-bottom: 16px;
+  color: #8895a7;
+}
+
+.empty-state-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(100, 150, 255, 0.15);
+  border: 1px solid rgba(100, 150, 255, 0.3);
+  color: #7db9ff;
+  padding: 8px 16px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.empty-state-action:hover {
+  background: rgba(100, 150, 255, 0.25);
+  border-color: rgba(100, 150, 255, 0.5);
+}
+
+.app-root.theme-light .empty-state-container {
+  background: rgba(176, 156, 125, 0.06);
+  border-color: rgba(152, 130, 94, 0.15);
+  color: #8b7d6b;
+}
+
+.app-root.theme-light .empty-state-heading {
+  color: #5a4330;
+}
+
+.app-root.theme-light .empty-state-description {
+  color: #9d9080;
+}
+
+.app-root.theme-light .empty-state-action {
+  background: rgba(176, 156, 125, 0.1);
+  border-color: rgba(152, 130, 94, 0.25);
+  color: #5a4330;
+}
+
+.app-root.theme-light .empty-state-action:hover {
+  background: rgba(176, 156, 125, 0.2);
+  border-color: rgba(152, 130, 94, 0.4);
+}
+
+/* ── Feature Quick Start Cards ───────────────────────────────────────────── */
+
+.feature-cards-container {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+  margin-bottom: 24px;
+}
+
+.feature-card {
+  background: rgba(25, 35, 65, 0.5);
+  border: 1px solid rgba(100, 150, 255, 0.2);
+  border-radius: 8px;
+  padding: 16px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.feature-card:hover {
+  background: rgba(35, 50, 85, 0.6);
+  border-color: rgba(100, 150, 255, 0.4);
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(100, 150, 255, 0.15);
+}
+
+.feature-card-icon {
+  font-size: 24px;
+  opacity: 0.8;
+}
+
+.feature-card-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #e0e6ff;
+}
+
+.feature-card-description {
+  font-size: 11px;
+  color: #9db0d8;
+  line-height: 1.4;
+}
+
+.feature-card-keystroke {
+  font-size: 10px;
+  color: #7db9ff;
+  font-family: "Courier New", monospace;
+  margin-top: 4px;
+}
+
+.app-root.theme-light .feature-card {
+  background: rgba(216, 200, 176, 0.08);
+  border-color: rgba(152, 130, 94, 0.2);
+}
+
+.app-root.theme-light .feature-card:hover {
+  background: rgba(216, 200, 176, 0.12);
+  border-color: rgba(152, 130, 94, 0.4);
+  box-shadow: 0 4px 12px rgba(132, 110, 94, 0.1);
+}
+
+.app-root.theme-light .feature-card-title {
+  color: #5a4330;
+}
+
+.app-root.theme-light .feature-card-description {
+  color: #9d9080;
+}
+
+.app-root.theme-light .feature-card-keystroke {
+  color: #7a6550;
+}
+
+/* ── Feature Discovery Ribbon ────────────────────────────────────────────── */
+
+.discovery-ribbon {
+  background: linear-gradient(
+    90deg,
+    rgba(100, 150, 255, 0.08),
+    rgba(80, 120, 255, 0.08)
+  );
+  border: 1px solid rgba(100, 150, 255, 0.15);
+  border-radius: 6px;
+  padding: 12px 16px;
+  margin-bottom: 16px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 12px;
+}
+
+.discovery-ribbon-icon {
+  font-size: 16px;
+  opacity: 0.8;
+}
+
+.discovery-ribbon-text {
+  color: #8fb3ff;
+  flex: 1;
+}
+
+.discovery-ribbon-close {
+  background: none;
+  border: none;
+  color: #6b7dcc;
+  font-size: 14px;
+  cursor: pointer;
+  padding: 2px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0.7;
+  transition: opacity 0.2s;
+}
+
+.discovery-ribbon-close:hover {
+  opacity: 1;
+}
+
+.app-root.theme-light .discovery-ribbon {
+  background: linear-gradient(
+    90deg,
+    rgba(152, 130, 94, 0.06),
+    rgba(176, 156, 125, 0.06)
+  );
+  border-color: rgba(152, 130, 94, 0.15);
+}
+
+.app-root.theme-light .discovery-ribbon-text {
+  color: #7a6550;
+}
+
+.app-root.theme-light .discovery-ribbon-close {
+  color: #9d9080;
+}
+
+/* ── Contextual Help Icon ────────────────────────────────────────────────── */
+
+.help-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: rgba(100, 150, 255, 0.2);
+  color: #7db9ff;
+  font-size: 10px;
+  font-weight: bold;
+  margin-left: 4px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.help-icon:hover {
+  background: rgba(100, 150, 255, 0.4);
+  transform: scale(1.1);
+}
+
+.app-root.theme-light .help-icon {
+  background: rgba(152, 130, 94, 0.2);
+  color: #5a4330;
+}
+
+.app-root.theme-light .help-icon:hover {
+  background: rgba(152, 130, 94, 0.4);
+}
+
+/* ── Inline Validation & Status Messages ──────────────────────────────────– */
+
+.inline-message {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 4px;
+  font-size: 12px;
+  line-height: 1.4;
+  margin-bottom: 12px;
+  border-left: 3px solid;
+}
+
+.inline-message.info {
+  background: rgba(100, 150, 255, 0.1);
+  border-color: rgba(100, 150, 255, 0.5);
+  color: #8fb3ff;
+}
+
+.inline-message.success {
+  background: rgba(76, 175, 80, 0.1);
+  border-color: rgba(76, 175, 80, 0.5);
+  color: #81d742;
+}
+
+.inline-message.warning {
+  background: rgba(255, 152, 0, 0.1);
+  border-color: rgba(255, 152, 0, 0.5);
+  color: #ffb347;
+}
+
+.inline-message.error {
+  background: rgba(244, 67, 54, 0.1);
+  border-color: rgba(244, 67, 54, 0.5);
+  color: #ef5350;
+}
+
+.inline-message-icon {
+  font-size: 14px;
+  margin-top: 2px;
+  flex-shrink: 0;
+}
+
+.app-root.theme-light .inline-message.info {
+  background: rgba(176, 156, 125, 0.1);
+  border-color: rgba(152, 130, 94, 0.5);
+  color: #7a6550;
+}
+
+.app-root.theme-light .inline-message.success {
+  background: rgba(76, 175, 80, 0.1);
+  border-color: rgba(76, 175, 80, 0.5);
+  color: #2e7d32;
+}
+
+.app-root.theme-light .inline-message.warning {
+  background: rgba(255, 152, 0, 0.1);
+  border-color: rgba(255, 152, 0, 0.5);
+  color: #f57c00;
+}
+
+.app-root.theme-light .inline-message.error {
+  background: rgba(244, 67, 54, 0.1);
+  border-color: rgba(244, 67, 54, 0.5);
+  color: #d32f2f;
+}
+
+/* ── Keyboard Shortcut Badge ─────────────────────────────────────────────── */
+
+.keystroke-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(100, 150, 255, 0.15);
+  border: 1px solid rgba(100, 150, 255, 0.3);
+  border-radius: 3px;
+  padding: 2px 6px;
+  font-family: "Courier New", monospace;
+  font-size: 10px;
+  font-weight: 600;
+  color: #7db9ff;
+  letter-spacing: 0.5px;
+}
+
+.app-root.theme-light .keystroke-badge {
+  background: rgba(152, 130, 94, 0.15);
+  border-color: rgba(152, 130, 94, 0.3);
+  color: #7a6550;
+}
+
+/* ── Better Visual Hierarchy: Button Variants ────────────────────────────– */
+
+.button-primary {
+  background: linear-gradient(
+    135deg,
+    rgba(100, 150, 255, 0.3),
+    rgba(80, 120, 255, 0.3)
+  );
+  border: 1px solid rgba(100, 150, 255, 0.5);
+  color: #e0e6ff;
+  font-weight: 500;
+  transition: all 0.2s ease;
+}
+
+.button-primary:hover {
+  background: linear-gradient(
+    135deg,
+    rgba(100, 150, 255, 0.4),
+    rgba(80, 120, 255, 0.4)
+  );
+  border-color: rgba(100, 150, 255, 0.7);
+  box-shadow: 0 4px 12px rgba(100, 150, 255, 0.2);
+}
+
+.button-secondary {
+  background: rgba(100, 150, 255, 0.08);
+  border: 1px solid rgba(100, 150, 255, 0.2);
+  color: #a0c0ff;
+  font-weight: 500;
+  transition: all 0.2s ease;
+}
+
+.button-secondary:hover {
+  background: rgba(100, 150, 255, 0.15);
+  border-color: rgba(100, 150, 255, 0.35);
+}
+
+.button-ghost {
+  background: transparent;
+  border: 1px solid rgba(100, 150, 255, 0.15);
+  color: #8fb3ff;
+  font-weight: 500;
+  transition: all 0.2s ease;
+}
+
+.button-ghost:hover {
+  background: rgba(100, 150, 255, 0.1);
+  border-color: rgba(100, 150, 255, 0.3);
+}
+
+/* Light theme button variants */
+.app-root.theme-light .button-primary {
+  background: linear-gradient(
+    135deg,
+    rgba(152, 130, 94, 0.2),
+    rgba(176, 156, 125, 0.2)
+  );
+  border-color: rgba(152, 130, 94, 0.5);
+  color: #5a4330;
+}
+
+.app-root.theme-light .button-primary:hover {
+  background: linear-gradient(
+    135deg,
+    rgba(152, 130, 94, 0.3),
+    rgba(176, 156, 125, 0.3)
+  );
+  border-color: rgba(152, 130, 94, 0.7);
+  box-shadow: 0 4px 12px rgba(132, 110, 94, 0.15);
+}
+
+.app-root.theme-light .button-secondary {
+  background: rgba(152, 130, 94, 0.08);
+  border-color: rgba(152, 130, 94, 0.2);
+  color: #7a6550;
+}
+
+.app-root.theme-light .button-secondary:hover {
+  background: rgba(152, 130, 94, 0.15);
+  border-color: rgba(152, 130, 94, 0.35);
+}
+
+.app-root.theme-light .button-ghost {
+  background: transparent;
+  border-color: rgba(152, 130, 94, 0.15);
+  color: #9d9080;
+}
+
+.app-root.theme-light .button-ghost:hover {
+  background: rgba(152, 130, 94, 0.1);
+  border-color: rgba(152, 130, 94, 0.3);
+}
+
+/* ── Improved Spacing & Typography ──────────────────────────────────────── */
+
+.section-heading {
+  font-size: 14px;
+  font-weight: 600;
+  color: #cbd5e0;
+  margin-bottom: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  opacity: 0.8;
+}
+
+.app-root.theme-light .section-heading {
+  color: #7a6550;
+}
+
+.section-description {
+  font-size: 12px;
+  color: #8895a7;
+  line-height: 1.5;
+  margin-bottom: 16px;
+}
+
+.app-root.theme-light .section-description {
+  color: #9d9080;
+}
+
+/* ── Accessibility: Focus Indicators ────────────────────────────────────── */
+
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid rgba(100, 150, 255, 0.6);
+  outline-offset: 2px;
+}
+
+.app-root.theme-light button:focus-visible,
+.app-root.theme-light input:focus-visible,
+.app-root.theme-light select:focus-visible,
+.app-root.theme-light textarea:focus-visible {
+  outline-color: rgba(152, 130, 94, 0.6);
+}
+
+/* ── Accessibility: Reduced Motion ────────────────────────────────────── */
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* ── Status Chip ────────────────────────────────────────────────────────── */
+
+.status-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 12px;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.status-chip.loading {
+  background: rgba(100, 150, 255, 0.15);
+  color: #8fb3ff;
+}
+
+.status-chip.success {
+  background: rgba(76, 175, 80, 0.15);
+  color: #81d742;
+}
+
+.status-chip.warning {
+  background: rgba(255, 152, 0, 0.15);
+  color: #ffb347;
+}
+
+.status-chip.error {
+  background: rgba(244, 67, 54, 0.15);
+  color: #ef5350;
+}
+
+.app-root.theme-light .status-chip {
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.app-root.theme-light .status-chip.loading {
+  background: rgba(152, 130, 94, 0.15);
+  color: #7a6550;
+}
+
+.app-root.theme-light .status-chip.success {
+  background: rgba(76, 175, 80, 0.15);
+  color: #2e7d32;
+}
+
+.app-root.theme-light .status-chip.warning {
+  background: rgba(255, 152, 0, 0.15);
+  color: #f57c00;
+}
+
+.app-root.theme-light .status-chip.error {
+  background: rgba(244, 67, 54, 0.15);
+  color: #d32f2f;
+}
