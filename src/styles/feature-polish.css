@@ -155,6 +155,30 @@
   background: rgba(var(--accent-rgb), 0.12);
 }
 
+.app-root.theme-light .header-focus-toggle,
+.app-root.theme-light .header-settings-advanced-toggle {
+  border-color: rgba(152, 130, 94, 0.42);
+  background: rgba(252, 247, 240, 0.92);
+  color: #5a4330;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.74);
+}
+
+.app-root.theme-light .header-focus-toggle:hover,
+.app-root.theme-light .header-focus-toggle:focus-visible,
+.app-root.theme-light .header-settings-advanced-toggle:hover,
+.app-root.theme-light .header-settings-advanced-toggle:focus-visible {
+  border-color: rgba(152, 130, 94, 0.52);
+  background: rgba(255, 250, 243, 0.98);
+}
+
+.app-root.theme-light .header-focus-toggle.is-active,
+.app-root.theme-light .header-settings-advanced-toggle.is-open {
+  border-color: rgba(152, 130, 94, 0.58);
+  background: rgba(176, 156, 125, 0.22);
+  color: #5a4330;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.62);
+}
+
 .map-empty-state-actions {
   display: flex;
   flex-wrap: wrap;
@@ -1975,6 +1999,29 @@
   cursor: pointer;
 }
 
+.app-shell-action-btn:hover,
+.app-shell-action-btn:focus-visible {
+  background: rgba(var(--accent-rgb), 0.2);
+  border-color: rgba(var(--accent-rgb), 0.44);
+}
+
+.app-shell-action-btn:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.app-root.theme-light .app-shell-action-btn {
+  color: #5a4330;
+  background: rgba(176, 156, 125, 0.22);
+  border-color: rgba(152, 130, 94, 0.52);
+}
+
+.app-root.theme-light .app-shell-action-btn:hover,
+.app-root.theme-light .app-shell-action-btn:focus-visible {
+  background: rgba(176, 156, 125, 0.32);
+  border-color: rgba(132, 110, 78, 0.64);
+}
+
 .app-shell-select-wrap {
   display: inline-flex;
   align-items: center;
@@ -2127,6 +2174,73 @@
   gap: 8px;
 }
 
+.app-root.theme-light .app-shell-popout {
+  border-color: rgba(132, 121, 102, 0.42);
+  background: linear-gradient(
+    180deg,
+    rgba(253, 248, 241, 0.98),
+    rgba(241, 233, 220, 0.98)
+  );
+  box-shadow:
+    0 18px 36px rgba(132, 110, 78, 0.18),
+    inset 0 1px 0 rgba(255, 255, 255, 0.8);
+}
+
+.app-root.theme-light .app-shell-popout-head strong,
+.app-root.theme-light .app-shell-compare-grid strong {
+  color: #5a4330;
+}
+
+.app-root.theme-light .app-shell-empty-copy,
+.app-root.theme-light .app-shell-diagnostics-list p,
+.app-root.theme-light .app-shell-compare-grid p {
+  color: rgba(108, 87, 64, 0.86);
+}
+
+.app-root.theme-light .app-shell-compare-picker span,
+.app-root.theme-light .app-shell-compare-kicker {
+  color: rgba(108, 87, 64, 0.82);
+}
+
+.app-root.theme-light .app-shell-popout-head button,
+.app-root.theme-light .app-shell-views-create-row button,
+.app-root.theme-light .app-shell-view-row button,
+.app-root.theme-light .app-shell-export-actions button,
+.app-root.theme-light .app-shell-view-delete {
+  color: #5a4330;
+  background: rgba(176, 156, 125, 0.22);
+  border-color: rgba(152, 130, 94, 0.56);
+}
+
+.app-root.theme-light .app-shell-popout-head button:hover,
+.app-root.theme-light .app-shell-popout-head button:focus-visible,
+.app-root.theme-light .app-shell-views-create-row button:hover,
+.app-root.theme-light .app-shell-views-create-row button:focus-visible,
+.app-root.theme-light .app-shell-view-row button:hover,
+.app-root.theme-light .app-shell-view-row button:focus-visible,
+.app-root.theme-light .app-shell-export-actions button:hover,
+.app-root.theme-light .app-shell-export-actions button:focus-visible,
+.app-root.theme-light .app-shell-view-delete:hover,
+.app-root.theme-light .app-shell-view-delete:focus-visible {
+  background: rgba(176, 156, 125, 0.34);
+  border-color: rgba(132, 110, 78, 0.66);
+}
+
+.app-root.theme-light .app-shell-views-create-row input {
+  color: #1b3148;
+  background: rgba(252, 247, 240, 0.96);
+  border-color: rgba(132, 121, 102, 0.42);
+}
+
+.app-root.theme-light .app-shell-views-create-row input::placeholder {
+  color: rgba(53, 77, 104, 0.72);
+}
+
+.app-root.theme-light .app-shell-compare-grid > div {
+  background: rgba(255, 251, 245, 0.9);
+  border-color: rgba(152, 130, 94, 0.42);
+}
+
 /* ── Keyboard Legend & Command Palette ─────────────────────────────────── */
 .keyboard-legend-overlay,
 .command-palette-overlay {
@@ -2180,6 +2294,39 @@
   cursor: pointer;
 }
 
+.app-root.theme-light .keyboard-legend-card {
+  border-color: rgba(152, 130, 94, 0.42);
+  background: linear-gradient(
+    180deg,
+    rgba(253, 248, 241, 0.98),
+    rgba(241, 233, 220, 0.98)
+  );
+  box-shadow:
+    0 18px 36px rgba(132, 110, 78, 0.18),
+    inset 0 1px 0 rgba(255, 255, 255, 0.8);
+}
+
+.app-root.theme-light .keyboard-legend-card h3 {
+  color: #5a4330;
+}
+
+.app-root.theme-light .keyboard-legend-card ul {
+  color: rgba(108, 87, 64, 0.86);
+}
+
+.app-root.theme-light .keyboard-legend-actions button {
+  color: #5a4330;
+  background: rgba(252, 247, 240, 0.92);
+  border-color: rgba(152, 130, 94, 0.42);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.74);
+}
+
+.app-root.theme-light .keyboard-legend-actions button:hover,
+.app-root.theme-light .keyboard-legend-actions button:focus-visible {
+  background: rgba(176, 156, 125, 0.22);
+  border-color: rgba(152, 130, 94, 0.56);
+}
+
 .command-palette input {
   width: 100%;
   min-height: 38px;
@@ -2225,10 +2372,53 @@
   text-transform: uppercase;
 }
 
+.app-root.theme-light .command-palette {
+  border-color: rgba(152, 130, 94, 0.42);
+  background: linear-gradient(
+    180deg,
+    rgba(253, 248, 241, 0.98),
+    rgba(241, 233, 220, 0.98)
+  );
+  box-shadow:
+    0 18px 36px rgba(132, 110, 78, 0.18),
+    inset 0 1px 0 rgba(255, 255, 255, 0.8);
+}
+
+.app-root.theme-light .command-palette input {
+  color: #5a4330;
+  background: rgba(252, 247, 240, 0.94);
+  border-color: rgba(152, 130, 94, 0.42);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.78);
+}
+
+.app-root.theme-light .command-palette input::placeholder {
+  color: rgba(108, 87, 64, 0.62);
+}
+
+.app-root.theme-light .command-palette input:focus-visible {
+  outline: none;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.82),
+    0 0 0 3px rgba(176, 156, 125, 0.16);
+}
+
+.app-root.theme-light .command-palette-list button {
+  color: #5a4330;
+  background: rgba(252, 247, 240, 0.92);
+  border-color: rgba(152, 130, 94, 0.42);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.74);
+}
+
+.app-root.theme-light .command-palette-list button:hover,
+.app-root.theme-light .command-palette-list button:focus-visible {
+  background: rgba(176, 156, 125, 0.22);
+  border-color: rgba(152, 130, 94, 0.56);
+}
+
 .app-root.theme-light .command-palette-shortcut {
-  color: #2a435f;
-  border-color: rgba(132, 121, 102, 0.32);
-  background: rgba(252, 247, 240, 0.9);
+  color: #5a4330;
+  border-color: rgba(152, 130, 94, 0.42);
+  background: rgba(255, 251, 245, 0.92);
 }
 
 .app-root.theme-dark .command-palette-shortcut {
@@ -2356,15 +2546,51 @@
 .app-root.theme-light .app-shell-compare-picker select,
 .app-root.theme-light .map-trace-search,
 .app-root.theme-light .map-trace-tool select {
-  color: #1f344b;
+  color: #5a4330;
   background: rgba(252, 247, 240, 0.94);
-  border-color: rgba(132, 121, 102, 0.38);
+  border-color: rgba(152, 130, 94, 0.42);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.78);
 }
 
 .app-root.theme-light .app-shell-select-wrap,
 .app-root.theme-light .map-trace-tool label span,
 .app-root.theme-light .app-shell-compare-picker span {
-  color: rgba(68, 91, 118, 0.82);
+  color: rgba(108, 87, 64, 0.82);
+}
+
+.app-root.theme-light .app-shell-compare-picker select:hover,
+.app-root.theme-light .map-trace-search:hover,
+.app-root.theme-light .map-trace-tool select:hover {
+  background: rgba(255, 250, 243, 0.98);
+  border-color: rgba(152, 130, 94, 0.5);
+}
+
+.app-root.theme-light .app-shell-compare-picker select:focus-visible,
+.app-root.theme-light .map-trace-search:focus-visible,
+.app-root.theme-light .map-trace-tool select:focus-visible {
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.82),
+    0 0 0 3px rgba(176, 156, 125, 0.16);
+}
+
+.app-root.theme-light .map-trace-tool {
+  border-color: rgba(152, 130, 94, 0.42);
+  background: linear-gradient(
+    180deg,
+    rgba(253, 248, 241, 0.98),
+    rgba(241, 233, 220, 0.98)
+  );
+  box-shadow:
+    0 18px 36px rgba(132, 110, 78, 0.18),
+    inset 0 1px 0 rgba(255, 255, 255, 0.8);
+}
+
+.app-root.theme-light .map-trace-status {
+  color: rgba(108, 87, 64, 0.86);
+}
+
+.app-root.theme-light .map-trace-search::placeholder {
+  color: rgba(108, 87, 64, 0.62);
 }
 
 .app-root.theme-dark .app-shell-select,

@@ -31,16 +31,19 @@ import {
 } from "./data/mockData";
 import "./App.css";
 import "./styles/feature-polish.css";
+import "./styles/ux-improvements.css";
+import "./styles/onboarding.css";
 
 const STATS_PANEL_STORAGE_KEY = "phantasma-maps:stats-panel-collapsed";
+const USER_SKILL_LEVEL_KEY = "phantasma-maps:skill-level";
+const DISCOVERY_HINTS_DISMISSED_KEY =
+  "phantasma-maps:discovery-hints-dismissed";
 const COLOR_THEME_STORAGE_KEY = "phantasma-maps:color-theme";
 const TOKEN_SYMBOL_STORAGE_KEY = "phantasma-maps:selected-token-symbol";
 const DENSITY_MODE_STORAGE_KEY = "phantasma-maps:density-mode";
 const ONBOARDING_DISMISSED_STORAGE_KEY = "phantasma-maps:onboarding-dismissed";
 const FOCUS_MODE_STORAGE_KEY = "phantasma-maps:focus-mode";
 const SAVED_VIEWS_STORAGE_KEY = "phantasma-maps:saved-views";
-const KEYBOARD_TIPS_DISMISSED_STORAGE_KEY =
-  "phantasma-maps:keyboard-tips-dismissed";
 const TOKEN_SNAPSHOTS_STORAGE_KEY = "phantasma-maps:token-snapshots";
 const MOBILE_MEDIA_QUERY = "(max-width: 768px)";
 const ALLOWED_COLOR_THEMES = new Set([
@@ -49,6 +52,93 @@ const ALLOWED_COLOR_THEMES = new Set([
   "ghost-blue",
   "kcal-red",
 ]);
+
+const ONBOARDING_TUTORIAL_STEPS = [
+  {
+    title: "Search Bar",
+    detail:
+      "Use the top search to find a wallet address or holder label. Address searches re-center the map around that wallet, while text searches filter visible nodes.",
+    tip: "Shortcut: press / to focus search instantly.",
+    target: "search",
+  },
+  {
+    title: "Graph Settings",
+    detail:
+      "Click the gear icon to open Display & Map Settings. This is where you control theme, density, focus mode, physics, labels, and graph limits.",
+    tip: "If the graph feels heavy, lower visible wallets/connections.",
+    target: "settings",
+  },
+  {
+    title: "Theme & Density Buttons",
+    detail:
+      "Theme changes the visual style. Density switches between Comfortable and Compact spacing, especially useful on smaller screens.",
+    tip: "Try Compact when comparing many stats at once.",
+    target: "settings",
+  },
+  {
+    title: "Focus Mode Toggle",
+    detail:
+      "Focus Mode hides secondary UI clutter so you can concentrate on graph exploration and selection analysis.",
+    tip: "Toggle with keyboard shortcut: F.",
+    target: "settings",
+  },
+  {
+    title: "Command Button",
+    detail:
+      "The Command button opens quick actions like Saved Views, Compare, Trace Path, Diagnostics, and export helpers from one menu.",
+    tip: "Shortcut: Ctrl+K.",
+    target: "command",
+  },
+  {
+    title: "Saved Views",
+    detail:
+      "Saved Views stores your current analysis state so you can return to the same token, filters, and perspective later.",
+    tip: "Great for repeating weekly analysis.",
+    target: "views",
+  },
+  {
+    title: "Compare Mode",
+    detail:
+      "Compare mode lets you line up two token snapshots side-by-side and inspect wallet count, links, concentration, and top holder share.",
+    tip: "Use it to spot distribution differences quickly.",
+    target: "compare",
+  },
+  {
+    title: "Trace Path",
+    detail:
+      "Trace Path highlights the shortest relationship path between two wallets so you can understand how value can move across the graph.",
+    tip: "Useful for investigating wallet clusters.",
+    target: "trace",
+  },
+  {
+    title: "Diagnostics",
+    detail:
+      "Diagnostics shows source health, sync information, and status details when loading or API behavior needs deeper inspection.",
+    tip: "Check this panel first if something looks out of date.",
+    target: "diagnostics",
+  },
+  {
+    title: "Click a Node Now",
+    detail:
+      "Try clicking any bubble on the map. Selecting a node opens its holder details in the right panel and enables connection and transfer actions.",
+    tip: "Nodes are fully interactive during this tour — go ahead and click one.",
+    target: "map",
+  },
+  {
+    title: "Selected Node Card",
+    detail:
+      "After clicking a node the right panel shows wallet address, balance, share percentage, and a sparkline. From here you can open Transfers, Show Connections, or copy the address.",
+    tip: "Use Show Connections to refocus the entire graph around that wallet.",
+    target: "selected-node",
+  },
+  {
+    title: "You Can Replay This Anytime",
+    detail:
+      "Open the gear settings menu and click Replay Tutorial to run this walkthrough again whenever you need a refresher.",
+    tip: "You are ready to explore the map.",
+    target: "settings",
+  },
+];
 
 function parseEnvMs(key, fallbackMs) {
   const raw = process.env[key];
@@ -140,6 +230,64 @@ const TOKEN_METADATA_POLL_INTERVAL_MS = parseEnvMs(
   "REACT_APP_TOKEN_METADATA_POLL_INTERVAL_MS",
   60000,
 );
+const MAP_LOADING_MIN_VISIBLE_MS = 480;
+const MAP_LOADING_COMPLETE_HOLD_MS = 120;
+const MAP_LOADING_EXIT_MS = 190;
+const MAP_LOADING_STAGE_BALANCES_MAX = 35;
+const MAP_LOADING_STAGE_ADDRESSES_MAX = 70;
+const MAP_LOADING_PHASE_MIN_VISIBLE_MS = 280;
+const MAP_LOADING_SLOW_THRESHOLD_MS = 3500;
+const MAP_LOADING_STALLED_THRESHOLD_MS = 8000;
+const MAP_LOADING_SMALL_GRAPH_NODE_THRESHOLD = 80;
+const MAP_LOADING_SMALL_GRAPH_LINK_THRESHOLD = 160;
+const MAP_LOADING_LARGE_GRAPH_NODE_THRESHOLD = 700;
+const MAP_LOADING_LARGE_GRAPH_LINK_THRESHOLD = 1400;
+
+function resolveMapLoadingProfile(nodeCount, linkCount) {
+  const safeNodeCount = Number.isFinite(Number(nodeCount))
+    ? Number(nodeCount)
+    : 0;
+  const safeLinkCount = Number.isFinite(Number(linkCount))
+    ? Number(linkCount)
+    : 0;
+
+  if (
+    safeNodeCount <= MAP_LOADING_SMALL_GRAPH_NODE_THRESHOLD &&
+    safeLinkCount <= MAP_LOADING_SMALL_GRAPH_LINK_THRESHOLD
+  ) {
+    return {
+      balancesMax: 55,
+      addressesMax: 55,
+      showAddressPhase: false,
+      minVisibleMs: 340,
+      phaseMinVisibleMs: 210,
+      label: "small",
+    };
+  }
+
+  if (
+    safeNodeCount >= MAP_LOADING_LARGE_GRAPH_NODE_THRESHOLD ||
+    safeLinkCount >= MAP_LOADING_LARGE_GRAPH_LINK_THRESHOLD
+  ) {
+    return {
+      balancesMax: 35,
+      addressesMax: 72,
+      showAddressPhase: true,
+      minVisibleMs: 620,
+      phaseMinVisibleMs: 340,
+      label: "large",
+    };
+  }
+
+  return {
+    balancesMax: MAP_LOADING_STAGE_BALANCES_MAX,
+    addressesMax: MAP_LOADING_STAGE_ADDRESSES_MAX,
+    showAddressPhase: true,
+    minVisibleMs: MAP_LOADING_MIN_VISIBLE_MS,
+    phaseMinVisibleMs: MAP_LOADING_PHASE_MIN_VISIBLE_MS,
+    label: "standard",
+  };
+}
 
 function shortenAddress(address) {
   if (typeof address !== "string" || address.length <= 10)
@@ -1311,7 +1459,21 @@ export default function App() {
   const [summaryNodes, setSummaryNodes] = useState([]);
   const [mapLinks, setMapLinks] = useState([]);
   const [isMapLoading, setIsMapLoading] = useState(false);
+  const [isMapLoaderVisible, setIsMapLoaderVisible] = useState(false);
+  const [isMapLoaderExiting, setIsMapLoaderExiting] = useState(false);
+  const [isMapLoadingReadyState, setIsMapLoadingReadyState] = useState(false);
+  const [isMapLoadingSlow, setIsMapLoadingSlow] = useState(false);
+  const [isMapLoadingStalled, setIsMapLoadingStalled] = useState(false);
   const [mapLoadingProgress, setMapLoadingProgress] = useState(0);
+  const [mapLoadingProfile, setMapLoadingProfile] = useState(() =>
+    resolveMapLoadingProfile(200, 300),
+  );
+  const [mapLoadingEvidence, setMapLoadingEvidence] = useState({
+    wallets: null,
+    links: null,
+  });
+  const [mapLoadingDisplayedPhase, setMapLoadingDisplayedPhase] =
+    useState("balances");
   const [mapDataStatus, setMapDataStatus] = useState("");
   const [isUsingMockApiFallback, setIsUsingMockApiFallback] = useState(false);
   const [selectedNodeApiTransactions, setSelectedNodeApiTransactions] =
@@ -1400,6 +1562,25 @@ export default function App() {
       return true;
     }
   });
+  const [userSkillLevel, setUserSkillLevel] = useState(() => {
+    try {
+      const stored = window.localStorage.getItem(USER_SKILL_LEVEL_KEY);
+      return stored === "power-user" ? "power-user" : "beginner";
+    } catch {
+      return "beginner";
+    }
+  });
+  const [isOnboardingAt, setIsOnboardingAt] = useState("skill-selection");
+  const [onboardingTutorialStep, setOnboardingTutorialStep] = useState(0);
+  const [discoveryHintsDismissed, setDiscoveryHintsDismissed] = useState(() => {
+    try {
+      return (
+        window.localStorage.getItem(DISCOVERY_HINTS_DISMISSED_KEY) === "true"
+      );
+    } catch {
+      return false;
+    }
+  });
   const [isMobileViewport, setIsMobileViewport] = useState(() => {
     if (typeof window === "undefined" || !window.matchMedia) {
       return false;
@@ -1430,19 +1611,6 @@ export default function App() {
     }
   });
   const [savedViewName, setSavedViewName] = useState("");
-  const [isKeyboardLegendOpen, setIsKeyboardLegendOpen] = useState(false);
-  const [isKeyboardLegendDismissed, setIsKeyboardLegendDismissed] = useState(
-    () => {
-      try {
-        return (
-          window.localStorage.getItem(KEYBOARD_TIPS_DISMISSED_STORAGE_KEY) ===
-          "true"
-        );
-      } catch {
-        return false;
-      }
-    },
-  );
   const [physicsMode, setPhysicsMode] = useState("balanced");
   const [labelDensityMode, setLabelDensityMode] = useState("balanced");
   const [traceFromNodeId, setTraceFromNodeId] = useState("");
@@ -1477,6 +1645,8 @@ export default function App() {
   });
   const [isExportPresetsOpen, setIsExportPresetsOpen] = useState(false);
   const [isMobileInspectOpen, setIsMobileInspectOpen] = useState(false);
+  const mapLoaderShownAtRef = useRef(0);
+  const mapLoadingPhaseShownAtRef = useRef(0);
 
   useEffect(() => {
     if (typeof window === "undefined" || !window.matchMedia) {
@@ -1549,6 +1719,25 @@ export default function App() {
 
   useEffect(() => {
     try {
+      window.localStorage.setItem(USER_SKILL_LEVEL_KEY, userSkillLevel);
+    } catch {
+      // Ignore storage access issues and keep skill level in memory.
+    }
+  }, [userSkillLevel]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        DISCOVERY_HINTS_DISMISSED_KEY,
+        String(discoveryHintsDismissed),
+      );
+    } catch {
+      // Ignore storage access issues and keep discovery state in memory.
+    }
+  }, [discoveryHintsDismissed]);
+
+  useEffect(() => {
+    try {
       window.localStorage.setItem(
         SAVED_VIEWS_STORAGE_KEY,
         JSON.stringify(savedViews),
@@ -1568,27 +1757,6 @@ export default function App() {
       // Ignore storage issues and keep snapshots in memory.
     }
   }, [tokenSnapshots]);
-
-  useEffect(() => {
-    if (!isKeyboardLegendDismissed) {
-      try {
-        window.localStorage.setItem(
-          KEYBOARD_TIPS_DISMISSED_STORAGE_KEY,
-          "false",
-        );
-      } catch {
-        // Ignore storage issues.
-      }
-    }
-  }, [isKeyboardLegendDismissed]);
-
-  useEffect(() => {
-    if (isKeyboardLegendDismissed) return;
-    const timeoutId = window.setTimeout(() => {
-      setIsKeyboardLegendOpen(true);
-    }, 800);
-    return () => window.clearTimeout(timeoutId);
-  }, [isKeyboardLegendDismissed]);
 
   useEffect(() => {
     try {
@@ -2002,10 +2170,7 @@ export default function App() {
   ]);
 
   useEffect(() => {
-    if (!isMapLoading) {
-      setMapLoadingProgress(0);
-      return undefined;
-    }
+    if (!isMapLoading) return undefined;
 
     let timeoutId;
     const easeTarget = 92;
@@ -2032,11 +2197,163 @@ export default function App() {
   }, [isMapLoading]);
 
   useEffect(() => {
+    if (!isMapLoading) {
+      setIsMapLoadingSlow(false);
+      setIsMapLoadingStalled(false);
+      return undefined;
+    }
+
+    setIsMapLoadingSlow(false);
+    setIsMapLoadingStalled(false);
+
+    const slowTimerId = window.setTimeout(() => {
+      setIsMapLoadingSlow(true);
+    }, MAP_LOADING_SLOW_THRESHOLD_MS);
+    const stalledTimerId = window.setTimeout(() => {
+      setIsMapLoadingStalled(true);
+    }, MAP_LOADING_STALLED_THRESHOLD_MS);
+
+    return () => {
+      window.clearTimeout(slowTimerId);
+      window.clearTimeout(stalledTimerId);
+    };
+  }, [isMapLoading]);
+
+  const mapLoadingPhaseTarget = useMemo(() => {
+    const clampedProgress = Math.max(
+      0,
+      Math.min(100, Math.round(mapLoadingProgress)),
+    );
+
+    if (isMapLoadingReadyState) return "ready";
+    if (clampedProgress < mapLoadingProfile.balancesMax) {
+      return "balances";
+    }
+    if (
+      mapLoadingProfile.showAddressPhase &&
+      clampedProgress < mapLoadingProfile.addressesMax
+    ) {
+      return "addresses";
+    }
+    return "topology";
+  }, [
+    isMapLoadingReadyState,
+    mapLoadingProfile.addressesMax,
+    mapLoadingProfile.balancesMax,
+    mapLoadingProfile.showAddressPhase,
+    mapLoadingProgress,
+  ]);
+  useEffect(() => {
+    if (!isMapLoaderVisible) {
+      mapLoadingPhaseShownAtRef.current = 0;
+      setMapLoadingDisplayedPhase("balances");
+      return undefined;
+    }
+
+    const phaseOrder = ["balances", "addresses", "topology", "ready"];
+    const currentIndex = phaseOrder.indexOf(mapLoadingDisplayedPhase);
+    const targetIndex = phaseOrder.indexOf(mapLoadingPhaseTarget);
+
+    if (targetIndex === -1 || currentIndex === -1) {
+      setMapLoadingDisplayedPhase(mapLoadingPhaseTarget);
+      mapLoadingPhaseShownAtRef.current = Date.now();
+      return undefined;
+    }
+
+    if (targetIndex <= currentIndex) {
+      if (targetIndex < currentIndex) {
+        setMapLoadingDisplayedPhase(mapLoadingPhaseTarget);
+        mapLoadingPhaseShownAtRef.current = Date.now();
+      }
+      return undefined;
+    }
+
+    const now = Date.now();
+    const shownAt = mapLoadingPhaseShownAtRef.current || now;
+    if (!mapLoadingPhaseShownAtRef.current) {
+      mapLoadingPhaseShownAtRef.current = now;
+    }
+    const elapsedMs = now - shownAt;
+    const waitMs = Math.max(0, mapLoadingProfile.phaseMinVisibleMs - elapsedMs);
+
+    if (waitMs === 0) {
+      setMapLoadingDisplayedPhase(mapLoadingPhaseTarget);
+      mapLoadingPhaseShownAtRef.current = Date.now();
+      return undefined;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      setMapLoadingDisplayedPhase(mapLoadingPhaseTarget);
+      mapLoadingPhaseShownAtRef.current = Date.now();
+    }, waitMs);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [
+    isMapLoaderVisible,
+    mapLoadingDisplayedPhase,
+    mapLoadingPhaseTarget,
+    mapLoadingProfile.phaseMinVisibleMs,
+  ]);
+
+  useEffect(() => {
+    let delayTimeoutId;
+    let holdTimeoutId;
+    let hideTimeoutId;
+
+    if (isMapLoading) {
+      mapLoaderShownAtRef.current = Date.now();
+      mapLoadingPhaseShownAtRef.current = Date.now();
+      setIsMapLoadingReadyState(false);
+      setIsMapLoaderExiting(false);
+      setIsMapLoaderVisible(true);
+      return undefined;
+    }
+
+    if (!isMapLoaderVisible) {
+      return undefined;
+    }
+
+    const elapsedMs = Date.now() - mapLoaderShownAtRef.current;
+    const remainingMinVisibleMs = Math.max(
+      0,
+      mapLoadingProfile.minVisibleMs - elapsedMs,
+    );
+
+    delayTimeoutId = window.setTimeout(() => {
+      setMapLoadingProgress(100);
+      setIsMapLoadingReadyState(true);
+      holdTimeoutId = window.setTimeout(() => {
+        setIsMapLoaderExiting(true);
+        hideTimeoutId = window.setTimeout(() => {
+          setIsMapLoaderVisible(false);
+          setIsMapLoaderExiting(false);
+          setIsMapLoadingReadyState(false);
+          setMapLoadingProgress(0);
+          setMapLoadingEvidence({ wallets: null, links: null });
+        }, MAP_LOADING_EXIT_MS);
+      }, MAP_LOADING_COMPLETE_HOLD_MS);
+    }, remainingMinVisibleMs);
+
+    return () => {
+      if (delayTimeoutId) window.clearTimeout(delayTimeoutId);
+      if (holdTimeoutId) window.clearTimeout(holdTimeoutId);
+      if (hideTimeoutId) window.clearTimeout(hideTimeoutId);
+    };
+  }, [isMapLoaderVisible, isMapLoading, mapLoadingProfile.minVisibleMs]);
+
+  useEffect(() => {
     let isMounted = true;
 
     async function fetchMapGraph() {
+      const defaultLoadingProfile = resolveMapLoadingProfile(200, 300);
       setIsMapLoading(true);
+      setIsMapLoadingReadyState(false);
       setMapLoadingProgress(8);
+      setMapLoadingProfile(defaultLoadingProfile);
+      setMapLoadingEvidence({ wallets: null, links: null });
+      setMapLoadingDisplayedPhase("balances");
       setSelectedNode(null);
       setHoveredNode(null);
       setMapDataStatus(
@@ -2127,6 +2444,12 @@ export default function App() {
               Array.isArray(tableFocusedGraph.nodes) &&
               tableFocusedGraph.nodes.length
             ) {
+              setMapLoadingEvidence({
+                wallets: tableFocusedGraph.nodes.length,
+                links: Array.isArray(tableFocusedGraph.links)
+                  ? tableFocusedGraph.links.length
+                  : 0,
+              });
               setIsUsingMockApiFallback(false);
               setMapNodes(tableFocusedGraph.nodes);
               setSummaryNodes(tableFocusedGraph.nodes);
@@ -2152,32 +2475,120 @@ export default function App() {
           }
         }
 
+        if (activeGraphRootAddress && !isConnectionsView) {
+          try {
+            const tokenGraphFallbackEndpoint = buildGraphEndpoint(
+              MAPS_API_BASE_URL,
+              selectedTokenSymbol,
+              {
+                rootAddress: "",
+                depth: MAPS_API_GRAPH_DEPTH,
+                edgeLimit: effectiveGraphEdgeLimit,
+                defaultEdgeLimit: MAPS_API_GRAPH_EDGE_LIMIT,
+                includeTopHolders: MAPS_API_GRAPH_TOP_HOLDERS_LIMIT,
+              },
+            );
+            const tokenGraphFallbackResult = await fetchJsonWithTimeout(
+              tokenGraphFallbackEndpoint,
+              { cache: "no-store" },
+              MAPS_API_REQUEST_TIMEOUT_MS,
+            );
+
+            if (tokenGraphFallbackResult.ok) {
+              const graphDecimals = apiTokenInfo?.decimals ?? 0;
+              const fallbackGraph = buildGraphDataFromApi(
+                tokenGraphFallbackResult.payload,
+                graphDecimals,
+              );
+              const focusedFallbackGraph = buildNeighborFocusedGraph(
+                fallbackGraph,
+                activeGraphRootAddress,
+              );
+
+              if (
+                focusedFallbackGraph &&
+                Array.isArray(focusedFallbackGraph.nodes) &&
+                focusedFallbackGraph.nodes.length
+              ) {
+                if (!isMounted) return;
+
+                setIsUsingMockApiFallback(false);
+                setTrackedTokenSupply(
+                  Number(fallbackGraph?.totalSupply) ||
+                    Number(focusedFallbackGraph.totalValue) ||
+                    0,
+                );
+                setMapNodes(focusedFallbackGraph.nodes);
+                setSummaryNodes(focusedFallbackGraph.nodes);
+                setMapLinks(focusedFallbackGraph.links || []);
+                setMapLoadingEvidence({
+                  wallets: focusedFallbackGraph.nodes.length,
+                  links: Array.isArray(focusedFallbackGraph.links)
+                    ? focusedFallbackGraph.links.length
+                    : 0,
+                });
+
+                if (focusedFallbackGraph.rootNodeId) {
+                  const focusedRootNode = focusedFallbackGraph.nodes.find(
+                    (node) => node.id === focusedFallbackGraph.rootNodeId,
+                  );
+                  setSelectedNode(focusedRootNode || null);
+                }
+
+                setMapDataStatus(
+                  `This wallet's detailed graph is temporarily unavailable. Showing related wallets from the ${selectedTokenSymbol} token network around ${shortenAddress(activeGraphRootAddress)} instead.`,
+                );
+                setMapLoadingProgress(100);
+                setIsMapLoading(false);
+                return;
+              }
+            }
+          } catch {
+            // Fall through to status handling below.
+          }
+        }
+
         if (result.status === 0) {
           if (isConnectionsView) {
             setIsUsingMockApiFallback(false);
-            setMapDataStatus("Connections unavailable (API timeout/network).");
+            setMapDataStatus(
+              "Unable to load wallet connections right now. Please check your network and try again.",
+            );
+            setMapLoadingEvidence({ wallets: null, links: null });
           } else {
             setIsUsingMockApiFallback(true);
             setTrackedTokenSupply(
               selectedMockTokenData?.tokenInfo?.totalSupply || 0,
             );
-            setMapNodes(selectedMockTokenData?.holders || []);
-            setSummaryNodes(selectedMockTokenData?.holders || []);
-            setMapLinks(selectedMockTokenData?.links || []);
+            const fallbackNodes = selectedMockTokenData?.holders || [];
+            const fallbackLinks = selectedMockTokenData?.links || [];
+            setMapNodes(fallbackNodes);
+            setSummaryNodes(fallbackNodes);
+            setMapLinks(fallbackLinks);
+            setMapLoadingEvidence({
+              wallets: fallbackNodes.length,
+              links: fallbackLinks.length,
+            });
             setTokenSelectorStatus("API unavailable; showing mock tokens");
-            setMapDataStatus("Using fallback map data (API unavailable).");
+            setMapDataStatus(
+              "Using cached data while the network service recovers...",
+            );
           }
         } else {
           if (isConnectionsView) {
             setIsUsingMockApiFallback(false);
-            setMapDataStatus(`Connections request failed (${result.status}).`);
+            setMapDataStatus(
+              `Couldn't load wallet connections (error ${result.status}). Try again or explore the token map.`,
+            );
           } else {
             setIsUsingMockApiFallback(false);
             setTrackedTokenSupply(0);
             setMapNodes([]);
             setSummaryNodes([]);
             setMapLinks([]);
-            setMapDataStatus(`Graph request failed (${result.status}).`);
+            setMapDataStatus(
+              `Network service temporarily unavailable (error ${result.status}). Retrying...`,
+            );
           }
         }
         setIsMapLoading(false);
@@ -2189,6 +2600,18 @@ export default function App() {
 
       const graphDecimals = apiTokenInfo?.decimals ?? 0;
       const mappedGraph = buildGraphDataFromApi(result.payload, graphDecimals);
+      setMapLoadingProfile(
+        resolveMapLoadingProfile(
+          Array.isArray(mappedGraph?.nodes) ? mappedGraph.nodes.length : 0,
+          Array.isArray(mappedGraph?.links) ? mappedGraph.links.length : 0,
+        ),
+      );
+      setMapLoadingEvidence({
+        wallets: Array.isArray(mappedGraph?.nodes)
+          ? mappedGraph.nodes.length
+          : 0,
+        links: Array.isArray(mappedGraph?.links) ? mappedGraph.links.length : 0,
+      });
 
       const isTopLevelTokenGraph =
         !isConnectionsView &&
@@ -2321,13 +2744,17 @@ export default function App() {
           !mappedGraph.links.length
         ) {
           if (isConnectionsView) {
-            setMapDataStatus("No connections found for this wallet.");
+            setMapDataStatus(
+              "No transaction history found for this wallet in the current time range.",
+            );
           } else {
             setTrackedTokenSupply(0);
             setMapNodes([]);
             setSummaryNodes([]);
             setMapLinks([]);
-            setMapDataStatus("API returned no graph data.");
+            setMapDataStatus(
+              "No holder data available for this token. It may be newly added.",
+            );
           }
           setIsMapLoading(false);
           return;
@@ -2338,13 +2765,17 @@ export default function App() {
 
       if (!focusedGraph || !focusedGraph.nodes.length) {
         if (isConnectionsView) {
-          setMapDataStatus("Searched address not found in graph data.");
+          setMapDataStatus(
+            "This wallet address wasn't found in the current token holder list.",
+          );
         } else {
           setTrackedTokenSupply(0);
           setMapNodes([]);
           setSummaryNodes([]);
           setMapLinks([]);
-          setMapDataStatus("Searched address not found in graph data.");
+          setMapDataStatus(
+            "This wallet address wasn't found in the current token holder list.",
+          );
         }
         setIsMapLoading(false);
         return;
@@ -2431,6 +2862,12 @@ export default function App() {
       setMapNodes(focusedGraph.nodes);
       setSummaryNodes(mergedSummaryNodes);
       setMapLinks(resolvedMapLinks);
+      setMapLoadingEvidence({
+        wallets: Array.isArray(mergedSummaryNodes)
+          ? mergedSummaryNodes.length
+          : 0,
+        links: Array.isArray(resolvedMapLinks) ? resolvedMapLinks.length : 0,
+      });
       setMapLoadingProgress(94);
       // Prefer the API's explicit totalSupply; fall back to discovered sum.
       setTrackedTokenSupply(
@@ -2461,14 +2898,18 @@ export default function App() {
       if (!isMounted) return;
       if (isConnectionsView) {
         setIsUsingMockApiFallback(false);
-        setMapDataStatus("Unable to process connections graph.");
+        setMapDataStatus(
+          "Couldn't process the wallet connections. Try selecting a different wallet.",
+        );
       } else {
         setIsUsingMockApiFallback(false);
         setTrackedTokenSupply(0);
         setMapNodes([]);
         setSummaryNodes([]);
         setMapLinks([]);
-        setMapDataStatus("Unable to process graph data.");
+        setMapDataStatus(
+          "Couldn't load the token holder map. Please refresh or try another token.",
+        );
       }
       setIsMapLoading(false);
     });
@@ -3469,10 +3910,6 @@ export default function App() {
       setIsCommandPaletteOpen(false);
       return true;
     }
-    if (isKeyboardLegendOpen) {
-      setIsKeyboardLegendOpen(false);
-      return true;
-    }
     if (isSavedViewsOpen) {
       setIsSavedViewsOpen(false);
       return true;
@@ -3522,7 +3959,6 @@ export default function App() {
     isDiagnosticsOpen,
     isExportMenuOpen,
     isExportPresetsOpen,
-    isKeyboardLegendOpen,
     isMobileInspectOpen,
     isOnboardingVisible,
     isSavedViewsOpen,
@@ -3588,15 +4024,6 @@ export default function App() {
       ) {
         event.preventDefault();
         setIsCommandPaletteOpen(true);
-        return;
-      }
-
-      if (
-        !isTypingTarget &&
-        (event.key === "?" || (event.shiftKey && event.key === "/"))
-      ) {
-        event.preventDefault();
-        setIsKeyboardLegendOpen(true);
         return;
       }
 
@@ -4254,11 +4681,6 @@ export default function App() {
         run: handleRetryGraphLoad,
       },
       {
-        id: "keyboard",
-        label: "Open keyboard shortcuts legend",
-        run: () => setIsKeyboardLegendOpen(true),
-      },
-      {
         id: "diagnostics",
         label: "Open diagnostics details",
         run: () => setIsDiagnosticsOpen(true),
@@ -4335,6 +4757,45 @@ export default function App() {
     0,
     Math.min(100, Math.round(mapLoadingProgress)),
   );
+  const mapLoadingPhaseLabel =
+    mapLoadingDisplayedPhase === "balances"
+      ? "Balance normalization"
+      : mapLoadingDisplayedPhase === "addresses"
+        ? "Address mapping"
+        : mapLoadingDisplayedPhase === "topology"
+          ? "Topology assembly"
+          : "Ready";
+  const mapLoadingStageDetail = isMapLoadingReadyState
+    ? "Graph ready"
+    : mapLoadingDisplayedPhase === "balances"
+      ? "Fetching token balances"
+      : mapLoadingDisplayedPhase === "addresses"
+        ? "Resolving wallet relationships"
+        : isMapLoadingSlow
+          ? "Still processing a larger graph payload"
+          : "Preparing graph render";
+  const isBalancesComplete =
+    mapLoadingDisplayedPhase !== "balances" && mapLoadingDisplayedPhase !== "";
+  const isAddressComplete =
+    mapLoadingDisplayedPhase === "topology" ||
+    mapLoadingDisplayedPhase === "ready";
+  const isTopologyComplete = mapLoadingDisplayedPhase === "ready";
+  const mapLoadingAriaStatus =
+    mapLoadingDisplayedPhase === "ready"
+      ? "Graph ready"
+      : `Graph processing phase: ${mapLoadingPhaseLabel}`;
+  const hasMapLoadingEvidence =
+    Number.isFinite(mapLoadingEvidence?.wallets) ||
+    Number.isFinite(mapLoadingEvidence?.links);
+  const mapLoadingNodeCount = Number.isFinite(mapLoadingEvidence?.wallets)
+    ? Math.max(0, Math.round(mapLoadingEvidence.wallets))
+    : 0;
+  const mapLoadingEdgeCount = Number.isFinite(mapLoadingEvidence?.links)
+    ? Math.max(0, Math.round(mapLoadingEvidence.links))
+    : 0;
+  const mapLoadingEvidenceDetail = hasMapLoadingEvidence
+    ? `${mapLoadingNodeCount.toLocaleString()} nodes - ${mapLoadingEdgeCount.toLocaleString()} edges loaded`
+    : "Scanning graph structure";
   const activeViewLabel = isConnectionsView
     ? activeGraphRootAddress
       ? `Connections around ${shortenAddress(activeGraphRootAddress)}`
@@ -4348,6 +4809,10 @@ export default function App() {
   const shellStatusLabel = isMapLoading
     ? `Loading ${selectedTokenSymbol} graph`
     : mapDataStatus || "Ready";
+  const commandPaletteButtonLabel = isMobileViewport ? "Actions" : "Command";
+  const commandPaletteHeadingLabel = isMobileViewport
+    ? "Action Menu"
+    : "Command Palette";
   const footerMapStatus = useMemo(() => {
     const statusText = String(mapDataStatus || "").trim();
     if (!statusText) return "";
@@ -4358,8 +4823,33 @@ export default function App() {
 
     return statusText;
   }, [mapDataStatus]);
+  const isAddressGraphFallbackVisible = /^Address graph unavailable/i.test(
+    String(footerMapStatus || "").trim(),
+  );
 
   const effectiveStatsCollapsed = isFocusMode ? true : isStatsCollapsed;
+  const onboardingTutorialStepCount = ONBOARDING_TUTORIAL_STEPS.length;
+  const onboardingTutorialStepIndex = Math.min(
+    Math.max(onboardingTutorialStep, 0),
+    Math.max(onboardingTutorialStepCount - 1, 0),
+  );
+  const currentOnboardingStep =
+    ONBOARDING_TUTORIAL_STEPS[onboardingTutorialStepIndex] ||
+    ONBOARDING_TUTORIAL_STEPS[0];
+  const isOnboardingFirstStep = onboardingTutorialStepIndex <= 0;
+  const isOnboardingLastStep =
+    onboardingTutorialStepIndex >= onboardingTutorialStepCount - 1;
+  const activeTutorialTarget =
+    isOnboardingVisible && isOnboardingAt === "tutorial"
+      ? String(currentOnboardingStep?.target || "").trim()
+      : "";
+
+  function handleReplayTutorial() {
+    setUserSkillLevel("beginner");
+    setIsOnboardingAt("tutorial");
+    setOnboardingTutorialStep(0);
+    setIsOnboardingVisible(true);
+  }
 
   return (
     <div
@@ -4406,6 +4896,8 @@ export default function App() {
         onPhysicsModeChange={setPhysicsMode}
         labelDensityMode={labelDensityMode}
         onLabelDensityModeChange={setLabelDensityMode}
+        onReplayTutorial={handleReplayTutorial}
+        tutorialHighlightTarget={activeTutorialTarget}
       />
       <div className="app-shell-bar" aria-live="polite">
         <div className="app-shell-bar-primary">
@@ -4446,17 +4938,23 @@ export default function App() {
           <button
             type="button"
             ref={commandButtonRef}
-            className="app-shell-action-btn"
+            className={`app-shell-action-btn ${activeTutorialTarget === "command" ? "tutorial-highlight" : ""}`}
             onClick={() => setIsCommandPaletteOpen(true)}
-            aria-label="Open command palette"
-            title="Open command palette (Ctrl+K)"
+            aria-label={
+              isMobileViewport ? "Open actions menu" : "Open command palette"
+            }
+            title={
+              isMobileViewport
+                ? "Open actions menu"
+                : "Open command palette (Ctrl+K)"
+            }
           >
-            Command
+            {commandPaletteButtonLabel}
           </button>
           <button
             type="button"
             ref={savedViewsButtonRef}
-            className="app-shell-action-btn"
+            className={`app-shell-action-btn ${activeTutorialTarget === "views" ? "tutorial-highlight" : ""}`}
             onClick={() => setIsSavedViewsOpen((open) => !open)}
             aria-label="Open saved views"
             title="Save or load a named graph view"
@@ -4465,8 +4963,24 @@ export default function App() {
           </button>
           <button
             type="button"
+            ref={traceToggleButtonRef}
+            className={`app-shell-action-btn ${activeTutorialTarget === "trace" ? "tutorial-highlight" : ""}`}
+            onClick={() => setIsTraceToolOpen((open) => !open)}
+            aria-expanded={isTraceToolOpen}
+            aria-controls="map-trace-tool"
+            aria-label={
+              isTraceToolOpen ? "Hide trace path tool" : "Open trace path tool"
+            }
+            title={
+              isTraceToolOpen ? "Hide trace path tool" : "Open trace path tool"
+            }
+          >
+            {isTraceToolOpen ? "Hide Trace" : "Trace Path"}
+          </button>
+          <button
+            type="button"
             ref={compareButtonRef}
-            className="app-shell-action-btn"
+            className={`app-shell-action-btn ${activeTutorialTarget === "compare" ? "tutorial-highlight" : ""}`}
             onClick={() => setIsCompareModeOpen((open) => !open)}
             aria-label="Open compare mode"
             title="Compare this token snapshot with another token"
@@ -4486,7 +5000,7 @@ export default function App() {
           <button
             type="button"
             ref={diagnosticsButtonRef}
-            className="app-shell-action-btn"
+            className={`app-shell-action-btn ${activeTutorialTarget === "diagnostics" ? "tutorial-highlight" : ""}`}
             onClick={() => setIsDiagnosticsOpen((open) => !open)}
             aria-label="Open diagnostics panel"
             title="Show source and sync diagnostics details"
@@ -4688,51 +5202,6 @@ export default function App() {
           </div>
         </div>
       ) : null}
-      {isKeyboardLegendOpen ? (
-        <div
-          className="keyboard-legend-overlay"
-          role="dialog"
-          aria-modal="false"
-          aria-labelledby="keyboard-shortcuts-heading"
-        >
-          <div className="keyboard-legend-card">
-            <h3 id="keyboard-shortcuts-heading">Keyboard Shortcuts</h3>
-            <ul>
-              <li>/ Focus search</li>
-              <li>G Fit graph to view</li>
-              <li>F Toggle focus mode</li>
-              <li>Ctrl+K Open command palette</li>
-              <li>? Open this shortcuts legend</li>
-              <li>Esc Close overlays</li>
-            </ul>
-            <div className="keyboard-legend-actions">
-              <button
-                type="button"
-                onClick={() => setIsKeyboardLegendOpen(false)}
-              >
-                Close
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setIsKeyboardLegendDismissed(true);
-                  setIsKeyboardLegendOpen(false);
-                  try {
-                    window.localStorage.setItem(
-                      KEYBOARD_TIPS_DISMISSED_STORAGE_KEY,
-                      "true",
-                    );
-                  } catch {
-                    // Ignore storage issues.
-                  }
-                }}
-              >
-                Don't show again
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : null}
       {isCommandPaletteOpen ? (
         <div
           className="command-palette-overlay"
@@ -4746,14 +5215,18 @@ export default function App() {
             onClick={(event) => event.stopPropagation()}
           >
             <h3 id="command-palette-heading" className="visually-hidden">
-              Command Palette
+              {commandPaletteHeadingLabel}
             </h3>
             <input
               type="text"
               value={commandPaletteQuery}
               onChange={(event) => setCommandPaletteQuery(event.target.value)}
-              placeholder="Type a command"
-              aria-label="Search commands"
+              placeholder={
+                isMobileViewport ? "Search actions" : "Type a command"
+              }
+              aria-label={
+                isMobileViewport ? "Search actions" : "Search commands"
+              }
               autoFocus
             />
             <div className="command-palette-list">
@@ -4762,7 +5235,9 @@ export default function App() {
                   key={action.id}
                   type="button"
                   title={
-                    action.shortcut ? `Shortcut: ${action.shortcut}` : undefined
+                    !isMobileViewport && action.shortcut
+                      ? `Shortcut: ${action.shortcut}`
+                      : undefined
                   }
                   onClick={() => {
                     action.run();
@@ -4771,7 +5246,7 @@ export default function App() {
                   }}
                 >
                   <span>{action.label}</span>
-                  {action.shortcut ? (
+                  {!isMobileViewport && action.shortcut ? (
                     <span
                       className="command-palette-shortcut"
                       aria-hidden="true"
@@ -4785,32 +5260,125 @@ export default function App() {
           </div>
         </div>
       ) : null}
-      {isOnboardingVisible ? (
+      {isOnboardingVisible && isOnboardingAt === "skill-selection" ? (
         <div
           className="onboarding-overlay"
           role="dialog"
-          aria-modal="false"
-          aria-labelledby="quick-start-heading"
+          aria-modal="true"
+          aria-labelledby="welcome-heading"
         >
-          <div className="onboarding-card">
-            <h3 id="quick-start-heading">Quick Start</h3>
-            <ol>
-              <li>Press / to jump to search.</li>
-              <li>Click a wallet bubble to inspect holdings.</li>
-              <li>Use Show Connections to focus a wallet network.</li>
-            </ol>
+          <div className="onboarding-card onboarding-card-minimal">
+            <p className="onboarding-eyebrow">Phantasma Maps</p>
+            <h3 id="welcome-heading" className="onboarding-title">
+              Welcome to the wallet graph
+            </h3>
+            <p className="onboarding-intro">
+              Explore token holders, spot concentration, and trace wallet
+              relationships in a live interactive map.
+            </p>
+            <div className="skill-selection">
+              <p className="skill-prompt">What's your experience level?</p>
+              <button
+                type="button"
+                className="skill-button beginner-btn"
+                onClick={() => {
+                  handleReplayTutorial();
+                }}
+              >
+                <span className="skill-button-icon" aria-hidden="true">
+                  ◎
+                </span>
+                <span className="skill-button-label">I'm New Here</span>
+                <span className="skill-description">Show me the basics</span>
+              </button>
+              <button
+                type="button"
+                className="skill-button poweruser-btn"
+                onClick={() => {
+                  setUserSkillLevel("power-user");
+                  setIsOnboardingVisible(false);
+                }}
+              >
+                <span className="skill-button-icon" aria-hidden="true">
+                  ↗
+                </span>
+                <span className="skill-button-label">I Know My Way Around</span>
+                <span className="skill-description">Skip to the app</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+      {isOnboardingVisible && isOnboardingAt === "tutorial" ? (
+        <div
+          className="tour-panel"
+          role="dialog"
+          aria-modal="false"
+          aria-labelledby="tour-heading"
+        >
+          <p className="onboarding-eyebrow">
+            Guided Tour · Step {onboardingTutorialStepIndex + 1} of{" "}
+            {onboardingTutorialStepCount}
+          </p>
+          <h3 id="tour-heading" className="tour-panel-title">
+            {currentOnboardingStep?.title || "Quick Start"}
+          </h3>
+          <p className="tour-panel-detail">
+            {currentOnboardingStep?.detail || ""}
+          </p>
+          {currentOnboardingStep?.tip ? (
+            <p className="onboarding-tip">{currentOnboardingStep.tip}</p>
+          ) : null}
+          <div
+            className="onboarding-progress-bar tour-progress-bar"
+            aria-hidden="true"
+          >
+            <span
+              style={{
+                width: `${((onboardingTutorialStepIndex + 1) / onboardingTutorialStepCount) * 100}%`,
+              }}
+            />
+          </div>
+          <div className="onboarding-tutorial-actions">
             <button
               type="button"
-              className="map-selected-show-transfers"
+              className="onboarding-tutorial-btn"
+              onClick={() =>
+                setOnboardingTutorialStep((current) => Math.max(0, current - 1))
+              }
+              disabled={isOnboardingFirstStep}
+            >
+              Previous
+            </button>
+            <button
+              type="button"
+              className="onboarding-tutorial-btn"
               onClick={() => setIsOnboardingVisible(false)}
             >
-              Got it
+              Skip
+            </button>
+            <button
+              type="button"
+              className="onboarding-tutorial-btn is-primary"
+              onClick={() => {
+                if (isOnboardingLastStep) {
+                  setIsOnboardingVisible(false);
+                  return;
+                }
+                setOnboardingTutorialStep((current) =>
+                  Math.min(onboardingTutorialStepCount - 1, current + 1),
+                );
+              }}
+            >
+              {isOnboardingLastStep ? "Finish" : "Next"}
             </button>
           </div>
         </div>
       ) : null}
       <div className="main-layout">
-        <div className="map-area">
+        <div
+          className={`map-area ${activeTutorialTarget === "map" ? "tutorial-highlight" : ""}`}
+        >
           <BubbleMap
             nodes={filteredNodes}
             links={filteredLinks}
@@ -4870,16 +5438,6 @@ export default function App() {
             ) : null}
           </div>
           <div className="map-trace-tool-wrap">
-            <button
-              type="button"
-              ref={traceToggleButtonRef}
-              className="map-trace-toggle"
-              onClick={() => setIsTraceToolOpen((open) => !open)}
-              aria-expanded={isTraceToolOpen}
-              aria-controls="map-trace-tool"
-            >
-              {isTraceToolOpen ? "Hide Trace" : "Trace Path"}
-            </button>
             {isTraceToolOpen ? (
               <div
                 ref={traceToolPanelRef}
@@ -4958,179 +5516,66 @@ export default function App() {
               </div>
             ) : null}
           </div>
-          {isMapLoading ? (
+          {isMapLoaderVisible ? (
             <div
-              className="map-loading-overlay"
+              className={`map-loading-overlay ${isMapLoaderExiting ? "is-exiting" : ""}`}
               style={loadingThemeStyle}
-              aria-live="polite"
+              aria-live="off"
             >
-              <div
-                className="map-loading-panel"
-                aria-hidden="true"
-                style={{
-                  "--loading-progress": `${clampedMapLoadingProgress}%`,
-                }}
-              >
-                <span className="map-loading-panel-glow" />
-                <span className="map-loading-panel-grid" />
-                <span
-                  className={`map-loading-panel-scanline ${clampedMapLoadingProgress >= 10 ? "is-energized" : ""}`}
-                />
-                <div className="map-loading-panel-header">
-                  <span className="map-loading-panel-kicker">
-                    Phantasma Map System
-                  </span>
-                  <span className="map-loading-panel-status">
-                    Live Index Uplink
-                  </span>
+              <div className="visually-hidden" role="status" aria-atomic="true">
+                {mapLoadingAriaStatus}
+              </div>
+              <div className="map-loading-center">
+                <svg
+                  className="map-loading-ring"
+                  viewBox="0 0 56 56"
+                  aria-hidden="true"
+                >
+                  <circle
+                    className="map-loading-ring-track"
+                    cx="28"
+                    cy="28"
+                    r="23"
+                    fill="none"
+                    strokeWidth="2"
+                  />
+                  <circle
+                    className="map-loading-ring-fill"
+                    cx="28"
+                    cy="28"
+                    r="23"
+                    fill="none"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    style={{
+                      strokeDashoffset: `${144.51 - (144.51 * clampedMapLoadingProgress) / 100}`,
+                    }}
+                  />
+                  <circle
+                    className="map-loading-ring-sweep"
+                    cx="28"
+                    cy="28"
+                    r="23"
+                    fill="none"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                  />
+                  <text
+                    className="map-loading-ring-pct"
+                    x="28"
+                    y="28"
+                    textAnchor="middle"
+                    dominantBaseline="central"
+                  >
+                    {clampedMapLoadingProgress}%
+                  </text>
+                </svg>
+                <div key={mapLoadingStageDetail} className="map-loading-stage">
+                  {mapLoadingStageDetail}
                 </div>
-                <div className="map-loading-panel-body">
-                  <div className="map-loading-panel-sidebar map-loading-panel-sidebar-left">
-                    <div
-                      className={`map-loading-metric ${clampedMapLoadingProgress >= 12 ? "is-energized" : ""}`}
-                    >
-                      <span className="map-loading-metric-label">Source</span>
-                      <strong>{selectedTokenSymbol}</strong>
-                    </div>
-                    <div
-                      className={`map-loading-metric ${clampedMapLoadingProgress >= 34 ? "is-energized" : ""}`}
-                    >
-                      <span className="map-loading-metric-label">Pipeline</span>
-                      <strong>
-                        {clampedMapLoadingProgress < 34
-                          ? "Balances"
-                          : clampedMapLoadingProgress < 68
-                            ? "Addresses"
-                            : "Clusters"}
-                      </strong>
-                    </div>
-                    <div
-                      className={`map-loading-metric ${clampedMapLoadingProgress >= 62 ? "is-energized" : ""}`}
-                    >
-                      <span className="map-loading-metric-label">Signal</span>
-                      <strong>
-                        {clampedMapLoadingProgress >= 62 ? "Stable" : "Locking"}
-                      </strong>
-                    </div>
-                  </div>
-                  <div className="map-loading-core-wrap">
-                    <div
-                      className={`map-loading-core ${clampedMapLoadingProgress >= 8 ? "is-energized" : ""}`}
-                    >
-                      <span
-                        className={`map-loading-core-ring map-loading-core-ring-outer ${clampedMapLoadingProgress >= 18 ? "is-energized" : ""}`}
-                      />
-                      <span
-                        className={`map-loading-core-ring map-loading-core-ring-middle ${clampedMapLoadingProgress >= 42 ? "is-energized" : ""}`}
-                      />
-                      <span
-                        className={`map-loading-core-ring map-loading-core-ring-inner ${clampedMapLoadingProgress >= 70 ? "is-energized" : ""}`}
-                      />
-                      <span
-                        className={`map-loading-core-node map-loading-core-node-a ${clampedMapLoadingProgress >= 14 ? "is-energized" : ""}`}
-                      />
-                      <span
-                        className={`map-loading-core-node map-loading-core-node-b ${clampedMapLoadingProgress >= 28 ? "is-energized" : ""}`}
-                      />
-                      <span
-                        className={`map-loading-core-node map-loading-core-node-c ${clampedMapLoadingProgress >= 48 ? "is-energized" : ""}`}
-                      />
-                      <span
-                        className={`map-loading-core-node map-loading-core-node-d ${clampedMapLoadingProgress >= 68 ? "is-energized" : ""}`}
-                      />
-                      <span
-                        className={`map-loading-core-link map-loading-core-link-a ${clampedMapLoadingProgress >= 24 ? "is-energized" : ""}`}
-                      />
-                      <span
-                        className={`map-loading-core-link map-loading-core-link-b ${clampedMapLoadingProgress >= 54 ? "is-energized" : ""}`}
-                      />
-                      <span
-                        className={`map-loading-core-link map-loading-core-link-c ${clampedMapLoadingProgress >= 78 ? "is-energized" : ""}`}
-                      />
-                      <span
-                        className={`map-loading-core-center ${clampedMapLoadingProgress >= 88 ? "is-energized" : ""}`}
-                      />
-                    </div>
-                  </div>
-                  <div className="map-loading-panel-sidebar map-loading-panel-sidebar-right">
-                    <div className="map-loading-bars" aria-hidden="true">
-                      <span
-                        className={
-                          clampedMapLoadingProgress >= 16 ? "is-energized" : ""
-                        }
-                      />
-                      <span
-                        className={
-                          clampedMapLoadingProgress >= 30 ? "is-energized" : ""
-                        }
-                      />
-                      <span
-                        className={
-                          clampedMapLoadingProgress >= 44 ? "is-energized" : ""
-                        }
-                      />
-                      <span
-                        className={
-                          clampedMapLoadingProgress >= 58 ? "is-energized" : ""
-                        }
-                      />
-                      <span
-                        className={
-                          clampedMapLoadingProgress >= 72 ? "is-energized" : ""
-                        }
-                      />
-                      <span
-                        className={
-                          clampedMapLoadingProgress >= 86 ? "is-energized" : ""
-                        }
-                      />
-                    </div>
-                    <div
-                      className={`map-loading-readout ${clampedMapLoadingProgress >= 20 ? "is-energized" : ""}`}
-                    >
-                      <span>Address matrix</span>
-                      <strong>
-                        {clampedMapLoadingProgress >= 68
-                          ? "Resolved"
-                          : "Scanning"}
-                      </strong>
-                    </div>
-                    <div
-                      className={`map-loading-readout ${clampedMapLoadingProgress >= 52 ? "is-energized" : ""}`}
-                    >
-                      <span>Graph assembly</span>
-                      <strong>
-                        {clampedMapLoadingProgress >= 84
-                          ? "Render-ready"
-                          : "Compiling"}
-                      </strong>
-                    </div>
-                  </div>
+                <div className="map-loading-evidence" aria-live="off">
+                  {mapLoadingEvidenceDetail}
                 </div>
-              </div>
-              <div className="map-loading-title">
-                Generating {selectedTokenSymbol} Graph
-              </div>
-              <div className="map-loading-stage">
-                {clampedMapLoadingProgress < 34
-                  ? "Loading token balances"
-                  : clampedMapLoadingProgress < 68
-                    ? "Resolving address graph"
-                    : "Rendering holder clusters"}
-              </div>
-              <div className="map-loading-copy">
-                Building a live cybernetic map from indexed chain activity.
-              </div>
-              <div className="map-loading-progress" aria-hidden="true">
-                <div
-                  className="map-loading-progress-bar"
-                  style={{
-                    width: `${clampedMapLoadingProgress}%`,
-                  }}
-                />
-              </div>
-              <div className="map-loading-percent">
-                {clampedMapLoadingProgress}%
               </div>
             </div>
           ) : null}
@@ -5191,28 +5636,36 @@ export default function App() {
             />
           )}
           {resolvedSelectedNode && (
-            <SelectedNodeCard
-              node={resolvedSelectedNode}
-              copiedAddress={copiedAddress}
-              onCopyAddress={handleCopyAddress}
-              explorerBase={PHANTASMA_EXPLORER_BASE}
-              onClose={() => setSelectedNode(null)}
-              fmtSharePct={fmtSharePct}
-              currentSupply={currentSupplyBase}
-              fmtTokenAmount={fmtTokenAmount}
-              tokenName={activeTokenInfo.name}
-              fmtUsdAmount={fmtUsdAmount}
-              tokenPrice={Number(activeTokenInfo.price)}
-              totalTransactionCount={totalTransactionCount}
-              sparklineData={selectedNodeSparkline}
-              canShowConnections={canShowSelectedNodeConnections}
-              onShowConnections={handleShowNodeConnections}
-              onOpenTransactions={() => {
-                setIsTransfersModalOpen(true);
-                triggerMotionCue("modal");
-              }}
-              isTransactionsLoading={isSelectedNodeTransactionsLoading}
-            />
+            <div
+              className={
+                activeTutorialTarget === "selected-node"
+                  ? "tutorial-highlight"
+                  : ""
+              }
+            >
+              <SelectedNodeCard
+                node={resolvedSelectedNode}
+                copiedAddress={copiedAddress}
+                onCopyAddress={handleCopyAddress}
+                explorerBase={PHANTASMA_EXPLORER_BASE}
+                onClose={() => setSelectedNode(null)}
+                fmtSharePct={fmtSharePct}
+                currentSupply={currentSupplyBase}
+                fmtTokenAmount={fmtTokenAmount}
+                tokenName={activeTokenInfo.name}
+                fmtUsdAmount={fmtUsdAmount}
+                tokenPrice={Number(activeTokenInfo.price)}
+                totalTransactionCount={totalTransactionCount}
+                sparklineData={selectedNodeSparkline}
+                canShowConnections={canShowSelectedNodeConnections}
+                onShowConnections={handleShowNodeConnections}
+                onOpenTransactions={() => {
+                  setIsTransfersModalOpen(true);
+                  triggerMotionCue("modal");
+                }}
+                isTransactionsLoading={isSelectedNodeTransactionsLoading}
+              />
+            </div>
           )}
           {isMobileViewport && resolvedSelectedNode ? (
             <div className="mobile-inspect-entry">
@@ -5283,7 +5736,17 @@ export default function App() {
               Scroll to zoom · Drag to pan · Click a bubble for details
             </span>
             {footerMapStatus ? (
-              <span className="map-hint-text">{footerMapStatus}</span>
+              <span className="map-hint-text map-hint-status">
+                {isAddressGraphFallbackVisible ? (
+                  <span
+                    className="map-hint-badge map-hint-badge-warning"
+                    title="Address graph API failed, so this view is derived from the token-wide graph around the requested wallet."
+                  >
+                    Fallback View
+                  </span>
+                ) : null}
+                <span>{footerMapStatus}</span>
+              </span>
             ) : null}
             <button
               type="button"

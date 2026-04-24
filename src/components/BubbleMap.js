@@ -8,6 +8,12 @@ const BOUNDS_UPDATE_EVERY = 5;
 
 const FIT_DURATION_MS = 220;
 const RESIZE_REFIT_IDLE_MS = 1800;
+const GRAPH_REVEAL_LINK_DELAY_MS = 90;
+const GRAPH_REVEAL_NODE_DELAY_MS = 130;
+const GRAPH_REVEAL_ITEM_STAGGER_MS = 14;
+const GRAPH_REVEAL_LINK_DURATION_MS = 240;
+const GRAPH_REVEAL_NODE_DURATION_MS = 260;
+const GRAPH_REVEAL_LABEL_DURATION_MS = 180;
 
 function BubbleMap({
   nodes,
@@ -62,6 +68,7 @@ function BubbleMap({
   const lastTouchedIdRef = useRef(null);
   const lastManualViewportChangeAtRef = useRef(0);
   const [hoveredNodeId, setHoveredNodeId] = useState(null);
+  const [graphRenderCycle, setGraphRenderCycle] = useState(0);
   const [panHints, setPanHints] = useState({
     left: false,
     right: false,
@@ -233,6 +240,7 @@ function BubbleMap({
       return;
     }
     prevGraphSignatureRef.current = graphSignature;
+    setGraphRenderCycle((current) => current + 1);
 
     const el = svgRef.current;
     const width = el.clientWidth || 900;
@@ -242,6 +250,10 @@ function BubbleMap({
 
     const svg = d3.select(el);
     svg.selectAll("*").remove();
+    const prefersReducedMotion =
+      typeof window !== "undefined" &&
+      typeof window.matchMedia === "function" &&
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
     const container = svg.append("g").style("will-change", "transform");
 
@@ -259,6 +271,11 @@ function BubbleMap({
     const simLinks = links
       .filter((l) => nodeIndex.has(l.source) && nodeIndex.has(l.target))
       .map((l) => ({ source: l.source, target: l.target }));
+    const revealOrderById = new Map(
+      [...simNodes]
+        .sort((a, b) => getRenderValue(b) - getRenderValue(a))
+        .map((node, index) => [node.id, index]),
+    );
 
     // ── Force simulation ──────────────────────────────────────────────────
     const resolvedPrewarmTicks =
@@ -326,7 +343,8 @@ function BubbleMap({
       .append("line")
       .attr("class", "bubble-link")
       .attr("stroke", graphThemeStyle.linkBase)
-      .attr("stroke-width", graphThemeStyle.linkWidthBase ?? 1);
+      .attr("stroke-width", graphThemeStyle.linkWidthBase ?? 1)
+      .attr("stroke-opacity", prefersReducedMotion ? 1 : 0);
 
     // ── Node groups ───────────────────────────────────────────────────────
     const nodeSel = container
@@ -418,7 +436,10 @@ function BubbleMap({
       .attr("class", "bubble-glow")
       .attr("r", (d) => rScale(getRenderValue(d)) + 8)
       .attr("fill", (d) => holderPalette[d.type] || "#74b9ff")
-      .attr("fill-opacity", graphThemeStyle.baseGlowOpacity ?? 0.08)
+      .attr(
+        "fill-opacity",
+        prefersReducedMotion ? (graphThemeStyle.baseGlowOpacity ?? 0.08) : 0,
+      )
       .attr("stroke-width", 0)
       .attr("stroke-opacity", 0)
       .style("pointer-events", "none");
@@ -439,14 +460,20 @@ function BubbleMap({
     nodeSel
       .append("circle")
       .attr("class", "bubble-circle")
-      .attr("r", (d) => rScale(getRenderValue(d)))
+      .attr("r", (d) =>
+        prefersReducedMotion
+          ? rScale(getRenderValue(d))
+          : rScale(getRenderValue(d)) * 0.76,
+      )
       .attr("fill", (d) => holderPalette[d.type] || "#74b9ff")
-      .attr("fill-opacity", 0.72)
+      .attr("fill-opacity", prefersReducedMotion ? 0.72 : 0)
       .attr("stroke", (d) =>
         d.isSearchRoot ? "#fff3bf" : holderPalette[d.type] || "#74b9ff",
       )
       .attr("stroke-width", (d) => (d.isSearchRoot ? 3.2 : 1.5))
-      .attr("stroke-opacity", (d) => (d.isSearchRoot ? 1 : 0.85));
+      .attr("stroke-opacity", (d) =>
+        prefersReducedMotion ? (d.isSearchRoot ? 1 : 0.85) : 0,
+      );
 
     // Primary label (for bubbles large enough)
     const labelThreshold =
@@ -472,6 +499,7 @@ function BubbleMap({
       .attr("fill", bubbleLabelColor)
       .attr("font-size", (d) => Math.min(rScale(getRenderValue(d)) / 4.2, 13))
       .attr("font-weight", "600")
+      .attr("opacity", prefersReducedMotion ? 1 : 0)
       .style("pointer-events", "none");
 
     // Percentage sub-label (only for large bubbles)
@@ -484,6 +512,7 @@ function BubbleMap({
       .attr("dy", "1.1em")
       .attr("fill", bubblePctColor)
       .attr("font-size", (d) => Math.min(rScale(getRenderValue(d)) / 5.5, 11))
+      .attr("opacity", prefersReducedMotion ? 1 : 0)
       .style("pointer-events", "none");
 
     linkSel
@@ -492,6 +521,53 @@ function BubbleMap({
       .attr("x2", (d) => d.target.x)
       .attr("y2", (d) => d.target.y);
     nodeSel.attr("transform", (d) => `translate(${d.x ?? 0},${d.y ?? 0})`);
+
+    if (!prefersReducedMotion) {
+      const linkDelay = (_, index) =>
+        GRAPH_REVEAL_LINK_DELAY_MS +
+        Math.min(index, 60) * Math.max(5, GRAPH_REVEAL_ITEM_STAGGER_MS - 6);
+      const nodeDelay = (nodeData) =>
+        GRAPH_REVEAL_NODE_DELAY_MS +
+        Math.min(revealOrderById.get(nodeData.id) ?? 0, 50) *
+          GRAPH_REVEAL_ITEM_STAGGER_MS;
+
+      linkSel
+        .interrupt()
+        .transition()
+        .delay(linkDelay)
+        .duration(GRAPH_REVEAL_LINK_DURATION_MS)
+        .ease(d3.easeCubicOut)
+        .attr("stroke-opacity", 1);
+
+      nodeSel
+        .select(".bubble-glow")
+        .interrupt()
+        .transition()
+        .delay(nodeDelay)
+        .duration(GRAPH_REVEAL_NODE_DURATION_MS)
+        .ease(d3.easeCubicOut)
+        .attr("fill-opacity", graphThemeStyle.baseGlowOpacity ?? 0.08);
+
+      nodeSel
+        .select(".bubble-circle")
+        .interrupt()
+        .transition()
+        .delay(nodeDelay)
+        .duration(GRAPH_REVEAL_NODE_DURATION_MS)
+        .ease(d3.easeCubicOut)
+        .attr("r", (d) => rScale(getRenderValue(d)))
+        .attr("fill-opacity", 0.72)
+        .attr("stroke-opacity", (d) => (d.isSearchRoot ? 1 : 0.85));
+
+      nodeSel
+        .selectAll(".bubble-label, .bubble-pct")
+        .interrupt()
+        .transition()
+        .delay((nodeData) => nodeDelay(nodeData) + 36)
+        .duration(GRAPH_REVEAL_LABEL_DURATION_MS)
+        .ease(d3.easeCubicOut)
+        .attr("opacity", 1);
+    }
 
     const initialBounds = {
       minX: d3.min(
@@ -729,6 +805,11 @@ function BubbleMap({
           display: "block",
           background: "transparent",
         }}
+      />
+      <div
+        key={graphRenderCycle}
+        className="graph-render-overlay"
+        aria-hidden="true"
       />
       <div
         className={`map-pan-indicator map-pan-indicator-left ${panHints.left ? "is-visible" : ""}`}

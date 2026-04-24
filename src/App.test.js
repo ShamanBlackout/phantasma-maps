@@ -471,7 +471,15 @@ test("supports onboarding dismissal and search keyboard shortcut", async () => {
   const user = userEvent.setup();
   render(<App />);
 
-  expect(await screen.findByText(/Quick Start/i)).toBeInTheDocument();
+  expect(
+    await screen.findByText(/Welcome to the wallet graph/i),
+  ).toBeInTheDocument();
+
+  // Select "I Know My Way Around" to skip onboarding
+  const skipButton = screen.getByRole("button", {
+    name: /I Know My Way Around/i,
+  });
+  await user.click(skipButton);
 
   await user.keyboard("/");
   expect(document.getElementById("header-search-input")).toHaveFocus();
@@ -479,7 +487,9 @@ test("supports onboarding dismissal and search keyboard shortcut", async () => {
   await user.keyboard("{Escape}");
 
   await waitFor(() => {
-    expect(screen.queryByText(/Quick Start/i)).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(/Welcome to the wallet graph/i),
+    ).not.toBeInTheDocument();
   });
 });
 
