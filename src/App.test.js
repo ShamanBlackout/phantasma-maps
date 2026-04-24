@@ -185,6 +185,129 @@ test("renders the current map application shell", async () => {
   });
 });
 
+test("supports envelope-style API responses", async () => {
+  global.fetch.mockImplementation(async (input) => {
+    const url = String(input);
+
+    if (url.includes("/tokens/") && url.includes("/metadata")) {
+      return {
+        ok: true,
+        status: 200,
+        headers: { get: () => null },
+        json: async () => ({
+          requestId: "req-meta-1",
+          meta: { source: "live" },
+          data: {
+            name: "Phantasma Energy",
+            decimals: 0,
+            maxSupplyNormalized: 1000,
+            currentSupplyNormalized: 1000,
+          },
+        }),
+      };
+    }
+
+    if (url.endsWith("/tokens")) {
+      return {
+        ok: true,
+        status: 200,
+        headers: { get: () => null },
+        json: async () => ({
+          requestId: "req-tokens-1",
+          meta: { source: "live" },
+          data: { items: ["SOUL", "KCAL"] },
+        }),
+      };
+    }
+
+    if (url.includes("/graph/token/")) {
+      return {
+        ok: true,
+        status: 200,
+        headers: { get: () => null },
+        json: async () => ({
+          requestId: "req-graph-1",
+          meta: { source: "live", isPartial: false },
+          data: {
+            totalSupply: 1000,
+            nodes: [
+              {
+                address: "P2K8mNxHvT3qAaBpFsuWcY9JeGKd4kQ7Rmj6CiDyEF",
+                label: "Treasury",
+                balance: 650,
+              },
+              {
+                address: "P2Kd4TsHvN8wMqBbCpRsuY3K7Je5FXZ9kQ6Lmj4WXyz",
+                label: "Whale",
+                balance: 350,
+              },
+            ],
+            edges: [
+              {
+                fromAddress: "P2K8mNxHvT3qAaBpFsuWcY9JeGKd4kQ7Rmj6CiDyEF",
+                toAddress: "P2Kd4TsHvN8wMqBbCpRsuY3K7Je5FXZ9kQ6Lmj4WXyz",
+                amount: 25,
+                txHash: "0xabc123",
+              },
+            ],
+          },
+        }),
+      };
+    }
+
+    if (url.includes("/sync-status")) {
+      return {
+        ok: true,
+        status: 200,
+        headers: { get: () => null },
+        json: async () => ({
+          requestId: "req-sync-1",
+          meta: { source: "live" },
+          data: {
+            chainHeadBlockHeight: 200,
+            items: [
+              {
+                tokenSymbol: "__chain__",
+                lastBlockHeight: 100,
+                updatedAt: "2026-04-08T12:00:00.000Z",
+              },
+            ],
+          },
+        }),
+      };
+    }
+
+    if (url.includes("coingecko")) {
+      return {
+        ok: true,
+        status: 200,
+        headers: { get: () => null },
+        json: async () => ({
+          requestId: "req-price-1",
+          meta: { source: "live" },
+          data: {
+            phantasma: {
+              usd: 0.5,
+              usd_24h_change: 1.25,
+            },
+          },
+        }),
+      };
+    }
+
+    throw new Error(`Unhandled fetch in test: ${url}`);
+  });
+
+  render(<App />);
+
+  await waitFor(() => {
+    expect(screen.getByText(/Showing 2 tracked tokens/i)).toBeInTheDocument();
+  });
+
+  expect(screen.getByTestId("bubble-map")).toBeInTheDocument();
+  expect(screen.getByText(/Block Sync/i)).toBeInTheDocument();
+});
+
 test("keeps settings widgets stable under repeated interaction", async () => {
   const user = userEvent.setup();
   const { container } = render(<App />);
@@ -439,6 +562,14 @@ test("max graph setting renders all nodes and edges for the selected token", asy
   expect(screen.getByRole("button", { name: /use max/i })).toBeEnabled();
   expect(screen.queryByText(/max active/i)).not.toBeInTheDocument();
 
+  const requestCountBeforeMax = global.fetch.mock.calls.length;
+  const topHoldersCallCountBeforeMax = global.fetch.mock.calls.filter(
+    ([input]) => String(input).includes("/top-holders"),
+  ).length;
+  const connectionsCallCountBeforeMax = global.fetch.mock.calls.filter(
+    ([input]) => String(input).includes("/connections/address/"),
+  ).length;
+
   await user.click(screen.getByRole("button", { name: /use max/i }));
 
   await waitFor(() => {
@@ -465,6 +596,25 @@ test("max graph setting renders all nodes and edges for the selected token", asy
   expect(renderedNodeCount).toBeGreaterThan(initialRenderedNodeCount);
   expect(renderedEdgeCount).toBeGreaterThan(initialRenderedEdgeCount);
   expect(screen.getByRole("button", { name: /max enabled/i })).toBeDisabled();
+
+  const requestedUrlsAfterMax = global.fetch.mock.calls
+    .slice(requestCountBeforeMax)
+    .map(([input]) => String(input));
+  expect(
+    requestedUrlsAfterMax.some(
+      (url) => url.includes("/graph/token/") && url.endsWith("/max"),
+    ),
+  ).toBe(true);
+  expect(
+    global.fetch.mock.calls.filter(([input]) =>
+      String(input).includes("/top-holders"),
+    ).length,
+  ).toBe(topHoldersCallCountBeforeMax);
+  expect(
+    global.fetch.mock.calls.filter(([input]) =>
+      String(input).includes("/connections/address/"),
+    ).length,
+  ).toBe(connectionsCallCountBeforeMax);
 });
 
 test("supports onboarding dismissal and search keyboard shortcut", async () => {
@@ -540,6 +690,127 @@ test("keeps diagnostics details out of header sync and inside diagnostics panel"
   expect(await screen.findByText(/^API health:/i)).toBeInTheDocument();
   expect(await screen.findByText(/^Source:/i)).toBeInTheDocument();
   expect(screen.getByText(/^Map status:/i)).toBeInTheDocument();
+});
+
+test("shows last api error details in diagnostics", async () => {
+  const user = userEvent.setup();
+
+  global.fetch.mockImplementation(async (input) => {
+    const url = String(input);
+
+    if (url.includes("/tokens/") && url.includes("/metadata")) {
+      return {
+        ok: true,
+        status: 200,
+        headers: { get: () => null },
+        json: async () => ({
+          name: "Phantasma Energy",
+          decimals: 0,
+          maxSupplyNormalized: 1000,
+          currentSupplyNormalized: 1000,
+        }),
+      };
+    }
+
+    if (url.endsWith("/tokens")) {
+      return {
+        ok: false,
+        status: 503,
+        headers: { get: () => null },
+        json: async () => ({
+          requestId: "req-tokens-down-1",
+          error: {
+            code: "TOKENS_UNAVAILABLE",
+            message: "Token index temporarily unavailable",
+          },
+        }),
+      };
+    }
+
+    if (url.includes("/graph/token/")) {
+      return {
+        ok: true,
+        status: 200,
+        headers: { get: () => null },
+        json: async () => ({
+          totalSupply: 1000,
+          nodes: [
+            {
+              address: "P2K8mNxHvT3qAaBpFsuWcY9JeGKd4kQ7Rmj6CiDyEF",
+              label: "Treasury",
+              balance: 650,
+            },
+            {
+              address: "P2Kd4TsHvN8wMqBbCpRsuY3K7Je5FXZ9kQ6Lmj4WXyz",
+              label: "Whale",
+              balance: 350,
+            },
+          ],
+          edges: [
+            {
+              fromAddress: "P2K8mNxHvT3qAaBpFsuWcY9JeGKd4kQ7Rmj6CiDyEF",
+              toAddress: "P2Kd4TsHvN8wMqBbCpRsuY3K7Je5FXZ9kQ6Lmj4WXyz",
+              amount: 25,
+              txHash: "0xabc123",
+            },
+          ],
+        }),
+      };
+    }
+
+    if (url.includes("/sync-status")) {
+      return {
+        ok: true,
+        status: 200,
+        headers: { get: () => null },
+        json: async () => ({
+          chainHeadBlockHeight: 200,
+          items: [
+            {
+              tokenSymbol: "__chain__",
+              lastBlockHeight: 100,
+              updatedAt: "2026-04-08T12:00:00.000Z",
+            },
+          ],
+        }),
+      };
+    }
+
+    if (url.includes("coingecko")) {
+      return {
+        ok: true,
+        status: 200,
+        headers: { get: () => null },
+        json: async () => ({
+          phantasma: {
+            usd: 0.5,
+            usd_24h_change: 1.25,
+          },
+        }),
+      };
+    }
+
+    throw new Error(`Unhandled fetch in test: ${url}`);
+  });
+
+  render(<App />);
+
+  await waitFor(() => {
+    expect(
+      screen.getByText(/API token list request failed/i),
+    ).toBeInTheDocument();
+  });
+
+  await user.click(
+    screen.getByRole("button", { name: /open diagnostics panel/i }),
+  );
+
+  expect(screen.getByText(/^Last API error code:/i)).toHaveTextContent(
+    "Last API error code: TOKENS_UNAVAILABLE",
+  );
+  expect(screen.getByText(/^Last API requestId:/i)).toHaveTextContent(
+    "Last API requestId: req-tokens-down-1",
+  );
 });
 
 test("closes shell popouts and trace tool on outside click", async () => {

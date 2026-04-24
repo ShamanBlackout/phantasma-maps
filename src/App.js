@@ -315,6 +315,51 @@ function normalizePositiveInteger(value, fallbackValue) {
     : fallbackValue;
 }
 
+function formatApiErrorMeta(errorLike) {
+  if (!errorLike || typeof errorLike !== "object") return "";
+
+  const parts = [];
+  const code = String(errorLike.errorCode || errorLike.code || "").trim();
+  const requestId = String(errorLike.requestId || "").trim();
+  const status = Number(errorLike.status);
+
+  if (code) {
+    parts.push(`code ${code}`);
+  }
+
+  if (Number.isFinite(status) && status > 0) {
+    parts.push(`status ${status}`);
+  }
+
+  if (requestId) {
+    parts.push(`request ${requestId}`);
+  }
+
+  return parts.length ? ` [${parts.join(", ")}]` : "";
+}
+
+function buildApiErrorRecord(errorLike, source, fallbackMessage) {
+  const safeError = errorLike && typeof errorLike === "object" ? errorLike : {};
+  const status = Number(safeError.status);
+  const code = String(safeError.errorCode || safeError.code || "").trim();
+  const requestId = String(safeError.requestId || "").trim();
+  const message = String(
+    safeError.errorMessage ||
+      safeError.message ||
+      fallbackMessage ||
+      "API request failed",
+  ).trim();
+
+  return {
+    source: String(source || "unknown"),
+    status: Number.isFinite(status) ? status : null,
+    code: code || null,
+    requestId: requestId || null,
+    message,
+    recordedAt: Date.now(),
+  };
+}
+
 function getLinkEndpointId(endpoint) {
   if (endpoint && typeof endpoint === "object") {
     return String(endpoint.id || "").trim();
@@ -668,7 +713,7 @@ async function fetchTokenSnapshot(baseUrl, timeoutMs, tokenSymbol) {
 
   const metadataResult = await fetchJsonWithTimeout(
     buildTokenInfoEndpoint(baseUrl, normalizedTokenSymbol),
-    { cache: "no-store" },
+    {},
     timeoutMs,
   );
   const graphResult = await fetchJsonWithTimeout(
@@ -677,9 +722,9 @@ async function fetchTokenSnapshot(baseUrl, timeoutMs, tokenSymbol) {
       depth: MAPS_API_GRAPH_DEPTH,
       edgeLimit: MAPS_API_GRAPH_EDGE_LIMIT,
       defaultEdgeLimit: MAPS_API_GRAPH_EDGE_LIMIT,
-      includeTopHolders: MAPS_API_GRAPH_TOP_HOLDERS_LIMIT,
+      topHoldersLimit: MAPS_API_GRAPH_TOP_HOLDERS_LIMIT,
     }),
-    { cache: "no-store" },
+    {},
     timeoutMs,
   );
 
@@ -1476,6 +1521,7 @@ export default function App() {
     useState("balances");
   const [mapDataStatus, setMapDataStatus] = useState("");
   const [isUsingMockApiFallback, setIsUsingMockApiFallback] = useState(false);
+  const [lastApiError, setLastApiError] = useState(null);
   const [selectedNodeApiTransactions, setSelectedNodeApiTransactions] =
     useState([]);
   const [
@@ -1859,7 +1905,7 @@ export default function App() {
     async function fetchTokenInfo() {
       const result = await fetchJsonWithTimeout(
         buildTokenInfoEndpoint(MAPS_API_BASE_URL, selectedTokenSymbol),
-        { cache: "no-store" },
+        {},
         MAPS_API_REQUEST_TIMEOUT_MS,
       );
 
@@ -2026,17 +2072,24 @@ export default function App() {
     async function fetchAvailableTokens() {
       const result = await fetchJsonWithTimeout(
         buildTokensEndpoint(MAPS_API_BASE_URL),
-        { cache: "no-store" },
+        {},
         MAPS_API_REQUEST_TIMEOUT_MS,
       );
 
       if (!isMounted) return;
 
       if (!result.ok) {
+        setLastApiError(
+          buildApiErrorRecord(
+            result,
+            "token-list",
+            "API token list request failed",
+          ),
+        );
         setTokenSelectorStatus(
           result.status === 0
-            ? "API token list unavailable"
-            : `API token list request failed (${result.status})`,
+            ? `API token list unavailable${formatApiErrorMeta(result)}`
+            : `API token list request failed (${result.status})${formatApiErrorMeta(result)}`,
         );
         setApiTokenSymbols([]);
         return;
@@ -2072,8 +2125,11 @@ export default function App() {
       setTokenSelectorStatus(`Showing ${nextTokens.length} tracked tokens`);
     }
 
-    fetchAvailableTokens().catch(() => {
+    fetchAvailableTokens().catch((error) => {
       if (!isMounted) return;
+      setLastApiError(
+        buildApiErrorRecord(error, "token-list", "API token list unavailable"),
+      );
       setApiTokenSymbols([]);
       setTokenSelectorStatus("API token list unavailable");
     });
@@ -2363,6 +2419,12 @@ export default function App() {
       );
 
       const effectiveGraphEdgeLimit = graphEdgeLimit;
+      const isTopLevelTokenRequest =
+        !isConnectionsView &&
+        !String(searchedRootAddress || "").trim() &&
+        !String(activeGraphRootAddress || "").trim();
+      const shouldUseMaxEndpoint =
+        isTopLevelTokenRequest && isGraphMaxModeEnabled;
 
       const graphEndpoint = buildGraphEndpoint(
         MAPS_API_BASE_URL,
@@ -2372,26 +2434,54 @@ export default function App() {
           depth: MAPS_API_GRAPH_DEPTH,
           edgeLimit: effectiveGraphEdgeLimit,
           defaultEdgeLimit: MAPS_API_GRAPH_EDGE_LIMIT,
-          includeTopHolders:
-            !isConnectionsView &&
-            !String(searchedRootAddress || "").trim() &&
-            !String(activeGraphRootAddress || "").trim() &&
-            isGraphMaxModeEnabled
-              ? MAPS_API_GRAPH_TOP_HOLDERS_LIMIT
-              : 0,
+          useMaxEndpoint: shouldUseMaxEndpoint,
+          topHoldersLimit: shouldUseMaxEndpoint
+            ? MAPS_API_GRAPH_TOP_HOLDERS_LIMIT
+            : 0,
         },
       );
-      const result = await fetchJsonWithTimeout(
+      let result = await fetchJsonWithTimeout(
         graphEndpoint,
-        { cache: "no-store" },
+        {},
         MAPS_API_REQUEST_TIMEOUT_MS,
       );
+
+      if (!result.ok && shouldUseMaxEndpoint) {
+        const standardGraphFallbackEndpoint = buildGraphEndpoint(
+          MAPS_API_BASE_URL,
+          selectedTokenSymbol,
+          {
+            rootAddress: "",
+            depth: MAPS_API_GRAPH_DEPTH,
+            edgeLimit: effectiveGraphEdgeLimit,
+            defaultEdgeLimit: MAPS_API_GRAPH_EDGE_LIMIT,
+            useMaxEndpoint: false,
+            topHoldersLimit: MAPS_API_GRAPH_TOP_HOLDERS_LIMIT,
+          },
+        );
+
+        const standardGraphFallbackResult = await fetchJsonWithTimeout(
+          standardGraphFallbackEndpoint,
+          {},
+          MAPS_API_REQUEST_TIMEOUT_MS,
+        );
+
+        if (standardGraphFallbackResult.ok) {
+          result = standardGraphFallbackResult;
+          setMapDataStatus(
+            `Max graph view is temporarily unavailable. Showing the standard ${selectedTokenSymbol} live map instead.`,
+          );
+        }
+      }
 
       setMapLoadingProgress(42);
 
       if (!isMounted) return;
 
       if (!result.ok) {
+        setLastApiError(
+          buildApiErrorRecord(result, "graph", "Graph request failed"),
+        );
         if (isConnectionsView && activeGraphRootAddress) {
           try {
             const connectionsResult = await fetchConnectionsForAddressFromApi(
@@ -2410,12 +2500,12 @@ export default function App() {
                 depth: MAPS_API_GRAPH_DEPTH,
                 edgeLimit: effectiveGraphEdgeLimit,
                 defaultEdgeLimit: MAPS_API_GRAPH_EDGE_LIMIT,
-                includeTopHolders: MAPS_API_GRAPH_TOP_HOLDERS_LIMIT,
+                topHoldersLimit: MAPS_API_GRAPH_TOP_HOLDERS_LIMIT,
               },
             );
             const tokenGraphFallbackResult = await fetchJsonWithTimeout(
               tokenGraphFallbackEndpoint,
-              { cache: "no-store" },
+              {},
               MAPS_API_REQUEST_TIMEOUT_MS,
             );
 
@@ -2485,12 +2575,12 @@ export default function App() {
                 depth: MAPS_API_GRAPH_DEPTH,
                 edgeLimit: effectiveGraphEdgeLimit,
                 defaultEdgeLimit: MAPS_API_GRAPH_EDGE_LIMIT,
-                includeTopHolders: MAPS_API_GRAPH_TOP_HOLDERS_LIMIT,
+                topHoldersLimit: MAPS_API_GRAPH_TOP_HOLDERS_LIMIT,
               },
             );
             const tokenGraphFallbackResult = await fetchJsonWithTimeout(
               tokenGraphFallbackEndpoint,
-              { cache: "no-store" },
+              {},
               MAPS_API_REQUEST_TIMEOUT_MS,
             );
 
@@ -2552,7 +2642,7 @@ export default function App() {
           if (isConnectionsView) {
             setIsUsingMockApiFallback(false);
             setMapDataStatus(
-              "Unable to load wallet connections right now. Please check your network and try again.",
+              `Unable to load wallet connections right now. Please check your network and try again.${formatApiErrorMeta(result)}`,
             );
             setMapLoadingEvidence({ wallets: null, links: null });
           } else {
@@ -2571,14 +2661,14 @@ export default function App() {
             });
             setTokenSelectorStatus("API unavailable; showing mock tokens");
             setMapDataStatus(
-              "Using cached data while the network service recovers...",
+              `Using cached data while the network service recovers...${formatApiErrorMeta(result)}`,
             );
           }
         } else {
           if (isConnectionsView) {
             setIsUsingMockApiFallback(false);
             setMapDataStatus(
-              `Couldn't load wallet connections (error ${result.status}). Try again or explore the token map.`,
+              `Couldn't load wallet connections (error ${result.status}). Try again or explore the token map.${formatApiErrorMeta(result)}`,
             );
           } else {
             setIsUsingMockApiFallback(false);
@@ -2587,7 +2677,7 @@ export default function App() {
             setSummaryNodes([]);
             setMapLinks([]);
             setMapDataStatus(
-              `Network service temporarily unavailable (error ${result.status}). Retrying...`,
+              `Network service temporarily unavailable (error ${result.status}). Retrying...${formatApiErrorMeta(result)}`,
             );
           }
         }
@@ -2613,20 +2703,16 @@ export default function App() {
         links: Array.isArray(mappedGraph?.links) ? mappedGraph.links.length : 0,
       });
 
-      const isTopLevelTokenGraph =
-        !isConnectionsView &&
-        !String(searchedRootAddress || "").trim() &&
-        !String(activeGraphRootAddress || "").trim();
+      const isTopLevelTokenGraph = isTopLevelTokenRequest;
 
-      const shouldFetchTopHolders = isTopLevelTokenGraph;
+      const shouldFetchTopHolders =
+        isTopLevelTokenGraph &&
+        !isGraphMaxModeEnabled &&
+        MAPS_API_GRAPH_TOP_HOLDERS_LIMIT > 0;
 
-      const shouldApplyTopHoldersSeed =
-        shouldFetchTopHolders && !isGraphMaxModeEnabled;
-      const shouldEnrichMaxModeConnections =
-        shouldFetchTopHolders && isGraphMaxModeEnabled;
+      const shouldApplyTopHoldersSeed = shouldFetchTopHolders;
 
       let seededGraph = null;
-      let maxModeConnectionGraph = null;
       let topHoldersForSummary = [];
 
       if (shouldFetchTopHolders) {
@@ -2635,13 +2721,13 @@ export default function App() {
             MAPS_API_BASE_URL,
             MAPS_API_REQUEST_TIMEOUT_MS,
             selectedTokenSymbol,
-            10,
+            MAPS_API_GRAPH_TOP_HOLDERS_LIMIT,
           );
           topHoldersForSummary = Array.isArray(topHoldersResult.items)
             ? topHoldersResult.items
             : [];
 
-          if (shouldApplyTopHoldersSeed || shouldEnrichMaxModeConnections) {
+          if (shouldApplyTopHoldersSeed) {
             const topHolderAddresses = topHoldersResult.items
               .map((item) => String(item?.address || "").trim())
               .filter(Boolean);
@@ -2680,17 +2766,16 @@ export default function App() {
             if (shouldApplyTopHoldersSeed) {
               seededGraph = topHolderConnectionsGraph;
             }
-            if (shouldEnrichMaxModeConnections) {
-              maxModeConnectionGraph = topHolderConnectionsGraph;
-            }
           }
         } catch {
           seededGraph = null;
-          maxModeConnectionGraph = null;
         }
 
         if (!seededGraph && shouldApplyTopHoldersSeed) {
-          seededGraph = buildTopHoldersGraph(mappedGraph, 10);
+          seededGraph = buildTopHoldersGraph(
+            mappedGraph,
+            MAPS_API_GRAPH_TOP_HOLDERS_LIMIT,
+          );
         }
       }
 
@@ -2806,41 +2891,8 @@ export default function App() {
       const resolvedMapLinks =
         isTopLevelTokenGraph &&
         isGraphMaxModeEnabled &&
-        Array.isArray(mappedGraph?.links) &&
-        Array.isArray(mappedGraph?.nodes) &&
-        Array.isArray(maxModeConnectionGraph?.links)
-          ? (() => {
-              const mappedNodeIds = new Set(
-                mappedGraph.nodes.map((node) => String(node?.id || "").trim()),
-              );
-              const mergedLinksByKey = new Map();
-
-              function appendLinks(links) {
-                (Array.isArray(links) ? links : []).forEach((link) => {
-                  const source = getLinkEndpointId(link?.source);
-                  const target = getLinkEndpointId(link?.target);
-                  if (!source || !target) return;
-                  if (
-                    !mappedNodeIds.has(source) ||
-                    !mappedNodeIds.has(target)
-                  ) {
-                    return;
-                  }
-                  const key = `${source}->${target}`;
-                  if (!mergedLinksByKey.has(key)) {
-                    mergedLinksByKey.set(key, {
-                      source,
-                      target,
-                    });
-                  }
-                });
-              }
-
-              appendLinks(mappedGraph.links);
-              appendLinks(maxModeConnectionGraph.links);
-
-              return [...mergedLinksByKey.values()];
-            })()
+        Array.isArray(mappedGraph?.links)
+          ? mappedGraph.links
           : focusedGraph.links;
 
       if (shouldTrackOverallMaxStats) {
@@ -3029,7 +3081,7 @@ export default function App() {
     async function fetchSyncStatus() {
       const result = await fetchJsonWithTimeout(
         buildSyncStatusEndpoint(MAPS_API_BASE_URL),
-        { cache: "no-store" },
+        {},
         MAPS_API_REQUEST_TIMEOUT_MS,
       );
 
@@ -3055,6 +3107,14 @@ export default function App() {
         setBlockSyncUpdatedAt(
           Number.isFinite(nextUpdatedAt) ? nextUpdatedAt : null,
         );
+      } else {
+        setLastApiError(
+          buildApiErrorRecord(
+            result,
+            "sync-status",
+            "Sync status request failed",
+          ),
+        );
       }
 
       timeoutId = window.setTimeout(
@@ -3063,8 +3123,11 @@ export default function App() {
       );
     }
 
-    fetchSyncStatus().catch(() => {
+    fetchSyncStatus().catch((error) => {
       if (!isActive) return;
+      setLastApiError(
+        buildApiErrorRecord(error, "sync-status", "Sync status request failed"),
+      );
       setBlockSyncHeight(null);
       setBlockSyncTargetHeight(null);
       setBlockSyncUpdatedAt(null);
@@ -3458,12 +3521,19 @@ export default function App() {
         setSelectedNodeApiTransactions(pageData.items);
         setSelectedNodeApiTransactionsTotal(pageData.total);
         setSelectedNodeApiTransactionsError("");
-      } catch {
+      } catch (error) {
         if (!isMounted) return;
+        setLastApiError(
+          buildApiErrorRecord(
+            error,
+            "transactions",
+            "Transactions API unavailable",
+          ),
+        );
         setSelectedNodeApiTransactions([]);
         setSelectedNodeApiTransactionsTotal(0);
         setSelectedNodeApiTransactionsError(
-          "Using graph-derived transfers (transactions API unavailable).",
+          `Using graph-derived transfers (transactions API unavailable).${formatApiErrorMeta(error)}`,
         );
       } finally {
         if (!isMounted) return;
@@ -3882,11 +3952,7 @@ export default function App() {
       30,
     );
 
-    fetchJsonWithTimeout(
-      endpoint,
-      { cache: "no-store" },
-      MAPS_API_REQUEST_TIMEOUT_MS,
-    )
+    fetchJsonWithTimeout(endpoint, {}, MAPS_API_REQUEST_TIMEOUT_MS)
       .then((result) => {
         if (!isMounted) return;
         if (result.ok && Array.isArray(result.payload?.items)) {
@@ -4296,6 +4362,16 @@ export default function App() {
       source: isUsingMockApiFallback ? "Mock fallback" : "Live API",
       syncLag,
       mapStatus: mapDataStatus || "Ready",
+      lastApiErrorSource: lastApiError?.source || "None",
+      lastApiErrorCode: lastApiError?.code || "None",
+      lastApiErrorStatus: Number.isFinite(Number(lastApiError?.status))
+        ? String(lastApiError.status)
+        : "None",
+      lastApiErrorRequestId: lastApiError?.requestId || "None",
+      lastApiErrorMessage: lastApiError?.message || "None",
+      lastApiErrorAt: Number.isFinite(Number(lastApiError?.recordedAt))
+        ? new Date(lastApiError.recordedAt).toISOString()
+        : "None",
       indexerUpdated: Number.isFinite(blockSyncUpdatedAt)
         ? new Date(blockSyncUpdatedAt).toISOString()
         : "Waiting",
@@ -4308,6 +4384,7 @@ export default function App() {
     blockSyncTargetHeight,
     blockSyncUpdatedAt,
     isUsingMockApiFallback,
+    lastApiError,
     mapDataStatus,
     priceLastUpdatedAt,
     trustStatus.apiHealthy,
@@ -5166,6 +5243,20 @@ export default function App() {
                 : "Waiting"}
             </p>
             <p>Map status: {diagnosticsDetails.mapStatus}</p>
+            <p>
+              Last API error source: {diagnosticsDetails.lastApiErrorSource}
+            </p>
+            <p>Last API error code: {diagnosticsDetails.lastApiErrorCode}</p>
+            <p>
+              Last API error status: {diagnosticsDetails.lastApiErrorStatus}
+            </p>
+            <p>
+              Last API requestId: {diagnosticsDetails.lastApiErrorRequestId}
+            </p>
+            <p>
+              Last API error message: {diagnosticsDetails.lastApiErrorMessage}
+            </p>
+            <p>Last API error at: {diagnosticsDetails.lastApiErrorAt}</p>
             <p>Indexer update: {diagnosticsDetails.indexerUpdated}</p>
             <p>Market update: {diagnosticsDetails.marketUpdated}</p>
           </div>
