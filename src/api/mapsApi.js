@@ -1,22 +1,27 @@
 import { fetchJsonWithTimeout } from "./http";
 
+// ── Shared helpers ────────────────────────────────────────────────────────────
+
+function normalizeBase(baseUrl) {
+  return String(baseUrl || "").replace(/\/+$/, "");
+}
+
+// ── Endpoint builders ─────────────────────────────────────────────────────────
+
 export function createTokensEndpoint(baseUrl) {
-  const base = baseUrl.replace(/\/+$/, "");
-  return `${base}/tokens`;
+  return `${normalizeBase(baseUrl)}/tokens`;
 }
 
 export function createTokenInfoEndpoint(baseUrl, tokenSymbol) {
-  const base = baseUrl.replace(/\/+$/, "");
-  return `${base}/tokens/${encodeURIComponent(tokenSymbol)}/metadata`;
+  return `${normalizeBase(baseUrl)}/tokens/${encodeURIComponent(tokenSymbol)}/metadata`;
 }
 
 export function createTopHoldersEndpoint(baseUrl, tokenSymbol, limit = 10) {
-  const base = baseUrl.replace(/\/+$/, "");
   const normalizedLimit =
     Number.isFinite(Number(limit)) && Number(limit) > 0
       ? Math.floor(Number(limit))
       : 10;
-  return `${base}/tokens/${encodeURIComponent(tokenSymbol)}/top-holders?limit=${normalizedLimit}`;
+  return `${normalizeBase(baseUrl)}/tokens/${encodeURIComponent(tokenSymbol)}/top-holders?limit=${normalizedLimit}`;
 }
 
 export function createGraphEndpoint(
@@ -27,10 +32,13 @@ export function createGraphEndpoint(
     depth = 2,
     edgeLimit = 1200,
     defaultEdgeLimit = 1200,
-    includeTopHolders = 0,
+    useMaxEndpoint = false,
+    // Pass a positive number to request top-holder annotations alongside the token graph.
+    topHoldersLimit,
+    withTopHolders = false,
   },
 ) {
-  const base = baseUrl.replace(/\/+$/, "");
+  const base = normalizeBase(baseUrl);
   const activeRootAddress = String(rootAddress || "").trim();
 
   if (activeRootAddress) {
@@ -47,14 +55,20 @@ export function createGraphEndpoint(
     return `${base}/graph/address/${encodeURIComponent(activeRootAddress)}?${params.toString()}`;
   }
 
-  const normalizedIncludeTopHolders =
-    Number.isFinite(Number(includeTopHolders)) && Number(includeTopHolders) > 0
-      ? Math.floor(Number(includeTopHolders))
-      : 0;
-  const params = new URLSearchParams();
+  if (useMaxEndpoint) {
+    return `${base}/graph/token/${encodeURIComponent(tokenSymbol)}/max`;
+  }
 
-  if (normalizedIncludeTopHolders > 0) {
-    params.set("includeTopHolders", String(normalizedIncludeTopHolders));
+  const params = new URLSearchParams();
+  const normalizedTopHoldersLimit =
+    Number.isFinite(Number(topHoldersLimit)) && Number(topHoldersLimit) > 0
+      ? Math.floor(Number(topHoldersLimit))
+      : 0;
+
+  if (normalizedTopHoldersLimit > 0) {
+    params.set("topHoldersLimit", String(normalizedTopHoldersLimit));
+  } else if (withTopHolders) {
+    params.set("withTopHolders", "true");
   }
 
   const query = params.toString();
@@ -64,11 +78,8 @@ export function createGraphEndpoint(
 }
 
 export function createConnectionsEndpoint(baseUrl, address, tokenSymbol) {
-  const base = baseUrl.replace(/\/+$/, "");
-  const params = new URLSearchParams({
-    token: tokenSymbol,
-  });
-  return `${base}/connections/address/${encodeURIComponent(address)}?${params.toString()}`;
+  const params = new URLSearchParams({ token: tokenSymbol });
+  return `${normalizeBase(baseUrl)}/connections/address/${encodeURIComponent(address)}?${params.toString()}`;
 }
 
 export function createTransactionsEndpoint(
@@ -79,7 +90,6 @@ export function createTransactionsEndpoint(
   pageSize = 250,
   filters = {},
 ) {
-  const base = baseUrl.replace(/\/+$/, "");
   const params = new URLSearchParams({
     token: tokenSymbol,
     address,
@@ -139,12 +149,11 @@ export function createTransactionsEndpoint(
     params.set("sortDir", sortDir);
   }
 
-  return `${base}/transactions?${params.toString()}`;
+  return `${normalizeBase(baseUrl)}/transactions?${params.toString()}`;
 }
 
 export function createSyncStatusEndpoint(baseUrl) {
-  const base = baseUrl.replace(/\/+$/, "");
-  return `${base}/sync-status`;
+  return `${normalizeBase(baseUrl)}/sync-status`;
 }
 
 export function createActivityEndpoint(
@@ -153,43 +162,75 @@ export function createActivityEndpoint(
   tokenSymbol,
   days = 30,
 ) {
-  const base = baseUrl.replace(/\/+$/, "");
   const params = new URLSearchParams({ days: String(days) });
-  return `${base}/tokens/${encodeURIComponent(tokenSymbol)}/activity/${encodeURIComponent(address)}?${params.toString()}`;
+  return `${normalizeBase(baseUrl)}/tokens/${encodeURIComponent(tokenSymbol)}/activity/${encodeURIComponent(address)}?${params.toString()}`;
 }
 
+// ── Fetch helpers ─────────────────────────────────────────────────────────────
+
+function buildApiError(defaultMessage, result) {
+  const error = new Error(result?.errorMessage || defaultMessage);
+  error.code = result?.errorCode || null;
+  error.status = result?.status ?? 0;
+  error.retryAfterMs = result?.retryAfterMs ?? null;
+  error.isNetworkError = Boolean(result?.isNetworkError);
+  error.details = result?.errorDetails || null;
+  error.requestId = result?.requestId || null;
+  return error;
+}
+
+/**
+ * Fetches all transaction pages for an address up to `maxPages`.
+ * Returns `{ items, error }`. On failure `items` is whatever was collected
+ * before the error and `error` describes the failure — callers can decide
+ * whether to surface partial results or discard them.
+ */
 export async function fetchAllTransactionsForAddress(
   baseUrl,
-  timeoutMs,
+  timeoutOrOptions,
   maxPages,
   pageSize,
   address,
   tokenSymbol,
 ) {
-  const normalizedAddress = String(address || "").trim();
+  const options =
+    timeoutOrOptions && typeof timeoutOrOptions === "object"
+      ? timeoutOrOptions
+      : {
+          timeoutMs: timeoutOrOptions,
+          maxPages,
+          pageSize,
+          address,
+          tokenSymbol,
+        };
+
+  const timeoutMs = Number(options?.timeoutMs) || 7000;
+  const maxPageCount = Number(options?.maxPages) || 1;
+  const resolvedPageSize = Number(options?.pageSize) || 250;
+  const resolvedTokenSymbol = options?.tokenSymbol;
+  const resolvedAddress = options?.address;
+
+  const normalizedAddress = String(resolvedAddress || "").trim();
   if (!normalizedAddress) return [];
 
   const allItems = [];
   let page = 1;
   let total = Infinity;
 
-  while (page <= maxPages && allItems.length < total) {
+  while (page <= maxPageCount && allItems.length < total) {
     const endpoint = createTransactionsEndpoint(
       baseUrl,
       normalizedAddress,
-      tokenSymbol,
+      resolvedTokenSymbol,
       page,
-      pageSize,
+      resolvedPageSize,
     );
-    const result = await fetchJsonWithTimeout(
-      endpoint,
-      { cache: "no-store" },
-      timeoutMs,
-    );
+    const result = await fetchJsonWithTimeout(endpoint, {}, timeoutMs);
 
     if (!result.ok) {
-      throw new Error(
-        `transactions request failed with status ${result.status}`,
+      throw buildApiError(
+        `Transactions request failed (HTTP ${result.status})`,
+        result,
       );
     }
 
@@ -216,9 +257,7 @@ export async function fetchConnectionsForAddress(
 ) {
   const normalizedAddress = String(address || "").trim();
   if (!normalizedAddress) {
-    return {
-      items: [],
-    };
+    return { items: [] };
   }
 
   const endpoint = createConnectionsEndpoint(
@@ -226,14 +265,13 @@ export async function fetchConnectionsForAddress(
     normalizedAddress,
     tokenSymbol,
   );
-  const result = await fetchJsonWithTimeout(
-    endpoint,
-    { cache: "no-store" },
-    timeoutMs,
-  );
+  const result = await fetchJsonWithTimeout(endpoint, {}, timeoutMs);
 
   if (!result.ok) {
-    throw new Error(`connections request failed with status ${result.status}`);
+    throw buildApiError(
+      `Connections request failed (HTTP ${result.status})`,
+      result,
+    );
   }
 
   return {
@@ -248,14 +286,13 @@ export async function fetchTopHolders(
   limit = 10,
 ) {
   const endpoint = createTopHoldersEndpoint(baseUrl, tokenSymbol, limit);
-  const result = await fetchJsonWithTimeout(
-    endpoint,
-    { cache: "no-store" },
-    timeoutMs,
-  );
+  const result = await fetchJsonWithTimeout(endpoint, {}, timeoutMs);
 
   if (!result.ok) {
-    throw new Error(`top holders request failed with status ${result.status}`);
+    throw buildApiError(
+      `Top holders request failed (HTTP ${result.status})`,
+      result,
+    );
   }
 
   return {
@@ -272,12 +309,7 @@ export async function fetchTransactionsPageForAddress(
 ) {
   const normalizedAddress = String(address || "").trim();
   if (!normalizedAddress) {
-    return {
-      items: [],
-      total: 0,
-      page,
-      pageSize,
-    };
+    return { items: [], total: 0, page, pageSize };
   }
 
   const endpoint = createTransactionsEndpoint(
@@ -288,14 +320,13 @@ export async function fetchTransactionsPageForAddress(
     pageSize,
     filters,
   );
-  const result = await fetchJsonWithTimeout(
-    endpoint,
-    { cache: "no-store" },
-    timeoutMs,
-  );
+  const result = await fetchJsonWithTimeout(endpoint, {}, timeoutMs);
 
   if (!result.ok) {
-    throw new Error(`transactions request failed with status ${result.status}`);
+    throw buildApiError(
+      `Transactions request failed (HTTP ${result.status})`,
+      result,
+    );
   }
 
   const items = Array.isArray(result.payload?.items)
@@ -307,10 +338,5 @@ export async function fetchTransactionsPageForAddress(
       ? parsedTotal
       : items.length;
 
-  return {
-    items,
-    total,
-    page,
-    pageSize,
-  };
+  return { items, total, page, pageSize };
 }

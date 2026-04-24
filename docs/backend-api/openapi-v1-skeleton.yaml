@@ -1,0 +1,454 @@
+openapi: 3.1.0
+info:
+  title: Phantasma Maps API
+  version: 1.0.0
+  description: >-
+    Contract skeleton for frontend/backend alignment. This keeps current routes
+    but standardizes envelope, errors, and metadata fields.
+servers:
+  - url: http://localhost:3000
+
+tags:
+  - name: Tokens
+  - name: Graph
+  - name: Transactions
+  - name: Sync
+  - name: Connections
+
+paths:
+  /tokens:
+    get:
+      tags: [Tokens]
+      summary: List tracked token symbols
+      operationId: listTokens
+      responses:
+        "200":
+          description: OK
+          headers:
+            ETag:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnvelopeTokens"
+        "500":
+          $ref: "#/components/responses/Error500"
+
+  /tokens/{tokenSymbol}/metadata:
+    get:
+      tags: [Tokens]
+      summary: Get token metadata
+      operationId: getTokenMetadata
+      parameters:
+        - $ref: "#/components/parameters/TokenSymbol"
+      responses:
+        "200":
+          description: OK
+          headers:
+            ETag:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnvelopeTokenMetadata"
+        "404":
+          $ref: "#/components/responses/Error404"
+        "500":
+          $ref: "#/components/responses/Error500"
+
+  /graph/token/{tokenSymbol}:
+    get:
+      tags: [Graph]
+      summary: Get token-wide holder graph
+      operationId: getTokenGraph
+      parameters:
+        - $ref: "#/components/parameters/TokenSymbol"
+        - name: withTopHolders
+          in: query
+          schema:
+            type: boolean
+            default: false
+          description: Include top-holder annotations in graph payload.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnvelopeGraph"
+        "400":
+          $ref: "#/components/responses/Error400"
+        "500":
+          $ref: "#/components/responses/Error500"
+
+  /graph/address/{address}:
+    get:
+      tags: [Graph]
+      summary: Get address-focused graph
+      operationId: getAddressGraph
+      parameters:
+        - $ref: "#/components/parameters/Address"
+        - $ref: "#/components/parameters/TokenQuery"
+        - name: depth
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 6
+            default: 2
+        - name: edgeLimit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 10000
+            default: 1200
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnvelopeGraph"
+        "400":
+          $ref: "#/components/responses/Error400"
+        "404":
+          $ref: "#/components/responses/Error404"
+        "500":
+          $ref: "#/components/responses/Error500"
+
+  /connections/address/{address}:
+    get:
+      tags: [Connections]
+      summary: Get precomputed counterparties for an address
+      operationId: getAddressConnections
+      parameters:
+        - $ref: "#/components/parameters/Address"
+        - $ref: "#/components/parameters/TokenQuery"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnvelopeConnections"
+        "400":
+          $ref: "#/components/responses/Error400"
+        "500":
+          $ref: "#/components/responses/Error500"
+
+  /transactions:
+    get:
+      tags: [Transactions]
+      summary: Get paginated address transactions
+      operationId: getTransactions
+      parameters:
+        - $ref: "#/components/parameters/TokenQuery"
+        - name: address
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: pageSize
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+            default: 250
+        - name: cursor
+          in: query
+          schema:
+            type: string
+          description: Optional cursor mode for stable pagination.
+        - name: dir
+          in: query
+          schema:
+            type: string
+            enum: [from, to]
+        - name: counterparty
+          in: query
+          schema:
+            type: string
+        - name: startTime
+          in: query
+          schema:
+            type: string
+        - name: endTime
+          in: query
+          schema:
+            type: string
+        - name: minAmount
+          in: query
+          schema:
+            type: number
+        - name: maxAmount
+          in: query
+          schema:
+            type: number
+        - name: minUsd
+          in: query
+          schema:
+            type: number
+        - name: maxUsd
+          in: query
+          schema:
+            type: number
+        - name: usdRateNow
+          in: query
+          schema:
+            type: number
+        - name: sortBy
+          in: query
+          schema:
+            type: string
+            enum: [amount, usd, time]
+        - name: sortDir
+          in: query
+          schema:
+            type: string
+            enum: [asc, desc]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnvelopeTransactions"
+        "400":
+          $ref: "#/components/responses/Error400"
+        "429":
+          $ref: "#/components/responses/Error429"
+        "500":
+          $ref: "#/components/responses/Error500"
+
+  /sync-status:
+    get:
+      tags: [Sync]
+      summary: Get backend sync status
+      operationId: getSyncStatus
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnvelopeSyncStatus"
+        "500":
+          $ref: "#/components/responses/Error500"
+
+components:
+  parameters:
+    TokenSymbol:
+      name: tokenSymbol
+      in: path
+      required: true
+      schema:
+        type: string
+    TokenQuery:
+      name: token
+      in: query
+      required: true
+      schema:
+        type: string
+    Address:
+      name: address
+      in: path
+      required: true
+      schema:
+        type: string
+
+  responses:
+    Error400:
+      description: Bad request
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+    Error404:
+      description: Not found
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+    Error429:
+      description: Rate limited
+      headers:
+        Retry-After:
+          schema:
+            type: string
+        X-RateLimit-Limit:
+          schema:
+            type: string
+        X-RateLimit-Remaining:
+          schema:
+            type: string
+        X-RateLimit-Reset:
+          schema:
+            type: string
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+    Error500:
+      description: Internal error
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+
+  schemas:
+    EnvelopeMeta:
+      type: object
+      properties:
+        generatedAt:
+          type: string
+        source:
+          type: string
+          enum: [live, cache, fallback]
+        isPartial:
+          type: boolean
+        truncationReason:
+          type: string
+        appliedLimits:
+          type: object
+          additionalProperties: true
+        pagination:
+          type: object
+          properties:
+            page:
+              type: integer
+            pageSize:
+              type: integer
+            total:
+              type: integer
+            nextCursor:
+              type: string
+            hasMore:
+              type: boolean
+
+    EnvelopeBase:
+      type: object
+      required: [requestId]
+      properties:
+        requestId:
+          type: string
+        meta:
+          $ref: "#/components/schemas/EnvelopeMeta"
+
+    ErrorEnvelope:
+      type: object
+      required: [requestId, error]
+      properties:
+        requestId:
+          type: string
+        retryAfterMs:
+          type: integer
+          nullable: true
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+            message:
+              type: string
+            details:
+              type: object
+              additionalProperties: true
+
+    TokenMetadata:
+      type: object
+      additionalProperties: true
+
+    GraphPayload:
+      type: object
+      additionalProperties: true
+
+    ConnectionItem:
+      type: object
+      additionalProperties: true
+
+    TransactionItem:
+      type: object
+      additionalProperties: true
+
+    SyncItem:
+      type: object
+      additionalProperties: true
+
+    EnvelopeTokens:
+      allOf:
+        - $ref: "#/components/schemas/EnvelopeBase"
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                items:
+                  type: array
+                  items:
+                    type: string
+
+    EnvelopeTokenMetadata:
+      allOf:
+        - $ref: "#/components/schemas/EnvelopeBase"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/TokenMetadata"
+
+    EnvelopeGraph:
+      allOf:
+        - $ref: "#/components/schemas/EnvelopeBase"
+        - type: object
+          properties:
+            data:
+              $ref: "#/components/schemas/GraphPayload"
+
+    EnvelopeConnections:
+      allOf:
+        - $ref: "#/components/schemas/EnvelopeBase"
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                items:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/ConnectionItem"
+
+    EnvelopeTransactions:
+      allOf:
+        - $ref: "#/components/schemas/EnvelopeBase"
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                items:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/TransactionItem"
+
+    EnvelopeSyncStatus:
+      allOf:
+        - $ref: "#/components/schemas/EnvelopeBase"
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                items:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/SyncItem"
