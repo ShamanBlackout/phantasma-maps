@@ -6,6 +6,8 @@ function TransactionsModal({
   closeTransfersModal,
   isSelectedNodeTransactionsLoading,
   selectedNodeApiTransactionsError,
+  isTransactionsExporting,
+  transactionsExportStatus,
   exportMenuRef,
   isExportMenuOpen,
   setIsExportMenuOpen,
@@ -169,6 +171,13 @@ function TransactionsModal({
                   {selectedNodeApiTransactionsError}
                 </span>
               ) : null}
+              {transactionsExportStatus ? (
+                <span
+                  className={`transfers-modal-status ${isTransactionsExporting ? "transfers-modal-status-loading" : ""}`}
+                >
+                  {transactionsExportStatus}
+                </span>
+              ) : null}
             </div>
             <div className="transfers-modal-head-actions">
               <div className="transactions-export" ref={exportMenuRef}>
@@ -176,8 +185,9 @@ function TransactionsModal({
                   type="button"
                   className="transactions-export-btn"
                   onClick={() => setIsExportMenuOpen((open) => !open)}
+                  disabled={isTransactionsExporting}
                 >
-                  Export
+                  {isTransactionsExporting ? "Exporting..." : "Export"}
                 </button>
                 {isExportMenuOpen && (
                   <div className="transactions-export-menu">
@@ -185,6 +195,7 @@ function TransactionsModal({
                       type="button"
                       className="transactions-export-item"
                       onClick={() => exportTransactions("json")}
+                      disabled={isTransactionsExporting}
                     >
                       Export JSON
                     </button>
@@ -192,6 +203,7 @@ function TransactionsModal({
                       type="button"
                       className="transactions-export-item"
                       onClick={() => exportTransactions("excel")}
+                      disabled={isTransactionsExporting}
                     >
                       Export Excel
                     </button>

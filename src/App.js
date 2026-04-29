@@ -1441,6 +1441,7 @@ export default function App() {
   const traceToolPanelRef = useRef(null);
   const pendingMobileFitKeyRef = useRef(null);
   const exportMenuRef = useRef(null);
+  const exportStatusTimeoutRef = useRef(null);
   const dirFilterRef = useRef(null);
   const counterpartyFilterRef = useRef(null);
   const timeFilterRef = useRef(null);
@@ -1536,6 +1537,8 @@ export default function App() {
     isSelectedNodeTransactionsLoading,
     setIsSelectedNodeTransactionsLoading,
   ] = useState(false);
+  const [isTransactionsExporting, setIsTransactionsExporting] = useState(false);
+  const [transactionsExportStatus, setTransactionsExportStatus] = useState("");
   const [selectedNodeSparkline, setSelectedNodeSparkline] = useState([]);
   const [priceLastUpdatedAt, setPriceLastUpdatedAt] = useState(null);
   const [blockSyncHeight, setBlockSyncHeight] = useState(null);
@@ -3831,8 +3834,8 @@ export default function App() {
     });
   }
 
-  function buildExportRows() {
-    return filteredTransactions.map((tx) => ({
+  function mapTransactionsToExportRows(transactions) {
+    return transactions.map((tx) => ({
       direction: tx.direction,
       counterparty: tx.counterpartLabel,
       address: tx.counterpartAddress || tx.counterpartAddr,
@@ -3846,8 +3849,134 @@ export default function App() {
     }));
   }
 
+  async function buildExportRows() {
+    if (
+      !isUsingApiTransactions ||
+      selectedNodeApiTransactionsError ||
+      !selectedNode?.id
+    ) {
+      return mapTransactionsToExportRows(filteredTransactions);
+    }
+
+    const startTs = parseUtcDateTimeInput(transactionStartTime);
+    const endTs = parseUtcDateTimeInput(transactionEndTime);
+    const minAmount =
+      transactionMinAmount === "" ? null : Number(transactionMinAmount);
+    const maxAmount =
+      transactionMaxAmount === "" ? null : Number(transactionMaxAmount);
+    const minUsd = transactionMinUsd === "" ? null : Number(transactionMinUsd);
+    const maxUsd = transactionMaxUsd === "" ? null : Number(transactionMaxUsd);
+
+    const apiFilters = {
+      direction: transactionDirFilter,
+      counterparty: transactionCounterpartyFilter,
+      startTime: startTs === null ? "" : new Date(startTs).toISOString(),
+      endTime: endTs === null ? "" : new Date(endTs).toISOString(),
+      minAmount: Number.isFinite(minAmount) ? minAmount : null,
+      maxAmount: Number.isFinite(maxAmount) ? maxAmount : null,
+      minUsd: Number.isFinite(minUsd) ? minUsd : null,
+      maxUsd: Number.isFinite(maxUsd) ? maxUsd : null,
+      usdRateNow: Number.isFinite(Number(activeTokenInfo.price))
+        ? Number(activeTokenInfo.price)
+        : null,
+      sortBy:
+        transactionSortBy === "amount" || transactionSortBy === "time"
+          ? transactionSortBy
+          : null,
+      sortDir: transactionSortDirection,
+    };
+
+    const pageSize = 100;
+    const firstPage = await fetchTransactionsPageForAddressFromApi(
+      MAPS_API_BASE_URL,
+      MAPS_API_REQUEST_TIMEOUT_MS,
+      selectedNode.id,
+      selectedTokenSymbol,
+      {
+        page: 1,
+        pageSize,
+        filters: apiFilters,
+      },
+    );
+
+    const allItems = Array.isArray(firstPage.items) ? [...firstPage.items] : [];
+    const total = Number(firstPage.total);
+    const totalPages =
+      Number.isFinite(total) && total > 0 ? Math.ceil(total / pageSize) : 1;
+
+    for (let page = 2; page <= totalPages; page += 1) {
+      const pageData = await fetchTransactionsPageForAddressFromApi(
+        MAPS_API_BASE_URL,
+        MAPS_API_REQUEST_TIMEOUT_MS,
+        selectedNode.id,
+        selectedTokenSymbol,
+        {
+          page,
+          pageSize,
+          filters: apiFilters,
+        },
+      );
+      if (Array.isArray(pageData.items) && pageData.items.length) {
+        allItems.push(...pageData.items);
+      }
+    }
+
+    const exportTransactions = allItems.map((transaction, index) => {
+      const fromAddress = String(
+        transaction.from_address ?? transaction.fromAddress ?? "",
+      );
+      const toAddress = String(
+        transaction.to_address ?? transaction.toAddress ?? "",
+      );
+      const txHash = String(transaction.tx_hash ?? transaction.txHash ?? "");
+      const token = String(
+        transaction.token_symbol ??
+          transaction.tokenSymbol ??
+          activeTokenInfo.name,
+      );
+      const amount = normalizeAmount(
+        transaction.amountNormalized ??
+          transaction.amount_normalized ??
+          transaction.amount,
+      );
+      const timestamp = parseTimestampMs(transaction.timestamp);
+      const isOutgoing = fromAddress === selectedNode.id;
+      const counterpartId = isOutgoing ? toAddress : fromAddress;
+      const counterpartNode = nodeById.get(counterpartId);
+
+      return {
+        id: String(
+          transaction.id ||
+            `${txHash}-${transaction.event_index ?? transaction.eventIndex ?? index}`,
+        ),
+        direction: isOutgoing ? "To" : "From",
+        counterpartLabel:
+          counterpartNode?.label ||
+          counterpartNode?.shortAddr ||
+          shortenAddress(counterpartId),
+        counterpartAddress: counterpartId,
+        counterpartAddr:
+          counterpartNode?.shortAddr || shortenAddress(counterpartId),
+        token,
+        amount,
+        usd: amount * Number(activeTokenInfo.price),
+        sentTransactions: isOutgoing ? 1 : 0,
+        receivedTransactions: isOutgoing ? 0 : 1,
+        transactionHash: txHash || "N/A",
+        timestamp,
+        timeUtc: formatUtcDateTime(timestamp),
+        timeInputValue: toUtcDateTimeInputValue(timestamp),
+      };
+    });
+
+    return mapTransactionsToExportRows(exportTransactions);
+  }
+
   function downloadBlobFile(content, mimeType, fileName) {
-    const blob = new Blob([content], { type: mimeType });
+    const blob =
+      content instanceof Blob
+        ? content
+        : new Blob([content], { type: mimeType });
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement("a");
     anchor.href = url;
@@ -3858,57 +3987,117 @@ export default function App() {
     URL.revokeObjectURL(url);
   }
 
-  function exportTransactions(format) {
-    const rows = buildExportRows();
-
-    if (format === "json") {
-      const json = JSON.stringify(rows, null, 2);
-      downloadBlobFile(
-        json,
-        "application/json;charset=utf-8",
-        makeExportFileName(selectedNode, "json"),
-      );
-      setIsExportMenuOpen(false);
+  async function exportTransactions(format) {
+    if (isTransactionsExporting) {
       return;
     }
 
-    if (format === "csv") {
-      const headers = [
-        "Direction",
-        "Counterparty",
-        "Address",
-        "Time",
-        "Token",
-        "Amount",
-        "USD (Now)",
-        "Transaction Hash",
-        "Sent Tx",
-        "Received Tx",
-      ];
-      const csvRows = rows.map((row) => [
-        row.direction,
-        row.counterparty,
-        row.address,
-        row.time,
-        row.token,
-        row.amount,
-        row.usdNow,
-        row.transactionHash,
-        row.sentTransactions,
-        row.receivedTransactions,
-      ]);
-      const escapeCsv = (value) =>
-        `"${String(value ?? "").replace(/"/g, '""')}"`;
-      const csv = [headers, ...csvRows]
-        .map((line) => line.map(escapeCsv).join(","))
-        .join("\n");
-      downloadBlobFile(
-        `\uFEFF${csv}`,
-        "text/csv;charset=utf-8",
-        makeExportFileName(selectedNode, "csv"),
+    let rows = [];
+    setIsTransactionsExporting(true);
+    setTransactionsExportStatus("Exporting transactions...");
+
+    try {
+      rows = await buildExportRows();
+    } catch (error) {
+      setLastApiError(
+        buildApiErrorRecord(error, "transactions", "Transaction export failed"),
       );
+      setTransactionsExportStatus("Export failed. Please try again.");
       setIsExportMenuOpen(false);
+      setIsTransactionsExporting(false);
+      if (exportStatusTimeoutRef.current) {
+        window.clearTimeout(exportStatusTimeoutRef.current);
+      }
+      exportStatusTimeoutRef.current = window.setTimeout(() => {
+        setTransactionsExportStatus("");
+      }, 3000);
       return;
+    }
+
+    try {
+      if (format === "json") {
+        const json = JSON.stringify(rows, null, 2);
+        downloadBlobFile(
+          json,
+          "application/json;charset=utf-8",
+          makeExportFileName(selectedNode, "json"),
+        );
+        setTransactionsExportStatus(
+          `Export complete (${Number(rows.length || 0).toLocaleString()} rows).`,
+        );
+        setIsExportMenuOpen(false);
+        if (exportStatusTimeoutRef.current) {
+          window.clearTimeout(exportStatusTimeoutRef.current);
+        }
+        exportStatusTimeoutRef.current = window.setTimeout(() => {
+          setTransactionsExportStatus("");
+        }, 2200);
+        return;
+      }
+
+      if (format === "csv" || format === "excel") {
+        const headers = [
+          "Direction",
+          "Counterparty",
+          "Address",
+          "Time",
+          "Token",
+          "Amount",
+          "USD (Now)",
+          "Transaction Hash",
+          "Sent Tx",
+          "Received Tx",
+        ];
+        const csvRows = rows.map((row) => [
+          row.direction,
+          row.counterparty,
+          row.address,
+          row.time,
+          row.token,
+          row.amount,
+          row.usdNow,
+          row.transactionHash,
+          row.sentTransactions,
+          row.receivedTransactions,
+        ]);
+        const escapeCsv = (value) =>
+          `"${String(value ?? "").replace(/"/g, '""')}"`;
+        const csv = [headers, ...csvRows]
+          .map((line) => line.map(escapeCsv).join(","))
+          .join("\n");
+        downloadBlobFile(
+          `\uFEFF${csv}`,
+          "text/csv;charset=utf-8",
+          makeExportFileName(selectedNode, "csv"),
+        );
+        setTransactionsExportStatus(
+          `Export complete (${Number(rows.length || 0).toLocaleString()} rows).`,
+        );
+        setIsExportMenuOpen(false);
+        if (exportStatusTimeoutRef.current) {
+          window.clearTimeout(exportStatusTimeoutRef.current);
+        }
+        exportStatusTimeoutRef.current = window.setTimeout(() => {
+          setTransactionsExportStatus("");
+        }, 2200);
+        return;
+      }
+
+      setTransactionsExportStatus("");
+    } catch (error) {
+      setLastApiError(
+        buildApiErrorRecord(error, "transactions", "Transaction export failed"),
+      );
+      setTransactionsExportStatus("Export failed. Please try again.");
+      setIsExportMenuOpen(false);
+      if (exportStatusTimeoutRef.current) {
+        window.clearTimeout(exportStatusTimeoutRef.current);
+      }
+      exportStatusTimeoutRef.current = window.setTimeout(() => {
+        setTransactionsExportStatus("");
+      }, 3000);
+    } finally {
+      setIsTransactionsExporting(false);
     }
   }
 
@@ -3943,9 +4132,19 @@ export default function App() {
       setCopiedAddress(null);
       setCopiedTxHash(null);
       setIsExportMenuOpen(false);
+      setIsTransactionsExporting(false);
+      setTransactionsExportStatus("");
       resetTransactionState();
     }
   }, [resetTransactionState, selectedNode]);
+
+  useEffect(() => {
+    return () => {
+      if (exportStatusTimeoutRef.current) {
+        window.clearTimeout(exportStatusTimeoutRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     if (!selectedNode?.id || !selectedTokenSymbol) {
@@ -5906,6 +6105,8 @@ export default function App() {
         closeTransfersModal={closeTransfersModal}
         isSelectedNodeTransactionsLoading={isSelectedNodeTransactionsLoading}
         selectedNodeApiTransactionsError={selectedNodeApiTransactionsError}
+        isTransactionsExporting={isTransactionsExporting}
+        transactionsExportStatus={transactionsExportStatus}
         exportMenuRef={exportMenuRef}
         isExportMenuOpen={isExportMenuOpen}
         setIsExportMenuOpen={setIsExportMenuOpen}
