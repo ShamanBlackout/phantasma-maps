@@ -2112,7 +2112,8 @@ body,
   flex-shrink: 0;
   min-height: 0;
   position: relative;
-  overflow: hidden;
+  overflow: visible;
+  z-index: 30;
   background:
     linear-gradient(90deg, rgba(255, 157, 101, 0.12), rgba(255, 157, 101, 0)) 0
       0 / 100% 1px no-repeat,
@@ -2143,6 +2144,8 @@ body,
   justify-content: space-between;
   gap: 12px;
   padding: 12px 14px 12px 12px;
+  position: relative;
+  z-index: 31;
 }
 
 .transfers-modal-head-info {
@@ -2219,7 +2222,14 @@ body,
   display: flex;
   flex-direction: column;
   gap: 4px;
-  z-index: 9;
+  z-index: 40;
+}
+
+.transactions-export-hint {
+  font-size: 10px;
+  line-height: 1.35;
+  color: rgba(173, 201, 230, 0.72);
+  padding: 2px 4px 6px;
 }
 
 .transactions-export-item {
@@ -2241,6 +2251,12 @@ body,
 .transactions-export-item:hover {
   background: rgba(var(--accent-rgb), 0.16);
   border-color: rgba(var(--accent-rgb), 0.34);
+}
+
+.transactions-export-btn:disabled,
+.transactions-export-item:disabled {
+  opacity: 0.62;
+  cursor: not-allowed;
 }
 
 .transactions-reset-all {
