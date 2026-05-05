@@ -360,6 +360,39 @@ function buildApiErrorRecord(errorLike, source, fallbackMessage) {
   };
 }
 
+function isTokenNotFoundError(errorLike) {
+  if (!errorLike || typeof errorLike !== "object") return false;
+
+  const status = Number(errorLike.status);
+  const code = String(errorLike.errorCode || errorLike.code || "")
+    .trim()
+    .toUpperCase();
+
+  const tokenValidationCodes = new Set([
+    "TOKEN_SYMBOL_INVALID",
+    "TOKEN_INVALID",
+  ]);
+
+  return (
+    status === 404 ||
+    code === "TOKEN_NOT_FOUND" ||
+    (status === 400 && tokenValidationCodes.has(code))
+  );
+}
+
+function buildTokenNotFoundMessage(tokenSymbol) {
+  const normalizedSymbol = String(tokenSymbol || "")
+    .trim()
+    .toUpperCase();
+  return normalizedSymbol
+    ? `No database data found for ${normalizedSymbol} yet. Try another token or check back after sync.`
+    : "No database data found for the requested token yet. Try another token or check back after sync.";
+}
+
+function buildTokenNotFoundStatus(tokenSymbol, errorLike) {
+  return `${buildTokenNotFoundMessage(tokenSymbol)}${formatApiErrorMeta(errorLike)}`;
+}
+
 function getLinkEndpointId(endpoint) {
   if (endpoint && typeof endpoint === "object") {
     return String(endpoint.id || "").trim();
@@ -642,7 +675,13 @@ function buildNeighborFocusedGraph(graphData, rootAddress) {
   };
 }
 
-function buildTokenSnapshot(tokenSymbol, nodes, links, currentSupplyBase) {
+function buildTokenSnapshot(
+  tokenSymbol,
+  nodes,
+  links,
+  currentSupplyBase,
+  globalHolderCount = null,
+) {
   const normalizedNodes = Array.isArray(nodes) ? nodes : [];
   const normalizedLinks = Array.isArray(links) ? links : [];
   const topWallet = normalizedNodes.length
@@ -671,6 +710,9 @@ function buildTokenSnapshot(tokenSymbol, nodes, links, currentSupplyBase) {
     token: tokenSymbol,
     wallets: normalizedNodes.length,
     links: normalizedLinks.length,
+    globalHolderCount: Number.isFinite(Number(globalHolderCount))
+      ? Math.max(0, Math.floor(Number(globalHolderCount)))
+      : null,
     top10: Number(concentrationTop10 || 0),
     topWalletLabel,
     topWalletShare: Number(topWalletShare || 0),
@@ -685,21 +727,30 @@ function normalizeTokenSnapshot(snapshot) {
 
   const wallets = Number(snapshot.wallets ?? snapshot.visibleWallets ?? 0);
   const links = Number(snapshot.links ?? snapshot.visibleLinks ?? 0);
+  const globalHolderCount = Number(
+    snapshot.globalHolderCount ?? snapshot.global_holder_count,
+  );
   const { visibleWallets, visibleLinks, ...rest } = snapshot;
 
   return {
     ...rest,
     wallets: Number.isFinite(wallets) && wallets >= 0 ? wallets : 0,
     links: Number.isFinite(links) && links >= 0 ? links : 0,
+    globalHolderCount:
+      Number.isFinite(globalHolderCount) && globalHolderCount >= 0
+        ? Math.floor(globalHolderCount)
+        : null,
   };
 }
 
 function getSnapshotWalletCount(snapshot) {
-  return Number(snapshot?.wallets ?? snapshot?.visibleWallets ?? 0);
-}
-
-function getSnapshotLinkCount(snapshot) {
-  return Number(snapshot?.links ?? snapshot?.visibleLinks ?? 0);
+  return Number(
+    snapshot?.globalHolderCount ??
+      snapshot?.global_holder_count ??
+      snapshot?.wallets ??
+      snapshot?.visibleWallets ??
+      0,
+  );
 }
 
 async function fetchTokenSnapshot(baseUrl, timeoutMs, tokenSymbol) {
@@ -708,6 +759,8 @@ async function fetchTokenSnapshot(baseUrl, timeoutMs, tokenSymbol) {
     return {
       snapshot: null,
       fallbackUsed: false,
+      isTokenNotFound: false,
+      error: null,
     };
   }
 
@@ -732,6 +785,21 @@ async function fetchTokenSnapshot(baseUrl, timeoutMs, tokenSymbol) {
     metadataResult.payload?.currentSupplyNormalized ??
       metadataResult.payload?.current_supply_normalized,
   );
+  const metadataHolderCount = Number(
+    metadataResult.payload?.holderCount ?? metadataResult.payload?.holder_count,
+  );
+
+  if (
+    isTokenNotFoundError(metadataResult) ||
+    isTokenNotFoundError(graphResult)
+  ) {
+    return {
+      snapshot: null,
+      fallbackUsed: false,
+      isTokenNotFound: true,
+      error: isTokenNotFoundError(graphResult) ? graphResult : metadataResult,
+    };
+  }
 
   if (graphResult.ok) {
     const graphDecimals = Number(metadataResult.payload?.decimals ?? 0) || 0;
@@ -754,8 +822,11 @@ async function fetchTokenSnapshot(baseUrl, timeoutMs, tokenSymbol) {
           mappedGraph.nodes,
           mappedGraph.links,
           resolvedSupplyBase,
+          metadataHolderCount,
         ),
         fallbackUsed: false,
+        isTokenNotFound: false,
+        error: null,
       };
     }
   }
@@ -770,14 +841,19 @@ async function fetchTokenSnapshot(baseUrl, timeoutMs, tokenSymbol) {
         Number(fallbackMockToken.tokenInfo?.currentSupply) ||
           Number(fallbackMockToken.tokenInfo?.totalSupply) ||
           0,
+        Number(fallbackMockToken.tokenInfo?.globalHolderCount),
       ),
       fallbackUsed: true,
+      isTokenNotFound: false,
+      error: null,
     };
   }
 
   return {
     snapshot: null,
     fallbackUsed: false,
+    isTokenNotFound: false,
+    error: null,
   };
 }
 
@@ -1915,6 +1991,15 @@ export default function App() {
       if (!isMounted) return;
 
       if (!result.ok) {
+        if (isTokenNotFoundError(result)) {
+          setLastApiError(
+            buildApiErrorRecord(
+              result,
+              "token-metadata",
+              "Requested token metadata is not available in the database",
+            ),
+          );
+        }
         setApiTokenInfo(null);
         return;
       }
@@ -2415,6 +2500,26 @@ export default function App() {
     let isMounted = true;
 
     async function fetchMapGraph() {
+      function applyTokenNotFoundGraphState(errorLike, source = "graph") {
+        setLastApiError(
+          buildApiErrorRecord(
+            errorLike,
+            source,
+            "Requested token is not available in the database",
+          ),
+        );
+        setIsUsingMockApiFallback(false);
+        setTrackedTokenSupply(0);
+        setMapNodes([]);
+        setSummaryNodes([]);
+        setMapLinks([]);
+        setMapLoadingEvidence({ wallets: 0, links: 0 });
+        setMapDataStatus(
+          buildTokenNotFoundStatus(selectedTokenSymbol, errorLike),
+        );
+        setIsMapLoading(false);
+      }
+
       const defaultLoadingProfile = resolveMapLoadingProfile(200, 300);
       setIsMapLoading(true);
       setIsMapLoadingReadyState(false);
@@ -2494,6 +2599,12 @@ export default function App() {
         setLastApiError(
           buildApiErrorRecord(result, "graph", "Graph request failed"),
         );
+
+        if (isTokenNotFoundError(result)) {
+          applyTokenNotFoundGraphState(result, "graph");
+          return;
+        }
+
         if (isConnectionsView && activeGraphRootAddress) {
           try {
             const connectionsResult = await fetchConnectionsForAddressFromApi(
@@ -2520,6 +2631,11 @@ export default function App() {
               {},
               MAPS_API_REQUEST_TIMEOUT_MS,
             );
+
+            if (isTokenNotFoundError(tokenGraphFallbackResult)) {
+              applyTokenNotFoundGraphState(tokenGraphFallbackResult, "graph");
+              return;
+            }
 
             if (tokenGraphFallbackResult.ok) {
               const graphDecimals = apiTokenInfo?.decimals ?? 0;
@@ -2572,7 +2688,12 @@ export default function App() {
               setIsMapLoading(false);
               return;
             }
-          } catch {
+          } catch (error) {
+            if (!isMounted) return;
+            if (isTokenNotFoundError(error)) {
+              applyTokenNotFoundGraphState(error, "connections");
+              return;
+            }
             // Fall through to status handling below.
           }
         }
@@ -2595,6 +2716,11 @@ export default function App() {
               {},
               MAPS_API_REQUEST_TIMEOUT_MS,
             );
+
+            if (isTokenNotFoundError(tokenGraphFallbackResult)) {
+              applyTokenNotFoundGraphState(tokenGraphFallbackResult, "graph");
+              return;
+            }
 
             if (tokenGraphFallbackResult.ok) {
               const graphDecimals = apiTokenInfo?.decimals ?? 0;
@@ -2645,7 +2771,12 @@ export default function App() {
                 return;
               }
             }
-          } catch {
+          } catch (error) {
+            if (!isMounted) return;
+            if (isTokenNotFoundError(error)) {
+              applyTokenNotFoundGraphState(error, "graph");
+              return;
+            }
             // Fall through to status handling below.
           }
         }
@@ -2758,7 +2889,10 @@ export default function App() {
                     address,
                     items: result.items,
                   };
-                } catch {
+                } catch (error) {
+                  if (isTokenNotFoundError(error)) {
+                    throw error;
+                  }
                   return {
                     address,
                     items: [],
@@ -2779,7 +2913,12 @@ export default function App() {
               seededGraph = topHolderConnectionsGraph;
             }
           }
-        } catch {
+        } catch (error) {
+          if (!isMounted) return;
+          if (isTokenNotFoundError(error)) {
+            applyTokenNotFoundGraphState(error, "top-holders");
+            return;
+          }
           seededGraph = null;
         }
 
@@ -2829,7 +2968,12 @@ export default function App() {
             focusedGraph = tableFocusedGraph;
             usedConnectionsTable = true;
           }
-        } catch {
+        } catch (error) {
+          if (!isMounted) return;
+          if (isTokenNotFoundError(error)) {
+            applyTokenNotFoundGraphState(error, "connections");
+            return;
+          }
           // Fall back to the base graph if precomputed connections are unavailable.
         }
       }
@@ -3544,6 +3688,12 @@ export default function App() {
         );
         setSelectedNodeApiTransactions([]);
         setSelectedNodeApiTransactionsTotal(0);
+        if (isTokenNotFoundError(error)) {
+          setSelectedNodeApiTransactionsError(
+            buildTokenNotFoundStatus(selectedTokenSymbol, error),
+          );
+          return;
+        }
         setSelectedNodeApiTransactionsError(
           `Using graph-derived transfers (transactions API unavailable).${formatApiErrorMeta(error)}`,
         );
@@ -4002,7 +4152,11 @@ export default function App() {
       setLastApiError(
         buildApiErrorRecord(error, "transactions", "Transaction export failed"),
       );
-      setTransactionsExportStatus("Export failed. Please try again.");
+      setTransactionsExportStatus(
+        isTokenNotFoundError(error)
+          ? buildTokenNotFoundStatus(selectedTokenSymbol, error)
+          : "Export failed. Please try again.",
+      );
       setIsExportMenuOpen(false);
       setIsTransactionsExporting(false);
       if (exportStatusTimeoutRef.current) {
@@ -4166,6 +4320,15 @@ export default function App() {
         if (result.ok && Array.isArray(result.payload?.items)) {
           setSelectedNodeSparkline(result.payload.items);
         } else {
+          if (isTokenNotFoundError(result)) {
+            setLastApiError(
+              buildApiErrorRecord(
+                result,
+                "activity",
+                "Token activity is not available in the database",
+              ),
+            );
+          }
           setSelectedNodeSparkline([]);
         }
       })
@@ -4634,6 +4797,20 @@ export default function App() {
         return;
       }
 
+      if (result.isTokenNotFound) {
+        setLastApiError(
+          buildApiErrorRecord(
+            result.error,
+            "snapshot",
+            "Token snapshot is not available in the database",
+          ),
+        );
+        setCurrentSnapshotStatus(
+          buildTokenNotFoundStatus(currentKey, result.error),
+        );
+        return;
+      }
+
       setCurrentSnapshotStatus(`Unable to load ${currentKey} snapshot.`);
     }
 
@@ -4689,6 +4866,20 @@ export default function App() {
         }));
         setCompareSnapshotStatus(
           result.fallbackUsed ? "Using fallback snapshot data." : "",
+        );
+        return;
+      }
+
+      if (result.isTokenNotFound) {
+        setLastApiError(
+          buildApiErrorRecord(
+            result.error,
+            "snapshot",
+            "Token snapshot is not available in the database",
+          ),
+        );
+        setCompareSnapshotStatus(
+          buildTokenNotFoundStatus(compareKey, result.error),
         );
         return;
       }
@@ -5391,11 +5582,10 @@ export default function App() {
               {currentSnapshotStatus ? <p>{currentSnapshotStatus}</p> : null}
               <p>
                 Wallets:{" "}
-                {getSnapshotWalletCount(currentTokenSnapshot).toLocaleString()}
-              </p>
-              <p>
-                Links:{" "}
-                {getSnapshotLinkCount(currentTokenSnapshot).toLocaleString()}
+                {Number(
+                  activeTokenInfo?.globalHolderCount ??
+                    getSnapshotWalletCount(currentTokenSnapshot),
+                ).toLocaleString()}
               </p>
               <p>
                 Top 10: {Number(currentTokenSnapshot?.top10 || 0).toFixed(1)}%
@@ -5412,9 +5602,6 @@ export default function App() {
               <p>
                 Wallets:{" "}
                 {getSnapshotWalletCount(compareSnapshot).toLocaleString()}
-              </p>
-              <p>
-                Links: {getSnapshotLinkCount(compareSnapshot).toLocaleString()}
               </p>
               <p>Top 10: {Number(compareSnapshot?.top10 || 0).toFixed(1)}%</p>
               <p>

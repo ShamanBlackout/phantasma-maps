@@ -86,7 +86,8 @@ export default function StatsPanel({
 
     return [...byId.values()].sort((a, b) => b.value - a.value);
   }, [holders]);
-  const legendCounts = allHolders.reduce((counts, holder) => {
+  const legendSourceHolders = Array.isArray(holders) ? holders : [];
+  const legendCounts = legendSourceHolders.reduce((counts, holder) => {
     const key = String(holder?.type || "minor");
     counts[key] = (counts[key] || 0) + 1;
     return counts;
