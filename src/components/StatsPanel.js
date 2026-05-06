@@ -596,7 +596,6 @@ export default function StatsPanel({
               </div>
             </div>
           )}
-
           {/* Top Holders List */}
           <div
             className="stats-card stats-card-holders"

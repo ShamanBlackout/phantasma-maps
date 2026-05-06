@@ -1668,38 +1668,6 @@
   line-height: 1.5;
 }
 
-/* ── Sent / Received Count Cell ─────────────────────────────────────────── */
-.transfer-tx-counts {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  font-size: 12px;
-  font-variant-numeric: tabular-nums;
-  color: rgba(173, 201, 230, 0.82);
-}
-
-.transfer-tx-counts span {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-}
-
-.transfer-tx-dir-label {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 16px;
-  height: 16px;
-  border-radius: 4px;
-  font-size: 9px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  background: rgba(var(--accent-rgb), 0.12);
-  border: 1px solid rgba(var(--accent-rgb), 0.24);
-  color: rgba(var(--accent-rgb), 0.9);
-  flex-shrink: 0;
-}
-
 /* ── Button Consistency ─────────────────────────────────────────────────── */
 /* Unified "ghost-accent" button baseline for all transactional CTAs */
 .transactions-export-btn,
