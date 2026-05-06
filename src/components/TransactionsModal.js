@@ -563,7 +563,6 @@ function TransactionsModal({
                     )}
                   </th>
                   <th>Tx Hash</th>
-                  <th>Tx</th>
                 </tr>
               </thead>
               <tbody>
@@ -673,23 +672,11 @@ function TransactionsModal({
                           </a>
                         </div>
                       </td>
-                      <td>
-                        <div className="transfer-tx-counts">
-                          <span>
-                            <span className="transfer-tx-dir-label">S</span>
-                            {transfer.sentTransactions.toLocaleString()}
-                          </span>
-                          <span>
-                            <span className="transfer-tx-dir-label">R</span>
-                            {transfer.receivedTransactions.toLocaleString()}
-                          </span>
-                        </div>
-                      </td>
                     </tr>
                   ))
                 ) : (
                   <tr>
-                    <td colSpan={8} className="transfers-empty">
+                    <td colSpan={7} className="transfers-empty">
                       <div className="transfers-empty-inner">
                         <svg
                           className="transfers-empty-icon"

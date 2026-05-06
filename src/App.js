@@ -3994,8 +3994,6 @@ export default function App() {
       amount: tx.amount,
       usdNow: tx.usd,
       transactionHash: tx.transactionHash,
-      sentTransactions: tx.sentTransactions,
-      receivedTransactions: tx.receivedTransactions,
     }));
   }
 
@@ -4199,8 +4197,6 @@ export default function App() {
           "Amount",
           "USD (Now)",
           "Transaction Hash",
-          "Sent Tx",
-          "Received Tx",
         ];
         const csvRows = rows.map((row) => [
           row.direction,
@@ -4211,8 +4207,6 @@ export default function App() {
           row.amount,
           row.usdNow,
           row.transactionHash,
-          row.sentTransactions,
-          row.receivedTransactions,
         ]);
         const escapeCsv = (value) =>
           `"${String(value ?? "").replace(/"/g, '""')}"`;
@@ -5016,8 +5010,6 @@ export default function App() {
       "Amount",
       "USD (Now)",
       "Transaction Hash",
-      "Sent Tx",
-      "Received Tx",
     ];
     const csvRows = rows.map((row) => [
       row.direction,
@@ -5028,8 +5020,6 @@ export default function App() {
       row.amount,
       row.usdNow,
       row.transactionHash,
-      row.sentTransactions,
-      row.receivedTransactions,
     ]);
     downloadBlobFile(
       rowsToCsv(headers, csvRows),
