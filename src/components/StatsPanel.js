@@ -62,7 +62,9 @@ export default function StatsPanel({
     .slice(0, 10)
     .reduce((sum, h) => sum + h.value, 0);
   const top10share =
-    currentSupply > 0 ? ((top10pct / currentSupply) * 100).toFixed(1) : "0.0";
+    currentSupply > 0
+      ? Math.min(100, (top10pct / currentSupply) * 100).toFixed(1)
+      : "0.0";
   const selectedNodeShare = selectedNode
     ? currentSupply > 0
       ? (((Number(selectedNode.value) || 0) / currentSupply) * 100).toFixed(2)

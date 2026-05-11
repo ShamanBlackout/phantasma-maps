@@ -965,6 +965,12 @@ function buildTopHoldersConnectionsGraph({
     );
   }
 
+  const holderAddressSet = new Set(
+    holderItems
+      .map((item) => String(item?.address || "").trim())
+      .filter(Boolean),
+  );
+
   holderItems.forEach((item) => {
     const holderId = String(item?.address || "").trim();
     if (!holderId) return;
@@ -992,7 +998,10 @@ function buildTopHoldersConnectionsGraph({
       const linkKey = `${holderId}->${counterpartyId}`;
 
       // Keep holder amount balance-based; connection volume should not inflate it.
-      addVolume(counterpartyId, normalizedVolume);
+      // Skip counterparties that are already top holders — their balance is tracked from holderItems.
+      if (!holderAddressSet.has(counterpartyId)) {
+        addVolume(counterpartyId, normalizedVolume);
+      }
 
       const holderStats = ensureStats(holderId);
       holderStats.sentTransactions += txCount;
