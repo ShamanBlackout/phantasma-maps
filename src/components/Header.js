@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 
 export default function Header({
   onSearch,
+  onLogoClick,
   searchInputValue,
   tokenInfo,
   blockSyncHeight,
@@ -215,7 +216,20 @@ export default function Header({
   return (
     <header className="header">
       <div className="header-brand">
-        <div className="header-logo">
+        <div
+          className="header-logo"
+          role="button"
+          tabIndex={0}
+          onClick={() => onLogoClick?.()}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" || event.key === " ") {
+              event.preventDefault();
+              onLogoClick?.();
+            }
+          }}
+          aria-label="Go to initial Soul graph"
+          title="Go to initial Soul graph"
+        >
           <img
             className="header-logo-icon"
             src={`${process.env.PUBLIC_URL}/phantasmaMaps.png`}
