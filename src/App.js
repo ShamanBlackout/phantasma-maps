@@ -2142,6 +2142,20 @@ export default function App() {
     setIsConnectionsView(false);
   }
 
+  function handleGoToInitialSoulGraph() {
+    setSearchQuery("");
+    setActiveHolderTypeFilter("");
+    setHoveredNode(null);
+    setSelectedNode(null);
+    closeTransfersModal();
+    setSearchedRootAddress("");
+    setIsConnectionsView(false);
+    setIsGraphMaxModeEnabled(false);
+    setGraphEdgeLimit(MAPS_API_GRAPH_EDGE_LIMIT);
+    setGraphNodeLimit(MAPS_API_GRAPH_NODE_LIMIT);
+    setSelectedTokenSymbol(DEFAULT_MAPS_API_TOKEN_SYMBOL);
+  }
+
   function handleRetryGraphLoad() {
     setMapRefreshNonce((current) => current + 1);
     setMapDataStatus("Retrying graph request...");
@@ -5332,6 +5346,7 @@ export default function App() {
     >
       <Header
         onSearch={handleHeaderSearch}
+        onLogoClick={handleGoToInitialSoulGraph}
         searchInputValue={isConnectionsView ? searchedRootAddress : searchQuery}
         tokenInfo={activeTokenInfo}
         blockSyncHeight={blockSyncHeight}

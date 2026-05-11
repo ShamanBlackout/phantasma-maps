@@ -2912,6 +2912,26 @@ body,
   gap: 8px;
   white-space: nowrap;
   flex-shrink: 0;
+  cursor: pointer;
+  border-radius: 10px;
+  transition:
+    transform 140ms ease,
+    filter 140ms ease,
+    box-shadow 140ms ease;
+}
+
+.header-logo:hover {
+  transform: translateY(-1px);
+  filter: brightness(1.06);
+}
+
+.header-logo:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(110, 180, 255, 0.72);
+}
+
+.header-logo:active {
+  transform: translateY(0);
 }
 
 .header-logo-icon {
