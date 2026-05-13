@@ -1,4 +1,5 @@
 const { spawnSync } = require("child_process");
+const fs = require("fs");
 const path = require("path");
 
 function run(binName, args) {
@@ -44,7 +45,13 @@ function runNodeScript(scriptRelativePath) {
 }
 
 const port = process.env.PORT || "3000";
+const buildIndexPath = path.join(process.cwd(), "build", "index.html");
+const shouldBuildOnStart =
+  process.env.REBUILD_ON_START === "true" || !fs.existsSync(buildIndexPath);
 
-runNodeScript("sammy.js");
-run("react-scripts", ["build"]);
+if (shouldBuildOnStart) {
+  runNodeScript("sammy.js");
+  run("react-scripts", ["build"]);
+}
+
 run("serve", ["-s", "build", "-l", `tcp://0.0.0.0:${port}`, "-n"]);
