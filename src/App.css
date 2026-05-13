@@ -4083,6 +4083,69 @@ body,
   background: rgba(27, 221, 226, 0.04);
 }
 
+.stats-analytics-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.stats-analytics-chart-block {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(var(--accent-rgb), 0.18);
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.stats-analytics-chart-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 11px;
+  font-weight: 600;
+  color: rgba(224, 238, 255, 0.88);
+}
+
+.stats-analytics-range {
+  color: rgba(173, 201, 230, 0.62);
+  font-size: 10px;
+  text-align: right;
+}
+
+.stats-analytics-empty,
+.stats-analytics-footnote {
+  font-size: 12px;
+  line-height: 1.45;
+  color: rgba(173, 201, 230, 0.78);
+}
+
+.stats-analytics-footnote.is-loading {
+  color: rgba(173, 201, 230, 0.9);
+}
+
+.stats-analytics-footnote.is-warning {
+  color: #ffd38a;
+}
+
+.stats-analytics-footnote.is-error {
+  color: #ff9f9f;
+}
+
+.stats-analytics-delta.is-positive {
+  color: #62e4a7;
+}
+
+.stats-analytics-delta.is-negative {
+  color: #ff9f9f;
+}
+
+.stats-analytics-delta.is-neutral {
+  color: #dcecff;
+}
+
 .stats-clear-connections-card {
   display: flex;
   flex-direction: column;

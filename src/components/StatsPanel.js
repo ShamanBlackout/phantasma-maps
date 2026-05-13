@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { HOLDER_TYPES } from "../data/mockData";
 import { getHolderPalette } from "../theme/holderPalettes";
+import SparklineSvg from "./SparklineSvg";
 
 const LEGEND_ORDER = ["minor", "medium", "large", "major", "dominant"];
 
@@ -13,9 +14,48 @@ function fmt(n) {
   return "0";
 }
 
+function getSnapshotWalletCount(snapshot) {
+  return Number(
+    snapshot?.globalHolderCount ??
+      snapshot?.global_holder_count ??
+      snapshot?.wallets ??
+      snapshot?.visibleWallets ??
+      0,
+  );
+}
+
+function formatTrendDelta(value, digits = 0, suffix = "") {
+  const numeric = Number(value) || 0;
+  const prefix = numeric > 0 ? "+" : "";
+  return `${prefix}${numeric.toFixed(digits)}${suffix}`;
+}
+
+function formatHistoryStamp(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return "now";
+  return new Date(parsed).toLocaleString([], {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+function shortenAddress(address) {
+  const value = String(address || "").trim();
+  if (!value) return "N/A";
+  if (value.length <= 16) return value;
+  return `${value.slice(0, 8)}...${value.slice(-6)}`;
+}
+
 export default function StatsPanel({
   holders,
   summaryHolders,
+  tokenSnapshotHistory,
+  analyticsLoading,
+  analyticsHasBackendHistory,
+  topMovers,
+  topMoversLoading,
   tokenInfo,
   availableTokens,
   selectedTokenSymbol,
@@ -105,6 +145,48 @@ export default function StatsPanel({
       .toLowerCase()
       .includes(normalizedTokenSearch),
   );
+  const snapshotHistory = useMemo(
+    () =>
+      (Array.isArray(tokenSnapshotHistory) ? tokenSnapshotHistory : [])
+        .filter(Boolean)
+        .sort(
+          (left, right) =>
+            Number(left?.recordedAt || 0) - Number(right?.recordedAt || 0),
+        ),
+    [tokenSnapshotHistory],
+  );
+  const walletHistory = useMemo(
+    () =>
+      snapshotHistory
+        .map((snapshot) => ({
+          value: getSnapshotWalletCount(snapshot),
+          recordedAt: Number(snapshot?.recordedAt || 0),
+        }))
+        .filter((point) => Number.isFinite(point.value) && point.value >= 0),
+    [snapshotHistory],
+  );
+  const top10History = useMemo(
+    () =>
+      snapshotHistory
+        .map((snapshot) => ({
+          value: Number(snapshot?.top10 || 0),
+          recordedAt: Number(snapshot?.recordedAt || 0),
+        }))
+        .filter((point) => Number.isFinite(point.value) && point.value >= 0),
+    [snapshotHistory],
+  );
+  const firstWalletPoint = walletHistory[0] || null;
+  const latestWalletPoint = walletHistory[walletHistory.length - 1] || null;
+  const latestTop10Point = top10History[top10History.length - 1] || null;
+  const walletTrendDelta = latestWalletPoint
+    ? latestWalletPoint.value - Number(firstWalletPoint?.value || 0)
+    : 0;
+  const top10TrendDelta = latestTop10Point
+    ? latestTop10Point.value - Number(top10History[0]?.value || 0)
+    : 0;
+  const hasAnalyticsHistory = walletHistory.length >= 2;
+  const hasAnyAnalyticsPoint = walletHistory.length > 0;
+  const resolvedTopMovers = Array.isArray(topMovers) ? topMovers : [];
 
   useEffect(() => {
     if (!isTokenMenuOpen) return undefined;
@@ -375,6 +457,139 @@ export default function StatsPanel({
                 {top10share}%
               </span>
             </div>
+          </div>
+
+          <div
+            className="stats-card stats-analytics-card"
+            style={{ display: isLoading ? "none" : "block" }}
+            title="Token analytics from backend timeseries with local fallback"
+          >
+            <div className="stats-card-head">
+              <div>
+                <div className="stats-card-kicker">Analytics beta</div>
+                <div className="stats-card-summary">
+                  Wallet trend for {selectedTokenSymbol} over recent history
+                </div>
+              </div>
+            </div>
+            <div className="stats-token-summary-grid">
+              <div className="stats-token-summary-card">
+                <span>Latest wallets</span>
+                <strong>
+                  {Number(
+                    latestWalletPoint?.value ?? walletsTracked,
+                  ).toLocaleString()}
+                </strong>
+              </div>
+              <div className="stats-token-summary-card">
+                <span>Delta</span>
+                <strong
+                  className={`stats-analytics-delta ${walletTrendDelta > 0 ? "is-positive" : walletTrendDelta < 0 ? "is-negative" : "is-neutral"}`}
+                >
+                  {formatTrendDelta(walletTrendDelta)}
+                </strong>
+              </div>
+              <div className="stats-token-summary-card">
+                <span>Samples</span>
+                <strong>{walletHistory.length.toLocaleString()}</strong>
+              </div>
+            </div>
+            {analyticsLoading ? (
+              <div className="stats-analytics-empty">
+                Loading analytics history...
+              </div>
+            ) : hasAnalyticsHistory ? (
+              <div className="stats-analytics-chart-block">
+                <div className="stats-analytics-chart-head">
+                  <span>Wallets over time</span>
+                  <span className="stats-analytics-range">
+                    {formatHistoryStamp(snapshotHistory[0]?.recordedAt)} to{" "}
+                    {formatHistoryStamp(
+                      snapshotHistory[snapshotHistory.length - 1]?.recordedAt,
+                    )}
+                  </span>
+                </div>
+                <SparklineSvg
+                  data={walletHistory}
+                  valueKey="value"
+                  height={52}
+                  scaleMode="auto"
+                />
+              </div>
+            ) : hasAnyAnalyticsPoint ? (
+              <div className="stats-analytics-empty">
+                Only one analytics sample is available so far. Trend rendering
+                starts after at least two points are collected.
+              </div>
+            ) : (
+              <div className="stats-analytics-empty">
+                No analytics history yet. Try again after backend analytics
+                refresh or additional sync.
+              </div>
+            )}
+            <div className="stats-token-row">
+              <span className="stats-label">Top 10 trend</span>
+              <span
+                className={`stats-value stats-analytics-delta ${top10TrendDelta > 0 ? "is-positive" : top10TrendDelta < 0 ? "is-negative" : "is-neutral"}`}
+              >
+                {formatTrendDelta(top10TrendDelta, 1, "%")}
+              </span>
+            </div>
+            <div className="stats-analytics-footnote">
+              Latest tracked Top 10 share:{" "}
+              {Number(latestTop10Point?.value || top10share).toFixed(1)}%
+            </div>
+            {!analyticsLoading && analyticsHasBackendHistory ? (
+              <div className="stats-analytics-footnote">
+                Data source: backend analytics timeseries.
+              </div>
+            ) : null}
+          </div>
+
+          <div
+            className="stats-card stats-analytics-card"
+            style={{ display: isLoading ? "none" : "block" }}
+            title="Largest holder balance changes over the last seven days"
+          >
+            <div className="stats-card-head">
+              <div>
+                <div className="stats-card-kicker">Top movers (7d)</div>
+                <div className="stats-card-summary">
+                  Addresses with the biggest balance changes
+                </div>
+              </div>
+            </div>
+            {topMoversLoading ? (
+              <div className="stats-analytics-empty">Loading top movers...</div>
+            ) : resolvedTopMovers.length ? (
+              <div className="holders-list">
+                {resolvedTopMovers.map((mover, index) => {
+                  const deltaBalance = Number(mover?.deltaBalance || 0);
+                  const deltaPct = Number(mover?.deltaPct || 0);
+                  return (
+                    <div
+                      key={`${String(mover?.address || "")}::${index}`}
+                      className="holder-row"
+                    >
+                      <span className="holder-rank">#{index + 1}</span>
+                      <span className="holder-addr">
+                        {shortenAddress(mover?.address)}
+                      </span>
+                      <span
+                        className={`holder-pct ${deltaBalance > 0 ? "stats-analytics-delta is-positive" : deltaBalance < 0 ? "stats-analytics-delta is-negative" : "stats-analytics-delta is-neutral"}`}
+                      >
+                        {formatTrendDelta(deltaBalance, 2)} (
+                        {formatTrendDelta(deltaPct, 2, "%")})
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="stats-analytics-empty">
+                No top movers available yet for this token.
+              </div>
+            )}
           </div>
 
           {selectedNode || isConnectionsView ? (
