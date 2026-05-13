@@ -1,8 +1,8 @@
 name: sample-react
 services:
-- environment_slug: node-js
-  github:
-    branch: main
-    deploy_on_push: true
-    repo: digitalocean/sample-react
-  name: sample-react
+  - environment_slug: node-js
+    github:
+      branch: main
+      deploy_on_push: true
+      repo: ShamanBlackout/phantasma-maps
+    name: sample-react
