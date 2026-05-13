@@ -166,6 +166,40 @@ export function createActivityEndpoint(
   return `${normalizeBase(baseUrl)}/tokens/${encodeURIComponent(tokenSymbol)}/activity/${encodeURIComponent(address)}?${params.toString()}`;
 }
 
+export function createAnalyticsTimeseriesEndpoint(
+  baseUrl,
+  tokenSymbol,
+  days = 90,
+) {
+  const normalizedDays =
+    Number.isFinite(Number(days)) && Number(days) > 0
+      ? Math.floor(Number(days))
+      : 90;
+  const params = new URLSearchParams({ days: String(normalizedDays) });
+  return `${normalizeBase(baseUrl)}/analytics/tokens/${encodeURIComponent(tokenSymbol)}/timeseries?${params.toString()}`;
+}
+
+export function createAnalyticsTopMoversEndpoint(
+  baseUrl,
+  tokenSymbol,
+  windowDays = 7,
+  limit = 5,
+) {
+  const normalizedWindowDays =
+    Number.isFinite(Number(windowDays)) && Number(windowDays) > 0
+      ? Math.floor(Number(windowDays))
+      : 7;
+  const normalizedLimit =
+    Number.isFinite(Number(limit)) && Number(limit) > 0
+      ? Math.floor(Number(limit))
+      : 5;
+  const params = new URLSearchParams({
+    windowDays: String(normalizedWindowDays),
+    limit: String(normalizedLimit),
+  });
+  return `${normalizeBase(baseUrl)}/analytics/tokens/${encodeURIComponent(tokenSymbol)}/top-movers?${params.toString()}`;
+}
+
 // ── Fetch helpers ─────────────────────────────────────────────────────────────
 
 function buildApiError(defaultMessage, result) {
@@ -275,6 +309,73 @@ export async function fetchConnectionsForAddress(
   }
 
   return {
+    items: Array.isArray(result.payload?.items) ? result.payload.items : [],
+  };
+}
+
+export async function fetchTokenAnalyticsTimeseries(
+  baseUrl,
+  timeoutMs,
+  tokenSymbol,
+  days = 90,
+) {
+  const normalizedTokenSymbol = String(tokenSymbol || "").trim();
+  if (!normalizedTokenSymbol) {
+    return { tokenSymbol: "", days: 0, items: [] };
+  }
+
+  const endpoint = createAnalyticsTimeseriesEndpoint(
+    baseUrl,
+    normalizedTokenSymbol,
+    days,
+  );
+  const result = await fetchJsonWithTimeout(endpoint, {}, timeoutMs);
+
+  if (!result.ok) {
+    throw buildApiError(
+      `Analytics timeseries request failed (HTTP ${result.status})`,
+      result,
+    );
+  }
+
+  return {
+    tokenSymbol: String(result.payload?.tokenSymbol || normalizedTokenSymbol),
+    days: Number(result.payload?.days || days),
+    items: Array.isArray(result.payload?.items) ? result.payload.items : [],
+  };
+}
+
+export async function fetchTokenAnalyticsTopMovers(
+  baseUrl,
+  timeoutMs,
+  tokenSymbol,
+  windowDays = 7,
+  limit = 5,
+) {
+  const normalizedTokenSymbol = String(tokenSymbol || "").trim();
+  if (!normalizedTokenSymbol) {
+    return { tokenSymbol: "", windowDays: 0, limit: 0, items: [] };
+  }
+
+  const endpoint = createAnalyticsTopMoversEndpoint(
+    baseUrl,
+    normalizedTokenSymbol,
+    windowDays,
+    limit,
+  );
+  const result = await fetchJsonWithTimeout(endpoint, {}, timeoutMs);
+
+  if (!result.ok) {
+    throw buildApiError(
+      `Analytics top movers request failed (HTTP ${result.status})`,
+      result,
+    );
+  }
+
+  return {
+    tokenSymbol: String(result.payload?.tokenSymbol || normalizedTokenSymbol),
+    windowDays: Number(result.payload?.windowDays || windowDays),
+    limit: Number(result.payload?.limit || limit),
     items: Array.isArray(result.payload?.items) ? result.payload.items : [],
   };
 }

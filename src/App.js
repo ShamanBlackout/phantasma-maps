@@ -15,6 +15,8 @@ import useUrlState, { readUrlParams } from "./hooks/useUrlState";
 import { fetchJsonWithTimeout } from "./api/http";
 import {
   createActivityEndpoint as buildActivityEndpoint,
+  fetchTokenAnalyticsTopMovers,
+  fetchTokenAnalyticsTimeseries,
   createGraphEndpoint as buildGraphEndpoint,
   createSyncStatusEndpoint as buildSyncStatusEndpoint,
   createTokenInfoEndpoint as buildTokenInfoEndpoint,
@@ -45,6 +47,10 @@ const ONBOARDING_DISMISSED_STORAGE_KEY = "phantasma-maps:onboarding-dismissed";
 const FOCUS_MODE_STORAGE_KEY = "phantasma-maps:focus-mode";
 const SAVED_VIEWS_STORAGE_KEY = "phantasma-maps:saved-views";
 const TOKEN_SNAPSHOTS_STORAGE_KEY = "phantasma-maps:token-snapshots";
+const TOKEN_SNAPSHOT_HISTORY_STORAGE_KEY =
+  "phantasma-maps:token-snapshot-history";
+const TOKEN_SNAPSHOT_HISTORY_LIMIT = 96;
+const TOKEN_SNAPSHOT_HISTORY_MIN_INTERVAL_MS = 5 * 60 * 1000;
 const MOBILE_MEDIA_QUERY = "(max-width: 768px)";
 const ALLOWED_COLOR_THEMES = new Set([
   "dark",
@@ -327,7 +333,7 @@ function formatApiErrorMeta(errorLike) {
     parts.push(`code ${code}`);
   }
 
-  if (Number.isFinite(status) && status > 0) {
+  if (Number.isFinite(status) && status > 0 && status !== 404) {
     parts.push(`status ${status}`);
   }
 
@@ -385,8 +391,8 @@ function buildTokenNotFoundMessage(tokenSymbol) {
     .trim()
     .toUpperCase();
   return normalizedSymbol
-    ? `No database data found for ${normalizedSymbol} yet. Try another token or check back after sync.`
-    : "No database data found for the requested token yet. Try another token or check back after sync.";
+    ? `${normalizedSymbol} data is not available yet. Try another token or check back after sync.`
+    : "Requested token data is not available yet. Try another token or check back after sync.";
 }
 
 function buildTokenNotFoundStatus(tokenSymbol, errorLike) {
@@ -743,6 +749,34 @@ function normalizeTokenSnapshot(snapshot) {
   };
 }
 
+function normalizeTokenSnapshotHistory(history) {
+  if (!history || typeof history !== "object" || Array.isArray(history)) {
+    return {};
+  }
+
+  return Object.entries(history).reduce((acc, [token, snapshots]) => {
+    const normalizedToken = String(token || "").trim();
+    if (!normalizedToken || !Array.isArray(snapshots)) {
+      return acc;
+    }
+
+    const normalizedSnapshots = snapshots
+      .map((snapshot) => normalizeTokenSnapshot(snapshot))
+      .filter(Boolean)
+      .sort(
+        (left, right) =>
+          Number(left?.recordedAt || 0) - Number(right?.recordedAt || 0),
+      )
+      .slice(-TOKEN_SNAPSHOT_HISTORY_LIMIT);
+
+    if (normalizedSnapshots.length) {
+      acc[normalizedToken] = normalizedSnapshots;
+    }
+
+    return acc;
+  }, {});
+}
+
 function getSnapshotWalletCount(snapshot) {
   return Number(
     snapshot?.globalHolderCount ??
@@ -751,6 +785,49 @@ function getSnapshotWalletCount(snapshot) {
       snapshot?.visibleWallets ??
       0,
   );
+}
+
+function mergeSnapshotIntoHistory(history, tokenSymbol, snapshot) {
+  const normalizedToken = String(tokenSymbol || "").trim();
+  const normalizedSnapshot = normalizeTokenSnapshot(snapshot);
+
+  if (!normalizedToken || !normalizedSnapshot) {
+    return history;
+  }
+
+  const currentHistory = Array.isArray(history?.[normalizedToken])
+    ? history[normalizedToken]
+        .map((entry) => normalizeTokenSnapshot(entry))
+        .filter(Boolean)
+    : [];
+  const nextSnapshot = {
+    ...normalizedSnapshot,
+    recordedAt: Number(normalizedSnapshot.recordedAt) || Date.now(),
+  };
+  const lastSnapshot = currentHistory[currentHistory.length - 1] || null;
+
+  if (lastSnapshot) {
+    const withinDedupWindow =
+      nextSnapshot.recordedAt - (Number(lastSnapshot.recordedAt) || 0) <
+      TOKEN_SNAPSHOT_HISTORY_MIN_INTERVAL_MS;
+    const hasSameShape =
+      getSnapshotWalletCount(lastSnapshot) ===
+        getSnapshotWalletCount(nextSnapshot) &&
+      Number(lastSnapshot.top10 || 0) === Number(nextSnapshot.top10 || 0) &&
+      Number(lastSnapshot.topWalletShare || 0) ===
+        Number(nextSnapshot.topWalletShare || 0);
+
+    if (withinDedupWindow && hasSameShape) {
+      return history;
+    }
+  }
+
+  return {
+    ...history,
+    [normalizedToken]: [...currentHistory, nextSnapshot].slice(
+      -TOKEN_SNAPSHOT_HISTORY_LIMIT,
+    ),
+  };
 }
 
 async function fetchTokenSnapshot(baseUrl, timeoutMs, tokenSymbol) {
@@ -1777,6 +1854,24 @@ export default function App() {
       return {};
     }
   });
+  const [tokenSnapshotHistory, setTokenSnapshotHistory] = useState(() => {
+    try {
+      const raw = window.localStorage.getItem(
+        TOKEN_SNAPSHOT_HISTORY_STORAGE_KEY,
+      );
+      const parsed = JSON.parse(raw || "{}");
+      return normalizeTokenSnapshotHistory(parsed);
+    } catch {
+      return {};
+    }
+  });
+  const [tokenAnalyticsTimeseries, setTokenAnalyticsTimeseries] = useState({});
+  const [tokenAnalyticsStatus, setTokenAnalyticsStatus] = useState("");
+  const [isTokenAnalyticsLoading, setIsTokenAnalyticsLoading] = useState(false);
+  const [tokenAnalyticsTopMovers, setTokenAnalyticsTopMovers] = useState({});
+  const [tokenAnalyticsTopMoversStatus, setTokenAnalyticsTopMoversStatus] =
+    useState("");
+  const [isTokenTopMoversLoading, setIsTokenTopMoversLoading] = useState(false);
   const [isExportPresetsOpen, setIsExportPresetsOpen] = useState(false);
   const [isMobileInspectOpen, setIsMobileInspectOpen] = useState(false);
   const mapLoaderShownAtRef = useRef(0);
@@ -1891,6 +1986,17 @@ export default function App() {
       // Ignore storage issues and keep snapshots in memory.
     }
   }, [tokenSnapshots]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        TOKEN_SNAPSHOT_HISTORY_STORAGE_KEY,
+        JSON.stringify(tokenSnapshotHistory),
+      );
+    } catch {
+      // Ignore storage issues and keep snapshot history in memory.
+    }
+  }, [tokenSnapshotHistory]);
 
   useEffect(() => {
     try {
@@ -2085,6 +2191,83 @@ export default function App() {
       }
     };
   }, [selectedTokenSymbol]);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    async function loadTokenAnalyticsTopMovers() {
+      const tokenKey = String(selectedTokenSymbol || "").trim();
+      if (!tokenKey) {
+        setTokenAnalyticsTopMoversStatus("");
+        setIsTokenTopMoversLoading(false);
+        return;
+      }
+
+      setIsTokenTopMoversLoading(true);
+      setTokenAnalyticsTopMoversStatus(`Loading ${tokenKey} top movers...`);
+
+      try {
+        const result = await fetchTokenAnalyticsTopMovers(
+          MAPS_API_BASE_URL,
+          MAPS_API_REQUEST_TIMEOUT_MS,
+          tokenKey,
+          7,
+          5,
+        );
+
+        if (!isMounted) return;
+
+        const normalizedItems = (
+          Array.isArray(result.items) ? result.items : []
+        )
+          .map((item) => ({
+            address: String(item?.address || "").trim(),
+            deltaBalance: Number(
+              item?.deltaBalance ?? item?.delta_balance ?? 0,
+            ),
+            deltaPct: Number(item?.deltaPct ?? item?.delta_pct ?? 0),
+            latestBalance: Number(
+              item?.latestBalance ?? item?.latest_balance ?? 0,
+            ),
+          }))
+          .filter((item) => item.address);
+
+        setTokenAnalyticsTopMovers((current) => ({
+          ...current,
+          [tokenKey]: normalizedItems,
+        }));
+        setTokenAnalyticsTopMoversStatus("");
+      } catch (error) {
+        if (!isMounted) return;
+        if (isTokenNotFoundError(error)) {
+          setTokenAnalyticsTopMoversStatus(
+            buildTokenNotFoundStatus(tokenKey, error),
+          );
+          return;
+        }
+
+        setTokenAnalyticsTopMoversStatus(
+          `Top movers API unavailable for this token.${formatApiErrorMeta(error)}`,
+        );
+      } finally {
+        if (isMounted) {
+          setIsTokenTopMoversLoading(false);
+        }
+      }
+    }
+
+    loadTokenAnalyticsTopMovers();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [selectedTokenSymbol]);
+
+  const currentTokenTopMovers = useMemo(() => {
+    const currentKey = String(selectedTokenSymbol || "").trim();
+    if (!currentKey) return [];
+    return tokenAnalyticsTopMovers[currentKey] || [];
+  }, [selectedTokenSymbol, tokenAnalyticsTopMovers]);
 
   function isPotentialAddress(rawValue) {
     const value = String(rawValue || "").trim();
@@ -4808,6 +4991,9 @@ export default function App() {
           [currentKey]:
             normalizeTokenSnapshot(result.snapshot) || result.snapshot,
         }));
+        setTokenSnapshotHistory((current) =>
+          mergeSnapshotIntoHistory(current, currentKey, result.snapshot),
+        );
         setCurrentSnapshotStatus(
           result.fallbackUsed ? "Using fallback snapshot data." : "",
         );
@@ -4849,6 +5035,105 @@ export default function App() {
     return tokenSnapshots[currentKey] || null;
   }, [selectedTokenSymbol, tokenSnapshots]);
 
+  useEffect(() => {
+    let isMounted = true;
+
+    async function loadTokenAnalyticsTimeseries() {
+      const tokenKey = String(selectedTokenSymbol || "").trim();
+      if (!tokenKey) {
+        setTokenAnalyticsStatus("");
+        setIsTokenAnalyticsLoading(false);
+        return;
+      }
+
+      setIsTokenAnalyticsLoading(true);
+      setTokenAnalyticsStatus(`Loading ${tokenKey} analytics...`);
+
+      try {
+        const result = await fetchTokenAnalyticsTimeseries(
+          MAPS_API_BASE_URL,
+          MAPS_API_REQUEST_TIMEOUT_MS,
+          tokenKey,
+          90,
+        );
+
+        if (!isMounted) return;
+
+        const normalizedItems = (
+          Array.isArray(result.items) ? result.items : []
+        )
+          .map((item) => {
+            const bucketDate =
+              String(item?.bucketDate || item?.bucket_date || "").trim() || "";
+            const recordedAt = bucketDate
+              ? new Date(`${bucketDate}T00:00:00.000Z`).getTime()
+              : 0;
+            const holderCount = Number(
+              item?.holderCount ?? item?.holder_count ?? 0,
+            );
+            const top10 = Number(item?.top10Share ?? item?.top10_share ?? 0);
+
+            return {
+              recordedAt,
+              globalHolderCount:
+                Number.isFinite(holderCount) && holderCount >= 0
+                  ? Math.floor(holderCount)
+                  : 0,
+              top10: Number.isFinite(top10) ? top10 : 0,
+            };
+          })
+          .filter(
+            (item) => Number.isFinite(item.recordedAt) && item.recordedAt > 0,
+          )
+          .sort((left, right) => left.recordedAt - right.recordedAt);
+
+        setTokenAnalyticsTimeseries((current) => ({
+          ...current,
+          [tokenKey]: normalizedItems,
+        }));
+        setTokenAnalyticsStatus("");
+      } catch (error) {
+        if (!isMounted) return;
+
+        if (isTokenNotFoundError(error)) {
+          setTokenAnalyticsStatus(buildTokenNotFoundStatus(tokenKey, error));
+          return;
+        }
+
+        setTokenAnalyticsStatus(
+          `Analytics API unavailable. Falling back to local trend history.${formatApiErrorMeta(error)}`,
+        );
+      } finally {
+        if (isMounted) {
+          setIsTokenAnalyticsLoading(false);
+        }
+      }
+    }
+
+    loadTokenAnalyticsTimeseries();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [selectedTokenSymbol]);
+
+  const currentTokenSnapshotHistory = useMemo(() => {
+    const currentKey = String(selectedTokenSymbol || "").trim();
+    if (!currentKey) return [];
+    const backendHistory = tokenAnalyticsTimeseries[currentKey] || [];
+    if (Array.isArray(backendHistory) && backendHistory.length) {
+      return backendHistory;
+    }
+    return tokenSnapshotHistory[currentKey] || [];
+  }, [selectedTokenSymbol, tokenAnalyticsTimeseries, tokenSnapshotHistory]);
+
+  const hasBackendAnalyticsHistory = useMemo(() => {
+    const currentKey = String(selectedTokenSymbol || "").trim();
+    if (!currentKey) return false;
+    const backendHistory = tokenAnalyticsTimeseries[currentKey];
+    return Array.isArray(backendHistory) && backendHistory.length > 0;
+  }, [selectedTokenSymbol, tokenAnalyticsTimeseries]);
+
   const compareSnapshot = useMemo(() => {
     const compareKey = String(compareTokenSymbol || "").trim();
     if (!compareKey) return null;
@@ -4881,6 +5166,9 @@ export default function App() {
           [compareKey]:
             normalizeTokenSnapshot(result.snapshot) || result.snapshot,
         }));
+        setTokenSnapshotHistory((current) =>
+          mergeSnapshotIntoHistory(current, compareKey, result.snapshot),
+        );
         setCompareSnapshotStatus(
           result.fallbackUsed ? "Using fallback snapshot data." : "",
         );
@@ -6263,6 +6551,13 @@ export default function App() {
         <StatsPanel
           holders={filteredNodes}
           summaryHolders={displaySummaryNodes}
+          tokenSnapshotHistory={currentTokenSnapshotHistory}
+          analyticsStatus={tokenAnalyticsStatus}
+          analyticsLoading={isTokenAnalyticsLoading}
+          analyticsHasBackendHistory={hasBackendAnalyticsHistory}
+          topMovers={currentTokenTopMovers}
+          topMoversStatus={tokenAnalyticsTopMoversStatus}
+          topMoversLoading={isTokenTopMoversLoading}
           tokenInfo={activeTokenInfo}
           availableTokens={availableTokenSymbols}
           selectedTokenSymbol={selectedTokenSymbol}
