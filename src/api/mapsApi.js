@@ -170,12 +170,16 @@ export function createAnalyticsTimeseriesEndpoint(
   baseUrl,
   tokenSymbol,
   days = 90,
+  refresh = false,
 ) {
   const normalizedDays =
     Number.isFinite(Number(days)) && Number(days) > 0
       ? Math.floor(Number(days))
       : 90;
   const params = new URLSearchParams({ days: String(normalizedDays) });
+  if (refresh) {
+    params.append("refresh", "true");
+  }
   return `${normalizeBase(baseUrl)}/analytics/tokens/${encodeURIComponent(tokenSymbol)}/timeseries?${params.toString()}`;
 }
 
@@ -183,7 +187,8 @@ export function createAnalyticsTopMoversEndpoint(
   baseUrl,
   tokenSymbol,
   windowDays = 7,
-  limit = 5,
+  limit = 10,
+  refresh = false,
 ) {
   const normalizedWindowDays =
     Number.isFinite(Number(windowDays)) && Number(windowDays) > 0
@@ -192,11 +197,14 @@ export function createAnalyticsTopMoversEndpoint(
   const normalizedLimit =
     Number.isFinite(Number(limit)) && Number(limit) > 0
       ? Math.floor(Number(limit))
-      : 5;
+      : 10;
   const params = new URLSearchParams({
     windowDays: String(normalizedWindowDays),
     limit: String(normalizedLimit),
   });
+  if (refresh) {
+    params.append("refresh", "true");
+  }
   return `${normalizeBase(baseUrl)}/analytics/tokens/${encodeURIComponent(tokenSymbol)}/top-movers?${params.toString()}`;
 }
 
@@ -318,6 +326,7 @@ export async function fetchTokenAnalyticsTimeseries(
   timeoutMs,
   tokenSymbol,
   days = 90,
+  refresh = false,
 ) {
   const normalizedTokenSymbol = String(tokenSymbol || "").trim();
   if (!normalizedTokenSymbol) {
@@ -328,6 +337,7 @@ export async function fetchTokenAnalyticsTimeseries(
     baseUrl,
     normalizedTokenSymbol,
     days,
+    refresh,
   );
   const result = await fetchJsonWithTimeout(endpoint, {}, timeoutMs);
 
@@ -350,7 +360,8 @@ export async function fetchTokenAnalyticsTopMovers(
   timeoutMs,
   tokenSymbol,
   windowDays = 7,
-  limit = 5,
+  limit = 10,
+  refresh = false,
 ) {
   const normalizedTokenSymbol = String(tokenSymbol || "").trim();
   if (!normalizedTokenSymbol) {
@@ -362,6 +373,7 @@ export async function fetchTokenAnalyticsTopMovers(
     normalizedTokenSymbol,
     windowDays,
     limit,
+    refresh,
   );
   const result = await fetchJsonWithTimeout(endpoint, {}, timeoutMs);
 

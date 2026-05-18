@@ -2212,7 +2212,8 @@ export default function App() {
           MAPS_API_REQUEST_TIMEOUT_MS,
           tokenKey,
           7,
-          5,
+          10,
+          true,
         );
 
         if (!isMounted) return;
@@ -5055,6 +5056,7 @@ export default function App() {
           MAPS_API_REQUEST_TIMEOUT_MS,
           tokenKey,
           90,
+          true,
         );
 
         if (!isMounted) return;
@@ -6577,6 +6579,7 @@ export default function App() {
           onShowConnections={() =>
             handleShowNodeConnections(resolvedSelectedNode?.id)
           }
+          onShowConnectionsForAddress={handleShowNodeConnections}
           isMobileViewport={isMobileViewport}
           colorTheme={colorTheme}
           activeLegendFilter={activeHolderTypeFilter}
