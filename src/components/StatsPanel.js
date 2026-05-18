@@ -44,8 +44,8 @@ function formatHistoryStamp(value) {
 function shortenAddress(address) {
   const value = String(address || "").trim();
   if (!value) return "N/A";
-  if (value.length <= 16) return value;
-  return `${value.slice(0, 8)}...${value.slice(-6)}`;
+  if (value.length <= 10) return value;
+  return `${value.slice(0, 4)}...${value.slice(-3)}`;
 }
 
 export default function StatsPanel({
@@ -70,6 +70,7 @@ export default function StatsPanel({
   onClearConnections,
   canShowConnections,
   onShowConnections,
+  onShowConnectionsForAddress,
   isMobileViewport,
   colorTheme,
   activeLegendFilter,
@@ -220,6 +221,12 @@ export default function StatsPanel({
   function handleTokenPick(tokenSymbol) {
     onTokenChange?.(tokenSymbol);
     setIsTokenMenuOpen(false);
+  }
+
+  function handleTopMoverClick(address) {
+    const moverAddress = String(address || "").trim();
+    if (!moverAddress) return;
+    onShowConnectionsForAddress?.(moverAddress);
   }
 
   function handleTokenMenuToggle(event) {
@@ -481,7 +488,10 @@ export default function StatsPanel({
                   ).toLocaleString()}
                 </strong>
               </div>
-              <div className="stats-token-summary-card">
+              <div
+                className="stats-token-summary-card"
+                title="Change from the first to the latest wallet-count sample in the selected history window"
+              >
                 <span>Delta</span>
                 <strong
                   className={`stats-analytics-delta ${walletTrendDelta > 0 ? "is-positive" : walletTrendDelta < 0 ? "is-negative" : "is-neutral"}`}
@@ -489,7 +499,10 @@ export default function StatsPanel({
                   {formatTrendDelta(walletTrendDelta)}
                 </strong>
               </div>
-              <div className="stats-token-summary-card">
+              <div
+                className="stats-token-summary-card"
+                title="Number of analytics time points loaded for the current token history"
+              >
                 <span>Samples</span>
                 <strong>{walletHistory.length.toLocaleString()}</strong>
               </div>
@@ -566,10 +579,13 @@ export default function StatsPanel({
                 {resolvedTopMovers.map((mover, index) => {
                   const deltaBalance = Number(mover?.deltaBalance || 0);
                   const deltaPct = Number(mover?.deltaPct || 0);
+                  const moverAddress = String(mover?.address || "").trim();
                   return (
                     <div
                       key={`${String(mover?.address || "")}::${index}`}
                       className="holder-row"
+                      onClick={() => handleTopMoverClick(moverAddress)}
+                      title="Open connections view for this address"
                     >
                       <span className="holder-rank">#{index + 1}</span>
                       <span className="holder-addr">
