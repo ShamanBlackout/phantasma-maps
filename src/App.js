@@ -2213,7 +2213,7 @@ export default function App() {
           tokenKey,
           7,
           10,
-          true,
+          false,
         );
 
         if (!isMounted) return;
@@ -2221,16 +2221,25 @@ export default function App() {
         const normalizedItems = (
           Array.isArray(result.items) ? result.items : []
         )
-          .map((item) => ({
-            address: String(item?.address || "").trim(),
-            deltaBalance: Number(
-              item?.deltaBalance ?? item?.delta_balance ?? 0,
-            ),
-            deltaPct: Number(item?.deltaPct ?? item?.delta_pct ?? 0),
-            latestBalance: Number(
+          .map((item) => {
+            const latestBalance = Number(
               item?.latestBalance ?? item?.latest_balance ?? 0,
-            ),
-          }))
+            );
+            const deltaBalance = Number(
+              item?.deltaBalance ?? item?.delta_balance ?? 0,
+            );
+            const deltaPct =
+              Number.isFinite(latestBalance) && latestBalance > 0
+                ? (deltaBalance / latestBalance) * 100
+                : 0;
+
+            return {
+              address: String(item?.address || "").trim(),
+              deltaBalance,
+              deltaPct,
+              latestBalance,
+            };
+          })
           .filter((item) => item.address);
 
         setTokenAnalyticsTopMovers((current) => ({
@@ -5056,7 +5065,7 @@ export default function App() {
           MAPS_API_REQUEST_TIMEOUT_MS,
           tokenKey,
           90,
-          true,
+          false,
         );
 
         if (!isMounted) return;
@@ -5123,7 +5132,7 @@ export default function App() {
     const currentKey = String(selectedTokenSymbol || "").trim();
     if (!currentKey) return [];
     const backendHistory = tokenAnalyticsTimeseries[currentKey] || [];
-    if (Array.isArray(backendHistory) && backendHistory.length) {
+    if (Array.isArray(backendHistory) && backendHistory.length >= 2) {
       return backendHistory;
     }
     return tokenSnapshotHistory[currentKey] || [];
@@ -5133,7 +5142,7 @@ export default function App() {
     const currentKey = String(selectedTokenSymbol || "").trim();
     if (!currentKey) return false;
     const backendHistory = tokenAnalyticsTimeseries[currentKey];
-    return Array.isArray(backendHistory) && backendHistory.length > 0;
+    return Array.isArray(backendHistory) && backendHistory.length >= 2;
   }, [selectedTokenSymbol, tokenAnalyticsTimeseries]);
 
   const compareSnapshot = useMemo(() => {
