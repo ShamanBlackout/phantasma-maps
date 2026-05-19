@@ -16,7 +16,6 @@ import { fetchJsonWithTimeout } from "./api/http";
 import {
   createActivityEndpoint as buildActivityEndpoint,
   fetchTokenAnalyticsTopMovers,
-  fetchTokenAnalyticsTimeseries,
   createGraphEndpoint as buildGraphEndpoint,
   createSyncStatusEndpoint as buildSyncStatusEndpoint,
   createTokenInfoEndpoint as buildTokenInfoEndpoint,
@@ -1865,9 +1864,6 @@ export default function App() {
       return {};
     }
   });
-  const [tokenAnalyticsTimeseries, setTokenAnalyticsTimeseries] = useState({});
-  const [tokenAnalyticsStatus, setTokenAnalyticsStatus] = useState("");
-  const [isTokenAnalyticsLoading, setIsTokenAnalyticsLoading] = useState(false);
   const [tokenAnalyticsTopMovers, setTokenAnalyticsTopMovers] = useState({});
   const [tokenAnalyticsTopMoversStatus, setTokenAnalyticsTopMoversStatus] =
     useState("");
@@ -5045,106 +5041,6 @@ export default function App() {
     return tokenSnapshots[currentKey] || null;
   }, [selectedTokenSymbol, tokenSnapshots]);
 
-  useEffect(() => {
-    let isMounted = true;
-
-    async function loadTokenAnalyticsTimeseries() {
-      const tokenKey = String(selectedTokenSymbol || "").trim();
-      if (!tokenKey) {
-        setTokenAnalyticsStatus("");
-        setIsTokenAnalyticsLoading(false);
-        return;
-      }
-
-      setIsTokenAnalyticsLoading(true);
-      setTokenAnalyticsStatus(`Loading ${tokenKey} analytics...`);
-
-      try {
-        const result = await fetchTokenAnalyticsTimeseries(
-          MAPS_API_BASE_URL,
-          MAPS_API_REQUEST_TIMEOUT_MS,
-          tokenKey,
-          90,
-          false,
-        );
-
-        if (!isMounted) return;
-
-        const normalizedItems = (
-          Array.isArray(result.items) ? result.items : []
-        )
-          .map((item) => {
-            const bucketDate =
-              String(item?.bucketDate || item?.bucket_date || "").trim() || "";
-            const recordedAt = bucketDate
-              ? new Date(`${bucketDate}T00:00:00.000Z`).getTime()
-              : 0;
-            const holderCount = Number(
-              item?.holderCount ?? item?.holder_count ?? 0,
-            );
-            const top10 = Number(item?.top10Share ?? item?.top10_share ?? 0);
-
-            return {
-              recordedAt,
-              globalHolderCount:
-                Number.isFinite(holderCount) && holderCount >= 0
-                  ? Math.floor(holderCount)
-                  : 0,
-              top10: Number.isFinite(top10) ? top10 : 0,
-            };
-          })
-          .filter(
-            (item) => Number.isFinite(item.recordedAt) && item.recordedAt > 0,
-          )
-          .sort((left, right) => left.recordedAt - right.recordedAt);
-
-        setTokenAnalyticsTimeseries((current) => ({
-          ...current,
-          [tokenKey]: normalizedItems,
-        }));
-        setTokenAnalyticsStatus("");
-      } catch (error) {
-        if (!isMounted) return;
-
-        if (isTokenNotFoundError(error)) {
-          setTokenAnalyticsStatus(buildTokenNotFoundStatus(tokenKey, error));
-          return;
-        }
-
-        setTokenAnalyticsStatus(
-          `Analytics API unavailable. Falling back to local trend history.${formatApiErrorMeta(error)}`,
-        );
-      } finally {
-        if (isMounted) {
-          setIsTokenAnalyticsLoading(false);
-        }
-      }
-    }
-
-    loadTokenAnalyticsTimeseries();
-
-    return () => {
-      isMounted = false;
-    };
-  }, [selectedTokenSymbol]);
-
-  const currentTokenSnapshotHistory = useMemo(() => {
-    const currentKey = String(selectedTokenSymbol || "").trim();
-    if (!currentKey) return [];
-    const backendHistory = tokenAnalyticsTimeseries[currentKey] || [];
-    if (Array.isArray(backendHistory) && backendHistory.length >= 2) {
-      return backendHistory;
-    }
-    return tokenSnapshotHistory[currentKey] || [];
-  }, [selectedTokenSymbol, tokenAnalyticsTimeseries, tokenSnapshotHistory]);
-
-  const hasBackendAnalyticsHistory = useMemo(() => {
-    const currentKey = String(selectedTokenSymbol || "").trim();
-    if (!currentKey) return false;
-    const backendHistory = tokenAnalyticsTimeseries[currentKey];
-    return Array.isArray(backendHistory) && backendHistory.length >= 2;
-  }, [selectedTokenSymbol, tokenAnalyticsTimeseries]);
-
   const compareSnapshot = useMemo(() => {
     const compareKey = String(compareTokenSymbol || "").trim();
     if (!compareKey) return null;
@@ -6562,12 +6458,7 @@ export default function App() {
         <StatsPanel
           holders={filteredNodes}
           summaryHolders={displaySummaryNodes}
-          tokenSnapshotHistory={currentTokenSnapshotHistory}
-          analyticsStatus={tokenAnalyticsStatus}
-          analyticsLoading={isTokenAnalyticsLoading}
-          analyticsHasBackendHistory={hasBackendAnalyticsHistory}
           topMovers={currentTokenTopMovers}
-          topMoversStatus={tokenAnalyticsTopMoversStatus}
           topMoversLoading={isTokenTopMoversLoading}
           tokenInfo={activeTokenInfo}
           availableTokens={availableTokenSymbols}
