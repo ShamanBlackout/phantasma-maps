@@ -2515,7 +2515,7 @@ body,
 .transfers-table-wrap > .transfers-table-scroll {
   flex: 1 1 100%;
   overflow-y: auto;
-  overflow-x: hidden;
+  overflow-x: auto;
   min-height: 0;
   width: 100%;
 }
@@ -5149,13 +5149,27 @@ body,
     font-size: 16px;
   }
 
+  .transfers-table-wrap {
+    overflow-x: visible;
+  }
+
+  .transfers-table-wrap > .transfers-table-scroll {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-x: contain;
+    touch-action: pan-x pan-y;
+  }
+
   .transfers-table {
+    width: max-content;
+    min-width: 760px;
     font-size: 11px;
   }
 
   .transfers-table th,
   .transfers-table td {
     padding: 7px 8px;
+    white-space: nowrap;
   }
 
   .stats-panel {
