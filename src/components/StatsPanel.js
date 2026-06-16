@@ -46,6 +46,9 @@ export default function StatsPanel({
   canShowConnections,
   onShowConnections,
   onShowConnectionsForAddress,
+  connectionMinAmount,
+  onConnectionMinAmountChange,
+  onRefreshConnections,
   isMobileViewport,
   colorTheme,
   activeLegendFilter,
@@ -122,6 +125,7 @@ export default function StatsPanel({
       .includes(normalizedTokenSearch),
   );
   const resolvedTopMovers = Array.isArray(topMovers) ? topMovers : [];
+  const hasMinimumConnectionBalance = Number(connectionMinAmount) > 0;
 
   useEffect(() => {
     if (!isTokenMenuOpen) return undefined;
@@ -474,6 +478,29 @@ export default function StatsPanel({
                       : ""}
                 </div>
               </div>
+              {isConnectionsView ? (
+                <div className="map-selected-connection-filter">
+                  <label htmlFor="stats-connection-min">
+                    Minimum connected wallet balance ({selectedTokenSymbol})
+                  </label>
+                  <input
+                    id="stats-connection-min"
+                    type="number"
+                    min="0"
+                    step="any"
+                    inputMode="decimal"
+                    value={connectionMinAmount}
+                    onChange={(event) =>
+                      onConnectionMinAmountChange?.(event.target.value)
+                    }
+                    placeholder="All connections"
+                  />
+                  <div className="map-selected-connection-filter-hint">
+                    Filters by each connected wallet's current balance. Leave
+                    blank to show all.
+                  </div>
+                </div>
+              ) : null}
               {selectedNode && canShowConnections ? (
                 <button
                   type="button"
@@ -484,13 +511,24 @@ export default function StatsPanel({
                 </button>
               ) : null}
               {isConnectionsView ? (
-                <button
-                  type="button"
-                  className="stats-clear-connections-button"
-                  onClick={() => onClearConnections?.()}
-                >
-                  Clear Connections
-                </button>
+                <>
+                  {hasMinimumConnectionBalance ? (
+                    <button
+                      type="button"
+                      className="stats-connection-cta-button"
+                      onClick={() => onRefreshConnections?.()}
+                    >
+                      Reset Minimum Filter
+                    </button>
+                  ) : null}
+                  <button
+                    type="button"
+                    className="stats-clear-connections-button"
+                    onClick={() => onClearConnections?.()}
+                  >
+                    Clear Connections
+                  </button>
+                </>
               ) : null}
             </div>
           ) : null}
