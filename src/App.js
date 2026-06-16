@@ -1224,8 +1224,12 @@ function buildConnectionsGraphFromConnections(
   rootAddress,
   fallbackGraph,
   currentSupply = 0,
+  minimumConnectionBalance = 0,
 ) {
   const normalizedRoot = String(rootAddress || "").trim();
+  const normalizedMinimumConnectionBalance = normalizeAmount(
+    minimumConnectionBalance,
+  );
   if (!normalizedRoot || !Array.isArray(connections) || !connections.length) {
     return null;
   }
@@ -1265,6 +1269,11 @@ function buildConnectionsGraphFromConnections(
   connections.forEach((connection) => {
     const counterparty = String(connection?.counterparty || "").trim();
     if (!counterparty || counterparty === normalizedRoot) return;
+
+    const counterpartyBalance = normalizeAmount(
+      fallbackNodeById.get(counterparty)?.value,
+    );
+    if (counterpartyBalance < normalizedMinimumConnectionBalance) return;
 
     const volume = normalizeAmount(
       connection?.totalVolume ?? connection?.total_volume,
@@ -1698,6 +1707,7 @@ export default function App() {
     isSelectedNodeTransactionsLoading,
     setIsSelectedNodeTransactionsLoading,
   ] = useState(false);
+  const [connectionMinAmount, setConnectionMinAmount] = useState("");
   const [isTransactionsExporting, setIsTransactionsExporting] = useState(false);
   const [transactionsExportStatus, setTransactionsExportStatus] = useState("");
   const [selectedNodeSparkline, setSelectedNodeSparkline] = useState([]);
@@ -1727,6 +1737,7 @@ export default function App() {
       String(initialUrlParams.view || "token").trim() === "connections" ||
       Boolean(String(initialUrlParams.rootAddress || "").trim()),
   );
+  const [connectionsGraphContext, setConnectionsGraphContext] = useState(null);
   const activeGraphRootAddress = useMemo(
     () => String(searchedRootAddress || "").trim(),
     [searchedRootAddress],
@@ -2321,16 +2332,6 @@ export default function App() {
     triggerMotionCue("connections");
   }
 
-  function handleClearConnections() {
-    setSearchQuery("");
-    setActiveHolderTypeFilter("");
-    setHoveredNode(null);
-    setSelectedNode(null);
-    closeTransfersModal();
-    setSearchedRootAddress("");
-    setIsConnectionsView(false);
-  }
-
   function handleGoToInitialSoulGraph() {
     setSearchQuery("");
     setActiveHolderTypeFilter("");
@@ -2339,6 +2340,8 @@ export default function App() {
     closeTransfersModal();
     setSearchedRootAddress("");
     setIsConnectionsView(false);
+    setConnectionMinAmount("");
+    setConnectionsGraphContext(null);
     setIsGraphMaxModeEnabled(false);
     setGraphEdgeLimit(MAPS_API_GRAPH_EDGE_LIMIT);
     setGraphNodeLimit(MAPS_API_GRAPH_NODE_LIMIT);
@@ -2349,6 +2352,10 @@ export default function App() {
     setMapRefreshNonce((current) => current + 1);
     setMapDataStatus("Retrying graph request...");
   }
+
+  const handleResetConnectionMinimum = useCallback(() => {
+    setConnectionMinAmount("0");
+  }, []);
 
   useEffect(() => {
     if (!isMobileViewport) {
@@ -2859,6 +2866,19 @@ export default function App() {
 
             if (!isMounted) return;
 
+            setConnectionsGraphContext({
+              items: Array.isArray(connectionsResult.items)
+                ? connectionsResult.items
+                : [],
+              rootAddress: activeGraphRootAddress,
+              fallbackGraph: balanceFallbackGraph,
+              currentSupply:
+                Number(balanceFallbackGraph?.totalSupply) ||
+                Number(activeTokenInfo?.currentSupply) ||
+                Number(activeTokenInfo?.totalSupply) ||
+                0,
+            });
+
             const tableFocusedGraph = buildConnectionsGraphFromConnections(
               connectionsResult.items,
               activeGraphRootAddress,
@@ -3164,6 +3184,15 @@ export default function App() {
           setMapLoadingProgress(84);
 
           if (!isMounted) return;
+
+          setConnectionsGraphContext({
+            items: Array.isArray(connectionsResult.items)
+              ? connectionsResult.items
+              : [],
+            rootAddress: activeGraphRootAddress,
+            fallbackGraph: mappedGraph,
+            currentSupply: mappedGraph?.totalSupply || 0,
+          });
 
           const tableFocusedGraph = buildConnectionsGraphFromConnections(
             connectionsResult.items,
@@ -3512,6 +3541,56 @@ export default function App() {
       }
     };
   }, []);
+
+  useEffect(() => {
+    if (!isConnectionsView || !connectionsGraphContext) return;
+
+    const minimumAmount = normalizeAmount(connectionMinAmount);
+    const filteredGraph = buildConnectionsGraphFromConnections(
+      connectionsGraphContext.items,
+      connectionsGraphContext.rootAddress,
+      connectionsGraphContext.fallbackGraph,
+      connectionsGraphContext.currentSupply,
+      minimumAmount,
+    );
+
+    if (filteredGraph && Array.isArray(filteredGraph.nodes)) {
+      setIsUsingMockApiFallback(false);
+      setMapNodes(filteredGraph.nodes);
+      setSummaryNodes(filteredGraph.nodes);
+      setMapLinks(filteredGraph.links);
+      setMapLoadingEvidence({
+        wallets: filteredGraph.nodes.length,
+        links: Array.isArray(filteredGraph.links)
+          ? filteredGraph.links.length
+          : 0,
+      });
+      setTrackedTokenSupply(filteredGraph.totalValue || 0);
+      setMapDataStatus(
+        minimumAmount > 0
+          ? `Live graph loaded for ${shortenAddress(connectionsGraphContext.rootAddress)} [connections filtered by balance >= ${fmtTokenAmount(minimumAmount)} ${activeTokenInfo.name}]`
+          : `Live graph loaded for ${shortenAddress(connectionsGraphContext.rootAddress)} [connections-phase:table]`,
+      );
+      return;
+    }
+
+    if (minimumAmount > 0) {
+      setIsUsingMockApiFallback(false);
+      setMapNodes([]);
+      setSummaryNodes([]);
+      setMapLinks([]);
+      setMapLoadingEvidence({ wallets: 0, links: 0 });
+      setTrackedTokenSupply(0);
+      setMapDataStatus(
+        `No connections meet the minimum balance of ${fmtTokenAmount(minimumAmount)} ${activeTokenInfo.name}.`,
+      );
+    }
+  }, [
+    activeTokenInfo.name,
+    connectionMinAmount,
+    connectionsGraphContext,
+    isConnectionsView,
+  ]);
 
   const displayNodes = useMemo(
     () => applyCurrentSupplyToNodes(mapNodes, activeTokenInfo.currentSupply),
@@ -4163,6 +4242,18 @@ export default function App() {
     resetAllTransactionFilters();
   }, [resetAllTransactionFilters]);
 
+  const handleClearConnections = useCallback(() => {
+    setSearchQuery("");
+    setActiveHolderTypeFilter("");
+    setHoveredNode(null);
+    setSelectedNode(null);
+    closeTransfersModal();
+    setSearchedRootAddress("");
+    setIsConnectionsView(false);
+    setConnectionMinAmount("");
+    setConnectionsGraphContext(null);
+  }, [closeTransfersModal]);
+
   useEffect(() => {
     const initialRootAddress = String(
       initialRootAddressFromUrlRef.current || "",
@@ -4781,9 +4872,16 @@ export default function App() {
     }
 
     if (isConnectionsView) {
+      const connectionThreshold = normalizeAmount(connectionMinAmount);
       return {
-        title: "No connected wallets for this address",
-        copy: "Try another root wallet or return to token overview to continue exploring holder distribution.",
+        title:
+          connectionThreshold > 0
+            ? "No connections meet the minimum amount"
+            : "No connected wallets for this address",
+        copy:
+          connectionThreshold > 0
+            ? `Lower the minimum amount below ${fmtTokenAmount(connectionThreshold)} ${activeTokenInfo.name} or clear it to show all connections.`
+            : "Try another root wallet or return to token overview to continue exploring holder distribution.",
         actions: [
           {
             key: "clear-connections",
@@ -4846,6 +4944,8 @@ export default function App() {
     isConnectionsView,
     isMapLoading,
     searchQuery,
+    connectionMinAmount,
+    activeTokenInfo.name,
   ]);
 
   const traceComputation = useMemo(() => {
@@ -6121,6 +6221,17 @@ export default function App() {
                 Connections mode ×
               </button>
             ) : null}
+            {normalizeAmount(connectionMinAmount) > 0 ? (
+              <button
+                type="button"
+                className="map-global-filter-chip"
+                onClick={() => setConnectionMinAmount("")}
+              >
+                Connections min:{" "}
+                {fmtTokenAmount(normalizeAmount(connectionMinAmount))}{" "}
+                {activeTokenInfo.name} ×
+              </button>
+            ) : null}
             {traceComputation.nodeIds.length ? (
               <button
                 type="button"
@@ -6355,7 +6466,11 @@ export default function App() {
                 totalTransactionCount={totalTransactionCount}
                 sparklineData={selectedNodeSparkline}
                 canShowConnections={canShowSelectedNodeConnections}
+                isConnectionsView={isConnectionsView}
                 onShowConnections={handleShowNodeConnections}
+                connectionMinAmount={connectionMinAmount}
+                onConnectionMinAmountChange={setConnectionMinAmount}
+                onRefreshConnections={handleResetConnectionMinimum}
                 onOpenTransactions={() => {
                   setIsTransfersModalOpen(true);
                   triggerMotionCue("modal");
@@ -6480,6 +6595,9 @@ export default function App() {
             handleShowNodeConnections(resolvedSelectedNode?.id)
           }
           onShowConnectionsForAddress={handleShowNodeConnections}
+          connectionMinAmount={connectionMinAmount}
+          onConnectionMinAmountChange={setConnectionMinAmount}
+          onRefreshConnections={handleResetConnectionMinimum}
           isMobileViewport={isMobileViewport}
           colorTheme={colorTheme}
           activeLegendFilter={activeHolderTypeFilter}

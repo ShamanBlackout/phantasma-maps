@@ -743,6 +743,35 @@
   color: #4f3a2a;
 }
 
+.app-root.theme-light .map-selected-connection-filter label,
+.app-root.theme-light .map-selected-connection-filter-hint {
+  color: rgba(108, 87, 64, 0.76);
+}
+
+.app-root.theme-light .map-selected-connection-filter input {
+  background: rgba(255, 252, 246, 0.88);
+  border-color: rgba(183, 151, 108, 0.28);
+  color: #4f3a2a;
+}
+
+.app-root.theme-light
+  .map-selected-connection-filter
+  input::-webkit-outer-spin-button,
+.app-root.theme-light
+  .map-selected-connection-filter
+  input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.app-root.theme-light .map-selected-connection-filter input[type="number"] {
+  -moz-appearance: textfield;
+}
+
+.app-root.theme-light .map-selected-connection-filter input::placeholder {
+  color: rgba(108, 87, 64, 0.46);
+}
+
 .app-root.theme-light .stats-panel,
 .app-root.theme-light .stats-card,
 .app-root.theme-light .map-selected-info,

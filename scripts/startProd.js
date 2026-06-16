@@ -44,7 +44,7 @@ function runNodeScript(scriptRelativePath) {
   }
 }
 
-const port = process.env.PORT || "3000";
+const port = process.env.PORT || "3001";
 const buildIndexPath = path.join(process.cwd(), "build", "index.html");
 const shouldBuildOnStart =
   process.env.REBUILD_ON_START === "true" || !fs.existsSync(buildIndexPath);

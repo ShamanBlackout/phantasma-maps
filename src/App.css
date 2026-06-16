@@ -1719,6 +1719,51 @@ body,
   color: #dcecff;
 }
 
+.map-selected-connection-filter {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.map-selected-connection-filter label {
+  color: rgba(173, 201, 230, 0.68);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.map-selected-connection-filter input {
+  width: 100%;
+  min-height: 36px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(var(--accent-rgb), 0.24);
+  background: rgba(255, 255, 255, 0.04);
+  color: #eaf4ff;
+  font-size: 13px;
+}
+
+.map-selected-connection-filter input::-webkit-outer-spin-button,
+.map-selected-connection-filter input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.map-selected-connection-filter input[type="number"] {
+  -moz-appearance: textfield;
+}
+
+.map-selected-connection-filter input::placeholder {
+  color: rgba(173, 201, 230, 0.46);
+}
+
+.map-selected-connection-filter-hint {
+  color: rgba(173, 201, 230, 0.56);
+  font-size: 11px;
+  line-height: 1.35;
+}
 .map-selected-addr {
   margin-top: 4px;
   font-size: var(--text-xs);

@@ -16,10 +16,16 @@ function SelectedNodeCard({
   totalTransactionCount,
   sparklineData,
   canShowConnections,
+  isConnectionsView,
   onShowConnections,
+  connectionMinAmount,
+  onConnectionMinAmountChange,
+  onRefreshConnections,
   onOpenTransactions,
   isTransactionsLoading,
 }) {
+  const hasMinimumConnectionBalance = Number(connectionMinAmount) > 0;
+
   return (
     <div className="map-selected-info is-active">
       <div className="map-selected-head">
@@ -99,6 +105,27 @@ function SelectedNodeCard({
       )}
       <div className="selected-node-actions">
         <div className="map-selected-actions-title">Actions</div>
+        <div className="map-selected-connection-filter">
+          <label htmlFor="selected-node-connection-min">
+            Minimum connected wallet balance ({tokenName})
+          </label>
+          <input
+            id="selected-node-connection-min"
+            type="number"
+            min="0"
+            step="any"
+            inputMode="decimal"
+            value={connectionMinAmount}
+            onChange={(event) =>
+              onConnectionMinAmountChange?.(event.target.value)
+            }
+            placeholder="All connections"
+          />
+          <div className="map-selected-connection-filter-hint">
+            Filters by each connected wallet's current balance. Leave blank to
+            show all.
+          </div>
+        </div>
         {canShowConnections ? (
           <button
             type="button"
@@ -106,6 +133,15 @@ function SelectedNodeCard({
             onClick={() => onShowConnections(node.id)}
           >
             Show Connections
+          </button>
+        ) : null}
+        {isConnectionsView && hasMinimumConnectionBalance ? (
+          <button
+            type="button"
+            className="map-selected-show-transfers"
+            onClick={() => onRefreshConnections?.()}
+          >
+            Reset Minimum Filter
           </button>
         ) : null}
         <button
