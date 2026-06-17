@@ -21,6 +21,7 @@ import {
   createTokenInfoEndpoint as buildTokenInfoEndpoint,
   createTokensEndpoint as buildTokensEndpoint,
   fetchConnectionsForAddress as fetchConnectionsForAddressFromApi,
+  fetchTracePaths as fetchTracePathsFromApi,
   fetchTopHolders as fetchTopHoldersFromApi,
   fetchTransactionsPageForAddress as fetchTransactionsPageForAddressFromApi,
 } from "./api/mapsApi";
@@ -311,6 +312,11 @@ function inferHolderType(label, pct) {
 function normalizeAmount(rawAmount) {
   const parsed = Number(rawAmount);
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
+}
+
+function isLikelyWalletAddress(rawAddress) {
+  const address = String(rawAddress || "").trim();
+  return /^[PS][a-zA-Z0-9]{20,}$/.test(address);
 }
 
 function normalizePositiveInteger(value, fallbackValue) {
@@ -677,6 +683,73 @@ function buildNeighborFocusedGraph(graphData, rootAddress) {
     links: scopedLinks,
     totalValue: scopedTotal,
     rootNodeId: normalizedRoot,
+  };
+}
+
+function buildTracePathGraph(pathItem, knownNodesById) {
+  const nodePath = Array.isArray(pathItem?.nodePath)
+    ? pathItem.nodePath
+        .map((nodeId) => String(nodeId || "").trim())
+        .filter(Boolean)
+    : [];
+
+  if (nodePath.length < 2) {
+    return null;
+  }
+
+  const hopCount = Math.max(
+    1,
+    Number(pathItem?.hopCount) || nodePath.length - 1,
+  );
+  const totalVolume = Math.max(0, Number(pathItem?.totalVolume) || 0);
+  const averageLinkVolume = hopCount > 0 ? totalVolume / hopCount : 1;
+  const fallbackNodeValue = Math.max(averageLinkVolume, 1);
+
+  const nodes = nodePath.map((nodeId, index) => {
+    const knownNode = knownNodesById.get(nodeId);
+    if (knownNode) {
+      return {
+        ...knownNode,
+        isTracePathNode: true,
+        tracePathIndex: index,
+        visualValue: Math.max(
+          Number(knownNode.visualValue) || Number(knownNode.value) || 0,
+          fallbackNodeValue,
+        ),
+      };
+    }
+
+    return {
+      id: nodeId,
+      label: shortenAddress(nodeId),
+      shortAddr: shortenAddress(nodeId),
+      value: fallbackNodeValue,
+      visualValue: fallbackNodeValue,
+      pct: "0.00",
+      type: inferHolderType(nodeId, 0),
+      sentTransactions: 0,
+      receivedTransactions: 0,
+      transactionCount: 0,
+      isTracePathNode: true,
+      tracePathIndex: index,
+    };
+  });
+
+  const links = [];
+  for (let index = 0; index < nodePath.length - 1; index += 1) {
+    const source = nodePath[index];
+    const target = nodePath[index + 1];
+    links.push({
+      source,
+      target,
+      transactionVolume: averageLinkVolume,
+      tracePathIndex: index,
+    });
+  }
+
+  return {
+    nodes,
+    links,
   };
 }
 
@@ -1734,8 +1807,10 @@ export default function App() {
   });
   const [isConnectionsView, setIsConnectionsView] = useState(
     () =>
-      String(initialUrlParams.view || "token").trim() === "connections" ||
-      Boolean(String(initialUrlParams.rootAddress || "").trim()),
+      (!String(initialUrlParams.traceFrom || "").trim() ||
+        !String(initialUrlParams.traceTo || "").trim()) &&
+      (String(initialUrlParams.view || "token").trim() === "connections" ||
+        Boolean(String(initialUrlParams.rootAddress || "").trim())),
   );
   const [connectionsGraphContext, setConnectionsGraphContext] = useState(null);
   const activeGraphRootAddress = useMemo(
@@ -1836,10 +1911,30 @@ export default function App() {
   const [labelDensityMode, setLabelDensityMode] = useState("balanced");
   const [traceFromNodeId, setTraceFromNodeId] = useState("");
   const [traceToNodeId, setTraceToNodeId] = useState("");
-  const [traceFromQuery, setTraceFromQuery] = useState("");
-  const [traceToQuery, setTraceToQuery] = useState("");
-  const [isTraceToolOpen, setIsTraceToolOpen] = useState(false);
+  const [traceFromQuery, setTraceFromQuery] = useState(() =>
+    String(initialUrlParams.traceFrom || "").trim(),
+  );
+  const [traceToQuery, setTraceToQuery] = useState(() =>
+    String(initialUrlParams.traceTo || "").trim(),
+  );
+  const [traceStopMode, setTraceStopMode] = useState(() =>
+    String(initialUrlParams.traceStop || "").trim() === "through"
+      ? "through"
+      : "terminal",
+  );
+  const [isTraceToolOpen, setIsTraceToolOpen] = useState(() =>
+    Boolean(
+      String(initialUrlParams.traceFrom || "").trim() &&
+      String(initialUrlParams.traceTo || "").trim(),
+    ),
+  );
   const [traceStatusMessage, setTraceStatusMessage] = useState("");
+  const [traceDbPaths, setTraceDbPaths] = useState([]);
+  const [isTraceDbPathsLoading, setIsTraceDbPathsLoading] = useState(false);
+  const [selectedTraceDbPathKey, setSelectedTraceDbPathKey] = useState(() =>
+    String(initialUrlParams.tracePath || "").trim(),
+  );
+  const [traceSearchNonce, setTraceSearchNonce] = useState(0);
   const [isDiagnosticsOpen, setIsDiagnosticsOpen] = useState(false);
   const [isCompareModeOpen, setIsCompareModeOpen] = useState(false);
   const [compareTokenSymbol, setCompareTokenSymbol] = useState("");
@@ -1879,6 +1974,8 @@ export default function App() {
   const [tokenAnalyticsTopMoversStatus, setTokenAnalyticsTopMoversStatus] =
     useState("");
   const [isTokenTopMoversLoading, setIsTokenTopMoversLoading] = useState(false);
+  const [topMoversHorizon, setTopMoversHorizon] = useState("7d");
+  const [topMoversMode, setTopMoversMode] = useState("net");
   const [isExportPresetsOpen, setIsExportPresetsOpen] = useState(false);
   const [isMobileInspectOpen, setIsMobileInspectOpen] = useState(false);
   const mapLoaderShownAtRef = useRef(0);
@@ -2062,12 +2159,28 @@ export default function App() {
       densityMode,
       transactionDirFilter,
       transactionCounterpartyFilter,
+      traceFromAddress: isLikelyWalletAddress(
+        String(traceFromQuery || "").trim(),
+      )
+        ? String(traceFromQuery || "").trim()
+        : String(traceFromNodeId || "").trim(),
+      traceToAddress: isLikelyWalletAddress(String(traceToQuery || "").trim())
+        ? String(traceToQuery || "").trim()
+        : String(traceToNodeId || "").trim(),
+      traceStopMode,
+      selectedTraceDbPathKey,
     }),
     [
       activeHolderTypeFilter,
       densityMode,
       isConnectionsView,
+      selectedTraceDbPathKey,
       searchQuery,
+      traceFromNodeId,
+      traceFromQuery,
+      traceStopMode,
+      traceToNodeId,
+      traceToQuery,
       transactionCounterpartyFilter,
       transactionDirFilter,
     ],
@@ -2214,44 +2327,73 @@ export default function App() {
       setTokenAnalyticsTopMoversStatus(`Loading ${tokenKey} top movers...`);
 
       try {
-        const result = await fetchTokenAnalyticsTopMovers(
-          MAPS_API_BASE_URL,
-          MAPS_API_REQUEST_TIMEOUT_MS,
-          tokenKey,
-          7,
-          10,
-          false,
+        const horizons = ["24h", "7d", "30d"];
+        const results = await Promise.all(
+          horizons.map((horizon) => {
+            const daysMap = { "24h": 1, "7d": 7, "30d": 30 };
+            return fetchTokenAnalyticsTopMovers(
+              MAPS_API_BASE_URL,
+              MAPS_API_REQUEST_TIMEOUT_MS,
+              tokenKey,
+              daysMap[horizon] || 7,
+              10,
+              false,
+            );
+          }),
         );
 
         if (!isMounted) return;
 
-        const normalizedItems = (
-          Array.isArray(result.items) ? result.items : []
-        )
-          .map((item) => {
-            const latestBalance = Number(
-              item?.latestBalance ?? item?.latest_balance ?? 0,
-            );
-            const deltaBalance = Number(
-              item?.deltaBalance ?? item?.delta_balance ?? 0,
-            );
-            const deltaPct =
-              Number.isFinite(latestBalance) && latestBalance > 0
-                ? (deltaBalance / latestBalance) * 100
+        const normalizedByHorizon = {};
+        horizons.forEach((horizon, horizonIndex) => {
+          const result = results[horizonIndex] || { items: [] };
+          const normalizedItems = (
+            Array.isArray(result.items) ? result.items : []
+          )
+            .map((item) => {
+              const parsedLatestBalance = Number(
+                item?.latestBalance ?? item?.latest_balance ?? 0,
+              );
+              const parsedPreviousBalance = Number(
+                item?.previousBalance ?? item?.previous_balance ?? 0,
+              );
+              const parsedDeltaBalance = Number(
+                item?.deltaBalance ?? item?.delta_balance ?? 0,
+              );
+              const latestBalance = Number.isFinite(parsedLatestBalance)
+                ? parsedLatestBalance
                 : 0;
+              const previousBalance = Number.isFinite(parsedPreviousBalance)
+                ? parsedPreviousBalance
+                : latestBalance - parsedDeltaBalance;
+              const deltaBalance = Number.isFinite(parsedDeltaBalance)
+                ? parsedDeltaBalance
+                : 0;
+              const hasValidBaseline = latestBalance > 0;
+              const rawDeltaPct = hasValidBaseline
+                ? (deltaBalance / latestBalance) * 100
+                : null;
+              const deltaPct = Number.isFinite(rawDeltaPct)
+                ? Math.max(rawDeltaPct, -100)
+                : null;
 
-            return {
-              address: String(item?.address || "").trim(),
-              deltaBalance,
-              deltaPct,
-              latestBalance,
-            };
-          })
-          .filter((item) => item.address);
+              return {
+                address: String(item?.address || "").trim(),
+                deltaBalance,
+                deltaPct,
+                latestBalance,
+                previousBalance,
+                label: String(item?.label || item?.name || "").trim(),
+              };
+            })
+            .filter((item) => item.address);
+
+          normalizedByHorizon[horizon] = normalizedItems;
+        });
 
         setTokenAnalyticsTopMovers((current) => ({
           ...current,
-          [tokenKey]: normalizedItems,
+          [tokenKey]: normalizedByHorizon,
         }));
         setTokenAnalyticsTopMoversStatus("");
       } catch (error) {
@@ -2283,8 +2425,20 @@ export default function App() {
   const currentTokenTopMovers = useMemo(() => {
     const currentKey = String(selectedTokenSymbol || "").trim();
     if (!currentKey) return [];
-    return tokenAnalyticsTopMovers[currentKey] || [];
-  }, [selectedTokenSymbol, tokenAnalyticsTopMovers]);
+    const byHorizon = tokenAnalyticsTopMovers[currentKey];
+    if (!byHorizon) return [];
+    const horizonData = byHorizon[topMoversHorizon] || [];
+    return horizonData.filter((mover) => {
+      if (topMoversMode === "inflows") return mover.deltaBalance > 0;
+      if (topMoversMode === "outflows") return mover.deltaBalance < 0;
+      return true;
+    });
+  }, [
+    selectedTokenSymbol,
+    tokenAnalyticsTopMovers,
+    topMoversHorizon,
+    topMoversMode,
+  ]);
 
   function isPotentialAddress(rawValue) {
     const value = String(rawValue || "").trim();
@@ -2302,6 +2456,14 @@ export default function App() {
     }
 
     if (isPotentialAddress(value)) {
+      setIsTraceToolOpen(false);
+      setSelectedTraceDbPathKey("");
+      setTraceFromNodeId("");
+      setTraceToNodeId("");
+      setTraceFromQuery("");
+      setTraceToQuery("");
+      setTraceDbPaths([]);
+      setTraceStatusMessage("");
       setSearchQuery("");
       setActiveHolderTypeFilter("");
       setHoveredNode(null);
@@ -2322,6 +2484,14 @@ export default function App() {
     const value = String(nodeId || "").trim();
     if (!value) return;
 
+    setIsTraceToolOpen(false);
+    setSelectedTraceDbPathKey("");
+    setTraceFromNodeId("");
+    setTraceToNodeId("");
+    setTraceFromQuery("");
+    setTraceToQuery("");
+    setTraceDbPaths([]);
+    setTraceStatusMessage("");
     setSearchQuery("");
     setActiveHolderTypeFilter("");
     setHoveredNode(null);
@@ -2354,8 +2524,18 @@ export default function App() {
   }
 
   const handleResetConnectionMinimum = useCallback(() => {
-    setConnectionMinAmount("0");
+    setConnectionMinAmount("");
   }, []);
+
+  const connectionMinPresets = useMemo(
+    () => [
+      { label: "50k", value: "50000" },
+      { label: "100k", value: "100000" },
+      { label: "500k", value: "500000" },
+      { label: "1M", value: "1000000" },
+    ],
+    [],
+  );
 
   useEffect(() => {
     if (!isMobileViewport) {
@@ -3837,6 +4017,69 @@ export default function App() {
     [filteredNodes, traceToNodeId, traceToQuery],
   );
 
+  const traceFromAddress = useMemo(() => {
+    const typed = String(traceFromQuery || "").trim();
+    if (isLikelyWalletAddress(typed)) return typed;
+    const selected = String(traceFromNodeId || "").trim();
+    if (selected) return selected;
+    return "";
+  }, [traceFromNodeId, traceFromQuery]);
+
+  const traceToAddress = useMemo(() => {
+    const typed = String(traceToQuery || "").trim();
+    if (isLikelyWalletAddress(typed)) return typed;
+    const selected = String(traceToNodeId || "").trim();
+    if (selected) return selected;
+    return "";
+  }, [traceToNodeId, traceToQuery]);
+
+  const isTraceSearchReady = useMemo(
+    () =>
+      Boolean(
+        traceFromAddress &&
+        traceToAddress &&
+        traceFromAddress !== traceToAddress,
+      ),
+    [traceFromAddress, traceToAddress],
+  );
+
+  function handleTraceToolSubmit(event) {
+    event.preventDefault();
+
+    if (!traceFromAddress || !traceToAddress) {
+      setTraceDbPaths([]);
+      setTraceStatusMessage("Enter or select both wallets to trace.");
+      return;
+    }
+
+    if (traceFromAddress === traceToAddress) {
+      setTraceDbPaths([]);
+      setTraceStatusMessage("Enter two different wallet addresses to trace.");
+      return;
+    }
+
+    setTraceStatusMessage("Searching database paths...");
+    setSelectedTraceDbPathKey("");
+    setTraceSearchNonce((current) => current + 1);
+  }
+
+  function handleShowTraceDbPath(nodePath) {
+    const normalizedPath = Array.isArray(nodePath)
+      ? nodePath.map((nodeId) => String(nodeId || "").trim()).filter(Boolean)
+      : [];
+
+    if (normalizedPath.length < 2) {
+      setSelectedTraceDbPathKey("");
+      return;
+    }
+
+    setSearchedRootAddress("");
+    setIsConnectionsView(false);
+    setConnectionsGraphContext(null);
+    setConnectionMinAmount("");
+    setSelectedTraceDbPathKey(normalizedPath.join("->"));
+  }
+
   const canShowSelectedNodeConnections = useMemo(() => {
     if (!resolvedSelectedNode?.id) return false;
     if (resolvedSelectedNode.id === activeGraphRootAddress) return false;
@@ -3895,16 +4138,6 @@ export default function App() {
     isMapLoading,
     isMobileViewport,
   ]);
-
-  useEffect(() => {
-    if (!selectedNode) return;
-    const stillExists = filteredNodes.some(
-      (node) => node.id === selectedNode.id,
-    );
-    if (!stillExists) {
-      setSelectedNode(null);
-    }
-  }, [filteredNodes, selectedNode]);
 
   useEffect(() => {
     if (!selectedNode?.id) {
@@ -4258,9 +4491,24 @@ export default function App() {
     const initialRootAddress = String(
       initialRootAddressFromUrlRef.current || "",
     ).trim();
+    const hasInitialTracePair =
+      Boolean(String(initialUrlParams.traceFrom || "").trim()) &&
+      Boolean(String(initialUrlParams.traceTo || "").trim());
     if (!initialRootAddress) return;
+    if (hasInitialTracePair) {
+      initialRootAddressFromUrlRef.current = null;
+      return;
+    }
 
     setSearchQuery("");
+    setIsTraceToolOpen(false);
+    setSelectedTraceDbPathKey("");
+    setTraceFromNodeId("");
+    setTraceToNodeId("");
+    setTraceFromQuery("");
+    setTraceToQuery("");
+    setTraceDbPaths([]);
+    setTraceStatusMessage("");
     setActiveHolderTypeFilter("");
     setHoveredNode(null);
     setSelectedNode(null);
@@ -4269,7 +4517,11 @@ export default function App() {
     setIsConnectionsView(true);
 
     initialRootAddressFromUrlRef.current = null;
-  }, [closeTransfersModal]);
+  }, [
+    closeTransfersModal,
+    initialUrlParams.traceFrom,
+    initialUrlParams.traceTo,
+  ]);
 
   function handleTransactionSortToggle(nextSortBy) {
     if (nextSortBy !== "amount" && nextSortBy !== "time") return;
@@ -4797,43 +5049,6 @@ export default function App() {
     };
   }, [isUsingMockApiFallback, mapDataStatus]);
 
-  const executiveSummary = useMemo(() => {
-    const summaryPool = Array.isArray(displaySummaryNodes)
-      ? displaySummaryNodes
-      : [];
-    const visibleWallets = filteredNodes.length;
-    const visibleConnections = filteredLinks.length;
-    const topWallet = summaryPool.length
-      ? summaryPool.reduce((best, holder) =>
-          Number(holder?.value || 0) > Number(best?.value || 0) ? holder : best,
-        )
-      : null;
-    const topWalletShare =
-      currentSupplyBase > 0 && topWallet
-        ? (Number(topWallet.value || 0) / currentSupplyBase) * 100
-        : Number(topWallet?.pct || 0);
-    const topTenTotal = summaryPool
-      .slice()
-      .sort((a, b) => Number(b?.value || 0) - Number(a?.value || 0))
-      .slice(0, 10)
-      .reduce((sum, holder) => sum + Number(holder?.value || 0), 0);
-    const concentrationTop10 =
-      currentSupplyBase > 0 ? (topTenTotal / currentSupplyBase) * 100 : 0;
-
-    return {
-      visibleWallets,
-      visibleConnections,
-      topWalletLabel: topWallet?.shortAddr || topWallet?.label || "N/A",
-      topWalletShare,
-      concentrationTop10,
-    };
-  }, [
-    currentSupplyBase,
-    displaySummaryNodes,
-    filteredLinks.length,
-    filteredNodes.length,
-  ]);
-
   const hasMapError = useMemo(() => {
     const statusText = String(mapDataStatus || "").toLowerCase();
     return (
@@ -4955,6 +5170,7 @@ export default function App() {
       return {
         nodeIds: [],
         linkKeys: [],
+        relevanceScore: null,
         status:
           fromId && toId && fromId === toId
             ? "Select two different wallets to trace a path."
@@ -4963,6 +5179,8 @@ export default function App() {
     }
 
     const adjacency = new Map();
+    const pairVolumeMap = new Map();
+    let maxPairVolume = 0;
     filteredLinks.forEach((link) => {
       const source = getLinkEndpointId(link?.source);
       const target = getLinkEndpointId(link?.target);
@@ -4971,12 +5189,22 @@ export default function App() {
       if (!adjacency.has(target)) adjacency.set(target, []);
       adjacency.get(source).push(target);
       adjacency.get(target).push(source);
+
+      const pairKey = [source, target].sort().join("::");
+      const nextVolume =
+        (pairVolumeMap.get(pairKey) || 0) +
+        (Number(link?.transactionVolume) || 0);
+      pairVolumeMap.set(pairKey, nextVolume);
+      if (nextVolume > maxPairVolume) {
+        maxPairVolume = nextVolume;
+      }
     });
 
     if (!adjacency.has(fromId) || !adjacency.has(toId)) {
       return {
         nodeIds: [],
         linkKeys: [],
+        relevanceScore: null,
         status:
           "Selected wallets are not connected in the current visible graph.",
       };
@@ -5001,6 +5229,7 @@ export default function App() {
       return {
         nodeIds: [],
         linkKeys: [],
+        relevanceScore: null,
         status: "No path found between these wallets in the current view.",
       };
     }
@@ -5015,19 +5244,178 @@ export default function App() {
     pathNodeIds.reverse();
 
     const pathLinkKeys = [];
+    let pathVolumeTotal = 0;
     for (let index = 0; index < pathNodeIds.length - 1; index += 1) {
       const left = pathNodeIds[index];
       const right = pathNodeIds[index + 1];
       pathLinkKeys.push(getLinkKey(left, right));
       pathLinkKeys.push(getLinkKey(right, left));
+
+      const pairKey = [left, right].sort().join("::");
+      pathVolumeTotal += pairVolumeMap.get(pairKey) || 0;
     }
+
+    const hopCount = Math.max(0, pathNodeIds.length - 1);
+    const averageHopVolume = hopCount > 0 ? pathVolumeTotal / hopCount : 0;
+    const hopScore =
+      hopCount <= 1 ? 100 : Math.max(28, 100 - (hopCount - 1) * 16);
+    const volumeScore =
+      maxPairVolume > 0
+        ? Math.min(24, (averageHopVolume / maxPairVolume) * 24)
+        : 0;
+    const relevanceScore = Math.round(
+      Math.max(20, Math.min(100, hopScore + volumeScore)),
+    );
+    const relevanceLabel =
+      relevanceScore >= 80
+        ? "strong"
+        : relevanceScore >= 60
+          ? "moderate"
+          : "light";
 
     return {
       nodeIds: pathNodeIds,
       linkKeys: pathLinkKeys,
-      status: `Trace path found across ${Math.max(0, pathNodeIds.length - 1)} hop(s).`,
+      relevanceScore,
+      status: `Trace path found across ${hopCount} hop(s). Relevance ${relevanceScore}/100 (${relevanceLabel}).`,
     };
   }, [filteredLinks, traceFromNodeId, traceToNodeId]);
+
+  const selectedTraceDbPath = useMemo(() => {
+    if (!selectedTraceDbPathKey) {
+      return null;
+    }
+
+    return (
+      traceDbPaths.find((item) => {
+        const nodePath = Array.isArray(item?.nodePath) ? item.nodePath : [];
+        return nodePath.join("->") === selectedTraceDbPathKey;
+      }) || null
+    );
+  }, [selectedTraceDbPathKey, traceDbPaths]);
+
+  const tracePathKnownNodesById = useMemo(() => {
+    const nodeMap = new Map();
+
+    [
+      ...displaySummaryNodes,
+      ...displayNodes,
+      ...legendScopedDisplayGraph.nodes,
+    ].forEach((node) => {
+      const nodeId = String(node?.id || "").trim();
+      if (!nodeId || nodeMap.has(nodeId)) {
+        return;
+      }
+
+      nodeMap.set(nodeId, node);
+    });
+
+    return nodeMap;
+  }, [displayNodes, displaySummaryNodes, legendScopedDisplayGraph.nodes]);
+
+  const selectedTraceDbPathGraph = useMemo(
+    () => buildTracePathGraph(selectedTraceDbPath, tracePathKnownNodesById),
+    [selectedTraceDbPath, tracePathKnownNodesById],
+  );
+
+  const selectedTraceDbPathRender = useMemo(() => {
+    if (!selectedTraceDbPathGraph) {
+      return null;
+    }
+
+    const nodeIds = selectedTraceDbPathGraph.nodes.map((node) => node.id);
+    const linkKeys = selectedTraceDbPathGraph.links.flatMap((link) => [
+      getLinkKey(link.source, link.target),
+      getLinkKey(link.target, link.source),
+    ]);
+
+    return {
+      nodeIds,
+      linkKeys,
+      status: "Showing the selected database path as a focused graph.",
+    };
+  }, [selectedTraceDbPathGraph]);
+
+  const renderedGraphNodes = selectedTraceDbPathGraph?.nodes || filteredNodes;
+  const renderedGraphLinks = selectedTraceDbPathGraph?.links || filteredLinks;
+
+  useEffect(() => {
+    if (!selectedNode) return;
+    const stillExists = renderedGraphNodes.some(
+      (node) => node.id === selectedNode.id,
+    );
+    if (!stillExists) {
+      setSelectedNode(null);
+    }
+  }, [renderedGraphNodes, selectedNode]);
+
+  const primaryTraceDbPathNodePath = useMemo(() => {
+    if (
+      Array.isArray(selectedTraceDbPath?.nodePath) &&
+      selectedTraceDbPath.nodePath.length
+    ) {
+      return selectedTraceDbPath.nodePath;
+    }
+
+    const firstTracePath = traceDbPaths[0];
+    return Array.isArray(firstTracePath?.nodePath)
+      ? firstTracePath.nodePath
+      : [];
+  }, [selectedTraceDbPath, traceDbPaths]);
+
+  const executiveSummary = useMemo(() => {
+    const summaryPool = Array.isArray(renderedGraphNodes)
+      ? renderedGraphNodes
+      : [];
+    const visibleWallets = renderedGraphNodes.length;
+    const visibleConnections = renderedGraphLinks.length;
+    const topWallet = summaryPool.length
+      ? summaryPool.reduce((best, holder) =>
+          Number(holder?.value || 0) > Number(best?.value || 0) ? holder : best,
+        )
+      : null;
+    const topWalletShare =
+      currentSupplyBase > 0 && topWallet
+        ? (Number(topWallet.value || 0) / currentSupplyBase) * 100
+        : Number(topWallet?.pct || 0);
+    const topTenTotal = summaryPool
+      .slice()
+      .sort((a, b) => Number(b?.value || 0) - Number(a?.value || 0))
+      .slice(0, 10)
+      .reduce((sum, holder) => sum + Number(holder?.value || 0), 0);
+    const concentrationTop10 =
+      currentSupplyBase > 0 ? (topTenTotal / currentSupplyBase) * 100 : 0;
+
+    return {
+      isFocusedPath: Boolean(selectedTraceDbPathGraph),
+      visibleWallets,
+      visibleConnections,
+      topWalletLabel: topWallet?.shortAddr || topWallet?.label || "N/A",
+      topWalletShare,
+      concentrationTop10,
+    };
+  }, [
+    currentSupplyBase,
+    renderedGraphLinks.length,
+    renderedGraphNodes,
+    selectedTraceDbPathGraph,
+  ]);
+
+  const activeTraceNodeIds =
+    selectedTraceDbPathRender?.nodeIds?.length > 0
+      ? selectedTraceDbPathRender.nodeIds
+      : traceComputation.nodeIds;
+
+  const activeTraceLinkKeys =
+    selectedTraceDbPathRender?.nodeIds?.length > 0
+      ? selectedTraceDbPathRender.linkKeys
+      : traceComputation.linkKeys;
+
+  const activeTraceStatus =
+    selectedTraceDbPathRender?.status ||
+    traceComputation.status ||
+    traceStatusMessage ||
+    "Search current map wallets or paste full wallet addresses to trace across database paths.";
 
   const diagnosticsDetails = useMemo(() => {
     const syncLag =
@@ -5068,8 +5456,97 @@ export default function App() {
   ]);
 
   useEffect(() => {
-    setTraceStatusMessage(traceComputation.status || "");
-  }, [traceComputation.status]);
+    if (!isTraceToolOpen) {
+      setIsTraceDbPathsLoading(false);
+      return undefined;
+    }
+
+    if (
+      !traceFromAddress ||
+      !traceToAddress ||
+      traceFromAddress === traceToAddress
+    ) {
+      setTraceDbPaths([]);
+      setIsTraceDbPathsLoading(false);
+      setSelectedTraceDbPathKey("");
+      return;
+    }
+
+    let isMounted = true;
+    setIsTraceDbPathsLoading(true);
+
+    (async () => {
+      try {
+        const result = await fetchTracePathsFromApi(
+          MAPS_API_BASE_URL,
+          MAPS_API_REQUEST_TIMEOUT_MS,
+          selectedTokenSymbol,
+          traceFromAddress,
+          traceToAddress,
+          {
+            maxHops: 8,
+            limit: 500,
+            stopAtTerminals: traceStopMode === "terminal",
+          },
+        );
+
+        if (!isMounted) return;
+        const items = Array.isArray(result?.items) ? result.items : [];
+        setTraceDbPaths(items);
+        setSelectedTraceDbPathKey((current) => {
+          if (!current) {
+            return "";
+          }
+          return items.some(
+            (item) => (item?.nodePath || []).join("->") === current,
+          )
+            ? current
+            : "";
+        });
+
+        if (items.length) {
+          const shortestHops = Math.min(
+            ...items.map((item) => Number(item?.hopCount) || 0),
+          );
+          setTraceStatusMessage(
+            traceStopMode === "terminal"
+              ? `Database found ${items.length.toLocaleString()} path(s). Shortest path is ${shortestHops} hop(s). Paths end at the destination or at hub/high inbound/high outbound wallets.`
+              : `Database found ${items.length.toLocaleString()} path(s). Shortest path is ${shortestHops} hop(s). Terminal hubs/high inbound/high outbound can be traversed in this mode.`,
+          );
+        } else {
+          setTraceStatusMessage(
+            traceStopMode === "terminal"
+              ? "Database search found no paths under destination-or-terminal stop rules."
+              : "Database search found no paths under pass-through mode.",
+          );
+        }
+      } catch (error) {
+        if (!isMounted) return;
+        setTraceDbPaths([]);
+        setSelectedTraceDbPathKey("");
+        setTraceStatusMessage(
+          error instanceof Error
+            ? `Database path search failed: ${error.message}`
+            : "Database path search failed.",
+        );
+      } finally {
+        if (isMounted) {
+          setIsTraceDbPathsLoading(false);
+        }
+      }
+    })();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [
+    isTraceToolOpen,
+    selectedTokenSymbol,
+    traceSearchNonce,
+    traceStopMode,
+    traceFromAddress,
+    traceToAddress,
+  ]);
 
   useEffect(() => {
     let isMounted = true;
@@ -5472,7 +5949,13 @@ export default function App() {
       {
         id: "trace",
         label: "Open node-to-node trace tool",
-        run: () => setIsTraceToolOpen(true),
+        run: () => {
+          setSearchedRootAddress("");
+          setIsConnectionsView(false);
+          setConnectionsGraphContext(null);
+          setConnectionMinAmount("");
+          setIsTraceToolOpen(true);
+        },
       },
       {
         id: "compare",
@@ -5489,7 +5972,12 @@ export default function App() {
       clearActiveContext,
       handleClearConnections,
       isFocusMode,
+      setConnectionMinAmount,
+      setConnectionsGraphContext,
       setIsFocusMode,
+      setIsConnectionsView,
+      setIsTraceToolOpen,
+      setSearchedRootAddress,
       setActiveHolderTypeFilter,
     ],
   );
@@ -5672,8 +6160,8 @@ export default function App() {
               ? maxModeScopeGraph.links.length
               : overallMaxGraphStats.connections
         }
-        renderedNodeCount={filteredNodes.length}
-        renderedEdgeCount={filteredLinks.length}
+        renderedNodeCount={renderedGraphNodes.length}
+        renderedEdgeCount={renderedGraphLinks.length}
         densityMode={densityMode}
         onDensityModeChange={setDensityMode}
         trustStatus={trustStatus}
@@ -5711,8 +6199,8 @@ export default function App() {
           >
             <span className="app-shell-metric-label">Visible</span>
             <strong>
-              {filteredNodes.length.toLocaleString()} wallets /{" "}
-              {filteredLinks.length.toLocaleString()} links
+              {renderedGraphNodes.length.toLocaleString()} wallets /{" "}
+              {renderedGraphLinks.length.toLocaleString()} links
             </strong>
           </span>
           <span
@@ -5752,7 +6240,18 @@ export default function App() {
             type="button"
             ref={traceToggleButtonRef}
             className={`app-shell-action-btn ${activeTutorialTarget === "trace" ? "tutorial-highlight" : ""}`}
-            onClick={() => setIsTraceToolOpen((open) => !open)}
+            onClick={() =>
+              setIsTraceToolOpen((open) => {
+                const willOpen = !open;
+                if (willOpen) {
+                  setSearchedRootAddress("");
+                  setIsConnectionsView(false);
+                  setConnectionsGraphContext(null);
+                  setConnectionMinAmount("");
+                }
+                return willOpen;
+              })
+            }
             aria-expanded={isTraceToolOpen}
             aria-controls="map-trace-tool"
             aria-label={
@@ -6177,18 +6676,21 @@ export default function App() {
           className={`map-area ${activeTutorialTarget === "map" ? "tutorial-highlight" : ""}`}
         >
           <BubbleMap
-            nodes={filteredNodes}
-            links={filteredLinks}
+            nodes={renderedGraphNodes}
+            links={renderedGraphLinks}
             onNodeClick={setSelectedNode}
             onNodeHover={setHoveredNode}
             selectedNodeId={selectedNode?.id}
             currentSupply={currentSupplyBase}
             colorTheme={colorTheme}
-            preserveUnconnectedNodes={isTokenGraphMaxModeActive}
+            preserveUnconnectedNodes={
+              selectedTraceDbPathGraph ? true : isTokenGraphMaxModeActive
+            }
             physicsMode={physicsMode}
+            layoutMode={selectedTraceDbPathGraph ? "path" : "organic"}
             labelDensityMode={labelDensityMode}
-            traceNodeIds={traceComputation.nodeIds}
-            traceLinkKeys={traceComputation.linkKeys}
+            traceNodeIds={activeTraceNodeIds}
+            traceLinkKeys={activeTraceLinkKeys}
             onReady={(actions) => {
               bubbleMapActionsRef.current = actions;
             }}
@@ -6232,11 +6734,12 @@ export default function App() {
                 {activeTokenInfo.name} ×
               </button>
             ) : null}
-            {traceComputation.nodeIds.length ? (
+            {activeTraceNodeIds.length ? (
               <button
                 type="button"
                 className="map-global-filter-chip"
                 onClick={() => {
+                  setSelectedTraceDbPathKey("");
                   setTraceFromNodeId("");
                   setTraceToNodeId("");
                 }}
@@ -6247,12 +6750,13 @@ export default function App() {
           </div>
           <div className="map-trace-tool-wrap">
             {isTraceToolOpen ? (
-              <div
+              <form
                 ref={traceToolPanelRef}
                 id="map-trace-tool"
                 className="map-trace-tool"
                 role="group"
                 aria-label="Trace path tool"
+                onSubmit={handleTraceToolSubmit}
               >
                 <label>
                   <span>From wallet</span>
@@ -6260,15 +6764,22 @@ export default function App() {
                     type="text"
                     className="map-trace-search"
                     value={traceFromQuery}
-                    onChange={(event) => setTraceFromQuery(event.target.value)}
-                    placeholder="Search label or address"
+                    onChange={(event) => {
+                      setTraceFromQuery(event.target.value);
+                      setSelectedTraceDbPathKey("");
+                      setTraceFromNodeId("");
+                    }}
+                    placeholder="Search current map or paste full address"
                     aria-label="Search source wallet"
                   />
                   <select
                     className="map-trace-select"
                     size={isMobileViewport ? 4 : 6}
                     value={traceFromNodeId}
-                    onChange={(event) => setTraceFromNodeId(event.target.value)}
+                    onChange={(event) => {
+                      setSelectedTraceDbPathKey("");
+                      setTraceFromNodeId(event.target.value);
+                    }}
                     aria-label="Select source wallet"
                   >
                     <option value="">Select</option>
@@ -6280,10 +6791,33 @@ export default function App() {
                       ))
                     ) : (
                       <option value="" disabled>
-                        No wallets match that search
+                        Wallet not found in the current map
                       </option>
                     )}
                   </select>
+                </label>
+                <label>
+                  <span>Path stop mode</span>
+                  <select
+                    className="map-trace-select map-trace-mode-select"
+                    value={traceStopMode}
+                    onChange={(event) => {
+                      setSelectedTraceDbPathKey("");
+                      setTraceStopMode(event.target.value);
+                    }}
+                    aria-label="Trace path stop mode"
+                  >
+                    <option value="terminal">
+                      Stop at hub/high inbound/high outbound
+                    </option>
+                    <option value="through">
+                      Allow passing through terminals
+                    </option>
+                  </select>
+                  <div className="map-trace-option-note">
+                    Optional: choose whether paths terminate at labeled
+                    hubs/high-flow wallets.
+                  </div>
                 </label>
                 <label>
                   <span>To wallet</span>
@@ -6291,15 +6825,22 @@ export default function App() {
                     type="text"
                     className="map-trace-search"
                     value={traceToQuery}
-                    onChange={(event) => setTraceToQuery(event.target.value)}
-                    placeholder="Search label or address"
+                    onChange={(event) => {
+                      setTraceToQuery(event.target.value);
+                      setSelectedTraceDbPathKey("");
+                      setTraceToNodeId("");
+                    }}
+                    placeholder="Search current map or paste full address"
                     aria-label="Search destination wallet"
                   />
                   <select
                     className="map-trace-select"
                     size={isMobileViewport ? 4 : 6}
                     value={traceToNodeId}
-                    onChange={(event) => setTraceToNodeId(event.target.value)}
+                    onChange={(event) => {
+                      setSelectedTraceDbPathKey("");
+                      setTraceToNodeId(event.target.value);
+                    }}
                     aria-label="Select destination wallet"
                   >
                     <option value="">Select</option>
@@ -6311,17 +6852,78 @@ export default function App() {
                       ))
                     ) : (
                       <option value="" disabled>
-                        No wallets match that search
+                        Wallet not found in the current map
                       </option>
                     )}
                   </select>
                 </label>
-                <div className="map-trace-status" aria-live="polite">
-                  {traceComputation.status ||
-                    traceStatusMessage ||
-                    "Search by wallet label or address, then select two wallets to trace."}
+                <div className="map-trace-actions">
+                  <button
+                    type="submit"
+                    className="map-trace-submit"
+                    disabled={!isTraceSearchReady || isTraceDbPathsLoading}
+                  >
+                    {isTraceDbPathsLoading ? "Searching..." : "Search Paths"}
+                  </button>
+                  {traceDbPaths.length ? (
+                    <button
+                      type="button"
+                      className="map-trace-submit map-trace-path-action"
+                      onClick={() =>
+                        handleShowTraceDbPath(primaryTraceDbPathNodePath)
+                      }
+                    >
+                      {selectedTraceDbPathKey ? "Showing Path" : "Show Path"}
+                    </button>
+                  ) : null}
                 </div>
-              </div>
+                <div className="map-trace-status" aria-live="polite">
+                  {Number.isFinite(traceComputation.relevanceScore) ? (
+                    <span className="map-trace-score-badge">
+                      Relevance {traceComputation.relevanceScore}/100
+                    </span>
+                  ) : null}
+                  {isTraceDbPathsLoading ? (
+                    <span className="map-trace-score-badge">
+                      Searching DB paths...
+                    </span>
+                  ) : null}
+                  {activeTraceStatus}
+                </div>
+                {traceDbPaths.length ? (
+                  <div
+                    className="map-trace-path-list"
+                    aria-label="Database trace paths"
+                  >
+                    {traceDbPaths.map((item, index) => {
+                      const nodePath = Array.isArray(item?.nodePath)
+                        ? item.nodePath
+                        : [];
+                      return (
+                        <div
+                          key={`${nodePath.join("->")}-${index}`}
+                          className="map-trace-path-item"
+                        >
+                          <strong>
+                            Path {index + 1} · {Number(item?.hopCount) || 0}{" "}
+                            hop(s)
+                          </strong>
+                          <span>{nodePath.join(" → ")}</span>
+                          <button
+                            type="button"
+                            className="map-trace-submit map-trace-path-action"
+                            onClick={() => handleShowTraceDbPath(nodePath)}
+                          >
+                            {selectedTraceDbPathKey === nodePath.join("->")
+                              ? "Showing Path"
+                              : "Show Path"}
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : null}
+              </form>
             ) : null}
           </div>
           {isMapLoaderVisible ? (
@@ -6471,6 +7073,7 @@ export default function App() {
                 connectionMinAmount={connectionMinAmount}
                 onConnectionMinAmountChange={setConnectionMinAmount}
                 onRefreshConnections={handleResetConnectionMinimum}
+                connectionMinPresets={connectionMinPresets}
                 onOpenTransactions={() => {
                   setIsTransfersModalOpen(true);
                   triggerMotionCue("modal");
@@ -6598,6 +7201,7 @@ export default function App() {
           connectionMinAmount={connectionMinAmount}
           onConnectionMinAmountChange={setConnectionMinAmount}
           onRefreshConnections={handleResetConnectionMinimum}
+          connectionMinPresets={connectionMinPresets}
           isMobileViewport={isMobileViewport}
           colorTheme={colorTheme}
           activeLegendFilter={activeHolderTypeFilter}
@@ -6614,6 +7218,10 @@ export default function App() {
           executiveSummary={executiveSummary}
           mapDataStatus={mapDataStatus}
           onRetryMapLoad={handleRetryGraphLoad}
+          topMoversHorizon={topMoversHorizon}
+          onTopMoversHorizonChange={setTopMoversHorizon}
+          topMoversMode={topMoversMode}
+          onTopMoversModeChange={setTopMoversMode}
         />
       </div>
       <TransactionsModal

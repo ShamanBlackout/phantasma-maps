@@ -25,6 +25,7 @@ function BubbleMap({
   colorTheme,
   preserveUnconnectedNodes = false,
   physicsMode = "balanced",
+  layoutMode = "organic",
   labelDensityMode = "balanced",
   traceNodeIds = [],
   traceLinkKeys = [],
@@ -121,7 +122,10 @@ function BubbleMap({
 
   function buildGraphSignature(nextNodes, nextLinks, theme) {
     const nodeSig = nextNodes
-      .map((n) => `${n.id}:${n.value}:${n.visualValue ?? ""}:${n.type}`)
+      .map(
+        (n) =>
+          `${n.id}:${n.value}:${n.visualValue ?? ""}:${n.type}:${n.tracePathIndex ?? ""}`,
+      )
       .join("|");
     const linkSig = nextLinks
       .map((l) => {
@@ -130,7 +134,7 @@ function BubbleMap({
         return `${src}>${tgt}`;
       })
       .join("|");
-    return `${nodeSig}__${linkSig}__${theme}__${physicsMode}__${labelDensityMode}`;
+    return `${nodeSig}__${linkSig}__${theme}__${physicsMode}__${layoutMode}__${labelDensityMode}`;
   }
 
   // ── Fit all nodes into the current viewport ─────────────────────────────
@@ -271,6 +275,37 @@ function BubbleMap({
     const simLinks = links
       .filter((l) => nodeIndex.has(l.source) && nodeIndex.has(l.target))
       .map((l) => ({ source: l.source, target: l.target }));
+    const isPathLayout =
+      layoutMode === "path" &&
+      simNodes.every((node) => Number.isFinite(Number(node.tracePathIndex)));
+
+    let pathStep = 0;
+    if (isPathLayout) {
+      const horizontalPadding = Math.max(72, width * 0.08);
+      const usableWidth = Math.max(1, width - horizontalPadding * 2);
+      const hopCount = Math.max(1, simNodes.length - 1);
+      const computedPathStep = usableWidth / hopCount;
+      const maxPathStep = Math.max(140, Math.min(240, width * 0.24));
+      pathStep =
+        simNodes.length > 1 ? Math.min(computedPathStep, maxPathStep) : 0;
+      const routeWidth = pathStep * hopCount;
+      const routeStartX = (width - routeWidth) / 2;
+      const laneOffset = Math.max(20, Math.min(52, height * 0.08));
+      const lastPathIndex = Math.max(0, simNodes.length - 1);
+
+      simNodes.forEach((node) => {
+        const pathIndex = Number(node.tracePathIndex) || 0;
+        const desiredX = routeStartX + pathIndex * pathStep;
+        const desiredY =
+          pathIndex === 0 || pathIndex === lastPathIndex
+            ? height / 2
+            : height / 2 + (pathIndex % 2 === 0 ? -laneOffset : laneOffset);
+        node.desiredX = desiredX;
+        node.desiredY = desiredY;
+        node.x = desiredX;
+        node.y = desiredY;
+      });
+    }
     const revealOrderById = new Map(
       [...simNodes]
         .sort((a, b) => getRenderValue(b) - getRenderValue(a))
@@ -278,16 +313,27 @@ function BubbleMap({
     );
 
     // ── Force simulation ──────────────────────────────────────────────────
-    const resolvedPrewarmTicks =
-      physicsMode === "fast"
+    const resolvedPrewarmTicks = isPathLayout
+      ? 140
+      : physicsMode === "fast"
         ? 120
         : physicsMode === "detailed"
           ? 320
           : PREWARM_TICKS;
-    const resolvedChargeMultiplier =
-      physicsMode === "fast" ? 4.3 : physicsMode === "detailed" ? 6.2 : 5.5;
-    const resolvedLinkStrength =
-      physicsMode === "fast" ? 0.2 : physicsMode === "detailed" ? 0.32 : 0.25;
+    const resolvedChargeMultiplier = isPathLayout
+      ? 1.6
+      : physicsMode === "fast"
+        ? 4.3
+        : physicsMode === "detailed"
+          ? 6.2
+          : 5.5;
+    const resolvedLinkStrength = isPathLayout
+      ? 0.95
+      : physicsMode === "fast"
+        ? 0.2
+        : physicsMode === "detailed"
+          ? 0.32
+          : 0.25;
     const resolvedCollisionIterations =
       physicsMode === "fast" ? 1 : physicsMode === "detailed" ? 2 : 1;
 
@@ -300,12 +346,17 @@ function BubbleMap({
         d3
           .forceLink(simLinks)
           .id((d) => d.id)
-          .distance(
-            (l) =>
+          .distance((l) => {
+            if (isPathLayout) {
+              return Math.max(70, pathStep * 0.92);
+            }
+
+            return (
               rScale(getRenderValue(l.source)) +
               rScale(getRenderValue(l.target)) +
-              18,
-          )
+              18
+            );
+          })
           .strength(resolvedLinkStrength),
       )
       .force(
@@ -316,9 +367,22 @@ function BubbleMap({
             (d) => -rScale(getRenderValue(d)) * resolvedChargeMultiplier,
           ),
       )
-      .force("center", d3.forceCenter(width / 2, height / 2))
-      .force("x", d3.forceX(width / 2).strength(0.035))
-      .force("y", d3.forceY(height / 2).strength(0.035))
+      .force(
+        "center",
+        isPathLayout ? null : d3.forceCenter(width / 2, height / 2),
+      )
+      .force(
+        "x",
+        isPathLayout
+          ? d3.forceX((d) => d.desiredX ?? width / 2).strength(0.9)
+          : d3.forceX(width / 2).strength(0.035),
+      )
+      .force(
+        "y",
+        isPathLayout
+          ? d3.forceY((d) => d.desiredY ?? height / 2).strength(0.78)
+          : d3.forceY(height / 2).strength(0.035),
+      )
       .force(
         "collision",
         d3
@@ -657,7 +721,7 @@ function BubbleMap({
       }
       simulation.stop();
     };
-  }, [colorTheme, labelDensityMode, links, nodes, physicsMode]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [colorTheme, labelDensityMode, layoutMode, links, nodes, physicsMode]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Focus effect (selection + hover): update visuals only ───────────────
   useEffect(() => {

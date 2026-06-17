@@ -21,6 +21,7 @@ function SelectedNodeCard({
   connectionMinAmount,
   onConnectionMinAmountChange,
   onRefreshConnections,
+  connectionMinPresets = [],
   onOpenTransactions,
   isTransactionsLoading,
 }) {
@@ -121,9 +122,27 @@ function SelectedNodeCard({
             }
             placeholder="All connections"
           />
+          {Array.isArray(connectionMinPresets) &&
+          connectionMinPresets.length ? (
+            <div
+              className="map-selected-connection-presets"
+              aria-label="Minimum filter presets"
+            >
+              {connectionMinPresets.map((preset) => (
+                <button
+                  key={preset.value}
+                  type="button"
+                  className="map-selected-connection-preset"
+                  onClick={() => onConnectionMinAmountChange?.(preset.value)}
+                >
+                  {preset.label}
+                </button>
+              ))}
+            </div>
+          ) : null}
           <div className="map-selected-connection-filter-hint">
-            Filters by each connected wallet's current balance. Leave blank to
-            show all.
+            Filters by each connected wallet's current balance. Clear the field
+            to show all.
           </div>
         </div>
         {canShowConnections ? (

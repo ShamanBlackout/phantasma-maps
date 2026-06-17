@@ -17,6 +17,10 @@ export function readUrlParams() {
       density: params.get("density") || "",
       txDir: params.get("txdir") || "",
       txCounterparty: params.get("txcp") || "",
+      traceFrom: params.get("tfrom") || "",
+      traceTo: params.get("tto") || "",
+      traceStop: params.get("tstop") || "",
+      tracePath: params.get("tpath") || "",
     };
   } catch {
     return {
@@ -29,6 +33,10 @@ export function readUrlParams() {
       density: "",
       txDir: "",
       txCounterparty: "",
+      traceFrom: "",
+      traceTo: "",
+      traceStop: "",
+      tracePath: "",
     };
   }
 }
@@ -101,6 +109,44 @@ export default function useUrlState(
         params.set("txcp", normalizedTxCounterparty);
       } else {
         params.delete("txcp");
+      }
+
+      const normalizedTraceFrom = String(
+        options?.traceFromAddress || "",
+      ).trim();
+      const normalizedTraceTo = String(options?.traceToAddress || "").trim();
+      const hasTracePair = Boolean(normalizedTraceFrom && normalizedTraceTo);
+
+      if (normalizedTraceFrom) {
+        params.set("tfrom", normalizedTraceFrom);
+      } else {
+        params.delete("tfrom");
+      }
+
+      if (normalizedTraceTo) {
+        params.set("tto", normalizedTraceTo);
+      } else {
+        params.delete("tto");
+      }
+
+      const normalizedTraceStop = String(options?.traceStopMode || "").trim();
+      if (
+        hasTracePair &&
+        (normalizedTraceStop === "terminal" ||
+          normalizedTraceStop === "through")
+      ) {
+        params.set("tstop", normalizedTraceStop);
+      } else {
+        params.delete("tstop");
+      }
+
+      const normalizedTracePath = String(
+        options?.selectedTraceDbPathKey || "",
+      ).trim();
+      if (hasTracePair && normalizedTracePath) {
+        params.set("tpath", normalizedTracePath);
+      } else {
+        params.delete("tpath");
       }
 
       window.history.replaceState(null, "", `?${params.toString()}`);
