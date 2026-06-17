@@ -82,6 +82,24 @@ export function createConnectionsEndpoint(baseUrl, address, tokenSymbol) {
   return `${normalizeBase(baseUrl)}/connections/address/${encodeURIComponent(address)}?${params.toString()}`;
 }
 
+export function createTracePathsEndpoint(
+  baseUrl,
+  tokenSymbol,
+  fromAddress,
+  toAddress,
+  { maxHops = 5, limit = 20, stopAtTerminals = true } = {},
+) {
+  const params = new URLSearchParams({
+    token: String(tokenSymbol || "").trim(),
+    from: String(fromAddress || "").trim(),
+    to: String(toAddress || "").trim(),
+    maxHops: String(maxHops),
+    limit: String(limit),
+    stopAtTerminals: stopAtTerminals ? "true" : "false",
+  });
+  return `${normalizeBase(baseUrl)}/trace/paths?${params.toString()}`;
+}
+
 export function createTransactionsEndpoint(
   baseUrl,
   address,
@@ -317,6 +335,62 @@ export async function fetchConnectionsForAddress(
   }
 
   return {
+    items: Array.isArray(result.payload?.items) ? result.payload.items : [],
+  };
+}
+
+export async function fetchTracePaths(
+  baseUrl,
+  timeoutMs,
+  tokenSymbol,
+  fromAddress,
+  toAddress,
+  options = {},
+) {
+  const normalizedFrom = String(fromAddress || "").trim();
+  const normalizedTo = String(toAddress || "").trim();
+  const normalizedToken = String(tokenSymbol || "").trim();
+
+  if (!normalizedToken || !normalizedFrom || !normalizedTo) {
+    return {
+      tokenSymbol: normalizedToken,
+      fromAddress: normalizedFrom,
+      toAddress: normalizedTo,
+      maxHops: Number(options?.maxHops) || 5,
+      limit: Number(options?.limit) || 20,
+      stopAtTerminals: options?.stopAtTerminals !== false,
+      totalPaths: 0,
+      items: [],
+    };
+  }
+
+  const endpoint = createTracePathsEndpoint(
+    baseUrl,
+    normalizedToken,
+    normalizedFrom,
+    normalizedTo,
+    options,
+  );
+  const result = await fetchJsonWithTimeout(endpoint, {}, timeoutMs);
+
+  if (!result.ok) {
+    throw buildApiError(
+      `Trace path request failed (HTTP ${result.status})`,
+      result,
+    );
+  }
+
+  return {
+    tokenSymbol: String(result.payload?.tokenSymbol || normalizedToken),
+    fromAddress: String(result.payload?.fromAddress || normalizedFrom),
+    toAddress: String(result.payload?.toAddress || normalizedTo),
+    maxHops: Number(result.payload?.maxHops || options?.maxHops || 5),
+    limit: Number(result.payload?.limit || options?.limit || 20),
+    stopAtTerminals:
+      result.payload?.stopAtTerminals !== undefined
+        ? Boolean(result.payload.stopAtTerminals)
+        : options?.stopAtTerminals !== false,
+    totalPaths: Number(result.payload?.totalPaths || 0),
     items: Array.isArray(result.payload?.items) ? result.payload.items : [],
   };
 }

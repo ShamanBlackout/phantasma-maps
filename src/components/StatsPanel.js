@@ -19,6 +19,21 @@ function formatTrendDelta(value, digits = 0, suffix = "") {
   return `${prefix}${numeric.toFixed(digits)}${suffix}`;
 }
 
+function formatTopMoverDeltaPct(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return "N/A";
+  }
+
+  const absValue = Math.abs(numeric);
+  if (absValue > 0 && absValue < 0.01) {
+    return numeric < 0 ? "-<0.01%" : "<0.01%";
+  }
+
+  const prefix = numeric > 0 ? "+" : "";
+  return `${prefix}${numeric.toFixed(2)}%`;
+}
+
 function shortenAddress(address) {
   const value = String(address || "").trim();
   if (!value) return "N/A";
@@ -49,6 +64,7 @@ export default function StatsPanel({
   connectionMinAmount,
   onConnectionMinAmountChange,
   onRefreshConnections,
+  connectionMinPresets = [],
   isMobileViewport,
   colorTheme,
   activeLegendFilter,
@@ -59,6 +75,10 @@ export default function StatsPanel({
   executiveSummary,
   mapDataStatus,
   onRetryMapLoad,
+  topMoversHorizon = "7d",
+  onTopMoversHorizonChange,
+  topMoversMode = "net",
+  onTopMoversModeChange,
 }) {
   const holderPalette = getHolderPalette(colorTheme);
   const allHolders = Array.isArray(summaryHolders) ? summaryHolders : holders;
@@ -248,9 +268,15 @@ export default function StatsPanel({
           >
             <div className="stats-card-head">
               <div>
-                <div className="stats-card-kicker">Executive snapshot</div>
+                <div className="stats-card-kicker">
+                  {executiveSummary?.isFocusedPath
+                    ? "Focused path snapshot"
+                    : "Executive snapshot"}
+                </div>
                 <div className="stats-card-summary">
-                  Immediate signal quality and concentration metrics
+                  {executiveSummary?.isFocusedPath
+                    ? "Route-level visibility and concentration across the selected path"
+                    : "Immediate signal quality and concentration metrics"}
                 </div>
               </div>
             </div>
@@ -298,9 +324,17 @@ export default function StatsPanel({
             </div>
             <div
               className="stats-token-row"
-              title="Largest wallet currently visible in this graph context"
+              title={
+                executiveSummary?.isFocusedPath
+                  ? "Largest wallet currently visible on the selected path"
+                  : "Largest wallet currently visible in this graph context"
+              }
             >
-              <span className="stats-label">Largest visible wallet</span>
+              <span className="stats-label">
+                {executiveSummary?.isFocusedPath
+                  ? "Largest path wallet"
+                  : "Largest visible wallet"}
+              </span>
               <span className="stats-value">
                 {executiveSummary?.topWalletLabel || "N/A"}
               </span>
@@ -407,41 +441,140 @@ export default function StatsPanel({
           <div
             className="stats-card stats-analytics-card"
             style={{ display: isLoading ? "none" : "block" }}
-            title="Largest holder balance changes over the last seven days"
+            title="Largest holder balance changes over time"
           >
             <div className="stats-card-head">
               <div>
-                <div className="stats-card-kicker">Top movers (7d)</div>
+                <div className="stats-card-kicker">Top movers</div>
                 <div className="stats-card-summary">
                   Addresses with the biggest balance changes
                 </div>
               </div>
             </div>
+
+            {/* Horizon Tabs (24h/7d/30d) */}
+            <div className="stats-top-movers-controls">
+              <div className="stats-horizon-tabs">
+                {["24h", "7d", "30d"].map((horizon) => (
+                  <button
+                    key={horizon}
+                    className={`stats-tab ${topMoversHorizon === horizon ? "is-active" : ""}`}
+                    onClick={() => onTopMoversHorizonChange?.(horizon)}
+                    title={`View top movers from last ${horizon}`}
+                  >
+                    {horizon}
+                  </button>
+                ))}
+              </div>
+
+              {/* Mode Filter Buttons (Net/Inflows/Outflows) */}
+              <div className="stats-mode-filters">
+                <button
+                  className={`stats-mode-btn ${topMoversMode === "net" ? "is-active" : ""}`}
+                  onClick={() => onTopMoversModeChange?.("net")}
+                  title="Show all movements (net change)"
+                >
+                  Net
+                </button>
+                <button
+                  className={`stats-mode-btn ${topMoversMode === "inflows" ? "is-active" : ""}`}
+                  onClick={() => onTopMoversModeChange?.("inflows")}
+                  title="Show incoming tokens only"
+                >
+                  ↓ In
+                </button>
+                <button
+                  className={`stats-mode-btn ${topMoversMode === "outflows" ? "is-active" : ""}`}
+                  onClick={() => onTopMoversModeChange?.("outflows")}
+                  title="Show outgoing tokens only"
+                >
+                  ↑ Out
+                </button>
+              </div>
+            </div>
+
             {topMoversLoading ? (
               <div className="stats-analytics-empty">Loading top movers...</div>
             ) : resolvedTopMovers.length ? (
-              <div className="holders-list">
+              <div className="holders-list stats-top-movers-list">
                 {resolvedTopMovers.map((mover, index) => {
                   const deltaBalance = Number(mover?.deltaBalance || 0);
-                  const deltaPct = Number(mover?.deltaPct || 0);
+                  const deltaPctLabel = formatTopMoverDeltaPct(mover?.deltaPct);
                   const moverAddress = String(mover?.address || "").trim();
+                  const label = String(mover?.label || "").trim();
+                  const previousBalance = Number(mover?.previousBalance || 0);
+                  const latestBalance = Number(mover?.latestBalance || 0);
+
                   return (
                     <div
-                      key={`${String(mover?.address || "")}::${index}`}
-                      className="holder-row"
-                      onClick={() => handleTopMoverClick(moverAddress)}
-                      title="Open connections view for this address"
+                      key={`${moverAddress}::${index}`}
+                      className="holder-row stats-top-mover-row"
                     >
-                      <span className="holder-rank">#{index + 1}</span>
-                      <span className="holder-addr">
-                        {shortenAddress(mover?.address)}
-                      </span>
-                      <span
-                        className={`holder-pct ${deltaBalance > 0 ? "stats-analytics-delta is-positive" : deltaBalance < 0 ? "stats-analytics-delta is-negative" : "stats-analytics-delta is-neutral"}`}
-                      >
-                        {formatTrendDelta(deltaBalance, 2)} (
-                        {formatTrendDelta(deltaPct, 2, "%")})
-                      </span>
+                      <div className="stats-mover-left">
+                        <span className="holder-rank">#{index + 1}</span>
+                        <div className="stats-addr-col">
+                          <span className="holder-addr" title={moverAddress}>
+                            {shortenAddress(mover?.address)}
+                          </span>
+                          {label && (
+                            <span className="stats-addr-label" title={label}>
+                              {label}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="stats-mover-middle">
+                        {/* Mini Sparkline - Simple bar to show trend */}
+                        <div
+                          className="stats-mini-sparkline"
+                          title={`Changed from ${fmt(previousBalance)} to ${fmt(latestBalance)}`}
+                        >
+                          <div
+                            className={`sparkline-bar ${deltaBalance > 0 ? "is-positive" : deltaBalance < 0 ? "is-negative" : "is-neutral"}`}
+                            style={{
+                              width: `${Math.min(100, Math.abs(deltaBalance) > 0 ? 30 : 5)}%`,
+                            }}
+                          />
+                        </div>
+
+                        {/* Delta Amount & Percentage */}
+                        <div
+                          className={`stats-delta-stack ${deltaBalance > 0 ? "stats-analytics-delta is-positive" : deltaBalance < 0 ? "stats-analytics-delta is-negative" : "stats-analytics-delta is-neutral"}`}
+                          title={`Previous balance: ${fmt(previousBalance)}`}
+                        >
+                          <span className="stats-delta-amount">
+                            {formatTrendDelta(deltaBalance, 2)}
+                          </span>
+                          <span className="stats-delta-pct">
+                            {deltaPctLabel}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="stats-mover-right">
+                        {/* Action: Open Connections + Copy Share Link - shown on hover */}
+                        <div className="stats-mover-actions">
+                          <button
+                            className="stats-action-btn stats-action-connections"
+                            onClick={() => handleTopMoverClick(moverAddress)}
+                            title="Open connections view for this address"
+                          >
+                            Connect
+                          </button>
+                          <button
+                            className="stats-action-btn stats-action-copy-link"
+                            onClick={() => {
+                              const url = `${window.location.origin}${window.location.pathname}?token=${selectedTokenSymbol}&view=connections&address=${encodeURIComponent(moverAddress)}&node=${encodeURIComponent(moverAddress)}`;
+                              navigator.clipboard.writeText(url);
+                              onCopyAddress?.(moverAddress);
+                            }}
+                            title="Copy shareable link for this mover"
+                          >
+                            Copy
+                          </button>
+                        </div>
+                      </div>
                     </div>
                   );
                 })}
@@ -495,9 +628,29 @@ export default function StatsPanel({
                     }
                     placeholder="All connections"
                   />
+                  {Array.isArray(connectionMinPresets) &&
+                  connectionMinPresets.length ? (
+                    <div
+                      className="map-selected-connection-presets"
+                      aria-label="Minimum filter presets"
+                    >
+                      {connectionMinPresets.map((preset) => (
+                        <button
+                          key={preset.value}
+                          type="button"
+                          className="map-selected-connection-preset"
+                          onClick={() =>
+                            onConnectionMinAmountChange?.(preset.value)
+                          }
+                        >
+                          {preset.label}
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
                   <div className="map-selected-connection-filter-hint">
-                    Filters by each connected wallet's current balance. Leave
-                    blank to show all.
+                    Filters by each connected wallet's current balance. Clear
+                    the field to show all.
                   </div>
                 </div>
               ) : null}
