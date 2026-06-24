@@ -2360,6 +2360,9 @@ export default function App() {
               const parsedDeltaBalance = Number(
                 item?.deltaBalance ?? item?.delta_balance ?? 0,
               );
+              const parsedDeltaPct = Number(
+                item?.deltaPct ?? item?.delta_pct ?? 0,
+              );
               const latestBalance = Number.isFinite(parsedLatestBalance)
                 ? parsedLatestBalance
                 : 0;
@@ -2369,12 +2372,8 @@ export default function App() {
               const deltaBalance = Number.isFinite(parsedDeltaBalance)
                 ? parsedDeltaBalance
                 : 0;
-              const hasValidBaseline = latestBalance > 0;
-              const rawDeltaPct = hasValidBaseline
-                ? (deltaBalance / latestBalance) * 100
-                : null;
-              const deltaPct = Number.isFinite(rawDeltaPct)
-                ? Math.max(rawDeltaPct, -100)
+              const deltaPct = Number.isFinite(parsedDeltaPct)
+                ? parsedDeltaPct
                 : null;
 
               return {
