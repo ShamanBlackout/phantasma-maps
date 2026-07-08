@@ -24,6 +24,7 @@ function SelectedNodeCard({
   connectionMinPresets = [],
   onOpenTransactions,
   isTransactionsLoading,
+  isActivityLoading,
 }) {
   const hasMinimumConnectionBalance = Number(connectionMinAmount) > 0;
 
@@ -98,10 +99,37 @@ function SelectedNodeCard({
         This wallet is shown in the context of the active token graph and
         current view filters.
       </div>
+      {isActivityLoading && sparklineData.length < 2 ? (
+        <div className="map-selected-sparkline is-loading">
+          <div className="map-selected-sparkline-header">
+            <span>Activity (30d)</span>
+          </div>
+          <div className="map-selected-sparkline-loading-note">
+            Loading activity timeline...
+          </div>
+        </div>
+      ) : null}
       {sparklineData.length >= 2 && (
         <div className="map-selected-sparkline">
-          <span>Activity (30d)</span>
-          <SparklineSvg data={sparklineData} height={36} />
+          <div className="map-selected-sparkline-header">
+            <span>Activity (30d)</span>
+          </div>
+          <div className="map-selected-sparkline-metrics">
+            <div className="map-selected-sparkline-metric">
+              <span>Total txs</span>
+              <strong>
+                {sparklineData.reduce(
+                  (sum, day) => sum + (day.txCount || 0),
+                  0,
+                )}
+              </strong>
+            </div>
+            <div className="map-selected-sparkline-metric">
+              <span>Active days</span>
+              <strong>{sparklineData.length}</strong>
+            </div>
+          </div>
+          <SparklineSvg data={sparklineData} height={52} />
         </div>
       )}
       <div className="selected-node-actions">

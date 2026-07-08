@@ -1848,6 +1848,8 @@
 .holders-list,
 .app-shell-views-list,
 .command-palette-list,
+.map-trace-legend-list,
+.map-trace-path-list,
 .map-trace-tool,
 .map-trace-select {
   scrollbar-width: thin;
@@ -1862,6 +1864,8 @@
 .holders-list::-webkit-scrollbar,
 .app-shell-views-list::-webkit-scrollbar,
 .command-palette-list::-webkit-scrollbar,
+.map-trace-legend-list::-webkit-scrollbar,
+.map-trace-path-list::-webkit-scrollbar,
 .map-trace-tool::-webkit-scrollbar,
 .map-trace-select::-webkit-scrollbar {
   width: 12px;
@@ -1876,6 +1880,8 @@
 .holders-list::-webkit-scrollbar-track,
 .app-shell-views-list::-webkit-scrollbar-track,
 .command-palette-list::-webkit-scrollbar-track,
+.map-trace-legend-list::-webkit-scrollbar-track,
+.map-trace-path-list::-webkit-scrollbar-track,
 .map-trace-tool::-webkit-scrollbar-track,
 .map-trace-select::-webkit-scrollbar-track {
   background: var(--ui-scroll-track);
@@ -1890,6 +1896,8 @@
 .holders-list::-webkit-scrollbar-thumb,
 .app-shell-views-list::-webkit-scrollbar-thumb,
 .command-palette-list::-webkit-scrollbar-thumb,
+.map-trace-legend-list::-webkit-scrollbar-thumb,
+.map-trace-path-list::-webkit-scrollbar-thumb,
 .map-trace-tool::-webkit-scrollbar-thumb,
 .map-trace-select::-webkit-scrollbar-thumb {
   background: linear-gradient(
@@ -1909,6 +1917,8 @@
 .holders-list::-webkit-scrollbar-thumb:hover,
 .app-shell-views-list::-webkit-scrollbar-thumb:hover,
 .command-palette-list::-webkit-scrollbar-thumb:hover,
+.map-trace-legend-list::-webkit-scrollbar-thumb:hover,
+.map-trace-path-list::-webkit-scrollbar-thumb:hover,
 .map-trace-tool::-webkit-scrollbar-thumb:hover,
 .map-trace-select::-webkit-scrollbar-thumb:hover {
   background: linear-gradient(
@@ -2480,7 +2490,87 @@
   position: absolute;
   right: 12px;
   top: 74px;
-  z-index: 12;
+  z-index: 40;
+}
+
+.map-trace-legend {
+  position: fixed;
+  z-index: 40;
+  width: min(360px, calc(100vw - 24px));
+  max-width: calc(100vw - 24px);
+  border-radius: 10px;
+  border: 1px solid rgba(var(--accent-rgb), 0.26);
+  background: rgba(8, 12, 24, 0.9);
+  box-shadow: 0 14px 28px rgba(0, 0, 0, 0.3);
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  will-change: transform;
+}
+
+.map-trace-legend-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  cursor: move;
+  touch-action: none;
+  user-select: none;
+}
+
+.map-trace-legend-header-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.map-trace-legend-header strong {
+  color: #f1f7ff;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.map-trace-legend-list {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 6px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.map-trace-legend.is-minimized {
+  width: min(280px, calc(100vw - 24px));
+}
+
+.map-trace-legend.is-minimized .map-trace-legend-header {
+  cursor: move;
+}
+
+.map-trace-legend.is-minimized .map-trace-legend-list {
+  display: none;
+}
+
+.map-trace-legend-item {
+  min-height: 28px;
+  border-radius: 7px;
+  border: 1px solid rgba(var(--accent-rgb), 0.24);
+  background: rgba(255, 255, 255, 0.04);
+  color: rgba(173, 201, 230, 0.92);
+  font: inherit;
+  font-size: 11px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 8px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.map-trace-legend-item:hover {
+  border-color: rgba(var(--accent-rgb), 0.4);
+  background: rgba(var(--accent-rgb), 0.12);
 }
 
 .map-trace-toggle {
@@ -2494,7 +2584,9 @@
 }
 
 .map-trace-tool {
-  margin-top: 8px;
+  position: fixed;
+  right: 304px;
+  top: 268px;
   width: min(360px, calc(100vw - 24px));
   max-height: min(52vh, 420px);
   border-radius: 10px;
@@ -2506,6 +2598,47 @@
   flex-direction: column;
   gap: 8px;
   overflow-y: auto;
+  z-index: 40;
+  will-change: transform;
+}
+
+.map-trace-tool-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  touch-action: auto;
+  user-select: none;
+}
+
+.map-trace-tool-header-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  cursor: default;
+  touch-action: auto;
+}
+
+.map-trace-tool-header strong {
+  color: #f1f7ff;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.map-trace-tool-header-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.map-trace-tool.is-minimized {
+  width: min(280px, calc(100vw - 24px));
+  max-height: none;
+  overflow: visible;
+}
+
+.map-trace-tool.is-minimized .map-trace-tool-body {
+  display: none;
 }
 
 .map-trace-tool label {
@@ -2958,10 +3091,39 @@
 }
 
 .map-trace-path-item strong {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   color: #f1f7ff;
   font-size: 10px;
   letter-spacing: 0.04em;
   text-transform: uppercase;
+}
+
+.map-trace-path-swatch {
+  width: 9px;
+  height: 9px;
+  border-radius: 999px;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.2);
+  flex: 0 0 auto;
+}
+
+.map-trace-path-swatch-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border: 0;
+  padding: 0;
+  border-radius: 999px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.map-trace-path-swatch-button:focus-visible {
+  outline: 2px solid rgba(var(--accent-rgb), 0.6);
+  outline-offset: 1px;
 }
 
 .map-trace-path-item span {
@@ -2974,6 +3136,52 @@
 .map-trace-path-action {
   align-self: flex-start;
   margin-top: 4px;
+}
+
+/* Force trace list scrollbars to use app-themed styling over OS defaults. */
+.app-root .map-trace-legend-list,
+.app-root .map-trace-path-list {
+  scrollbar-width: thin;
+  scrollbar-color: var(--ui-scroll-thumb-start) var(--ui-scroll-track);
+  scrollbar-gutter: stable;
+}
+
+.app-root .map-trace-legend-list::-webkit-scrollbar,
+.app-root .map-trace-path-list::-webkit-scrollbar {
+  width: 12px;
+}
+
+.app-root .map-trace-legend-list::-webkit-scrollbar-track,
+.app-root .map-trace-path-list::-webkit-scrollbar-track {
+  background: var(--ui-scroll-track);
+  border-radius: 999px;
+}
+
+.app-root .map-trace-legend-list::-webkit-scrollbar-thumb,
+.app-root .map-trace-path-list::-webkit-scrollbar-thumb {
+  background: linear-gradient(
+    180deg,
+    var(--ui-scroll-thumb-start),
+    var(--ui-scroll-thumb-end)
+  );
+  border: 2px solid var(--ui-scroll-thumb-border);
+  border-radius: 999px;
+}
+
+.app-root .map-trace-legend-list::-webkit-scrollbar-thumb:hover,
+.app-root .map-trace-path-list::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(
+    180deg,
+    var(--ui-scroll-thumb-start-hover),
+    var(--ui-scroll-thumb-end-hover)
+  );
+}
+
+.app-root .map-trace-legend-list::-webkit-scrollbar-button,
+.app-root .map-trace-path-list::-webkit-scrollbar-button {
+  width: 0;
+  height: 0;
+  display: none;
 }
 
 .map-trace-search,
@@ -3087,6 +3295,35 @@
   color: rgba(108, 87, 64, 0.88);
 }
 
+.app-root.theme-light .map-trace-legend {
+  border-color: rgba(183, 151, 108, 0.34);
+  background: rgba(253, 248, 241, 0.96);
+  box-shadow:
+    0 16px 30px rgba(132, 110, 78, 0.2),
+    inset 0 1px 0 rgba(255, 255, 255, 0.78);
+}
+
+.app-root.theme-light .map-trace-legend-header strong {
+  color: #5a4330;
+}
+
+.app-root.theme-light .map-trace-legend-item {
+  border-color: rgba(183, 151, 108, 0.26);
+  background: rgba(255, 252, 246, 0.78);
+  color: rgba(108, 87, 64, 0.9);
+}
+
+.app-root.theme-light .map-trace-legend-item:hover {
+  border-color: rgba(183, 151, 108, 0.42);
+  background: rgba(183, 151, 108, 0.15);
+}
+
+.app-root.theme-light .map-trace-toggle {
+  border-color: rgba(183, 151, 108, 0.36);
+  background: rgba(253, 248, 241, 0.94);
+  color: #5a4330;
+}
+
 .app-root.theme-light .map-trace-search::placeholder {
   color: rgba(108, 87, 64, 0.62);
 }
@@ -3135,13 +3372,11 @@
 }
 
 .bubble-node.is-trace-node .bubble-circle {
-  stroke: #ffd36b !important;
   stroke-width: 3px !important;
   fill-opacity: 0.92 !important;
 }
 
 .bubble-link.is-trace-link {
-  stroke: #ffcc64 !important;
   stroke-width: 2.6px !important;
 }
 
