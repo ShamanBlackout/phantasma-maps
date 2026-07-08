@@ -14,6 +14,11 @@ const GRAPH_REVEAL_ITEM_STAGGER_MS = 14;
 const GRAPH_REVEAL_LINK_DURATION_MS = 240;
 const GRAPH_REVEAL_NODE_DURATION_MS = 260;
 const GRAPH_REVEAL_LABEL_DURATION_MS = 180;
+const PATH_LAYOUT_MIN_STEP = 96;
+const PATH_LAYOUT_MAX_STEP = 210;
+const PATH_LAYOUT_MIN_LANE_SPACING = 22;
+const PATH_LAYOUT_MAX_LANE_SPACING = 62;
+const PATH_LAYOUT_VERTICAL_PADDING = 30;
 
 function BubbleMap({
   nodes,
@@ -29,6 +34,7 @@ function BubbleMap({
   labelDensityMode = "balanced",
   traceNodeIds = [],
   traceLinkKeys = [],
+  tracePathHighlights = [],
   onReady,
 }) {
   const holderPalette = getHolderPalette(colorTheme);
@@ -281,25 +287,67 @@ function BubbleMap({
 
     let pathStep = 0;
     if (isPathLayout) {
-      const horizontalPadding = Math.max(72, width * 0.08);
+      const maxTracePathIndex = d3.max(simNodes, (node) =>
+        Number.isFinite(Number(node.tracePathIndex))
+          ? Number(node.tracePathIndex)
+          : 0,
+      );
+      const hopCount = Math.max(1, Number(maxTracePathIndex) || 1);
+      const horizontalPadding = Math.max(56, width * 0.06);
       const usableWidth = Math.max(1, width - horizontalPadding * 2);
-      const hopCount = Math.max(1, simNodes.length - 1);
       const computedPathStep = usableWidth / hopCount;
-      const maxPathStep = Math.max(140, Math.min(240, width * 0.24));
+      const maxPathStep = Math.max(
+        PATH_LAYOUT_MIN_STEP,
+        Math.min(PATH_LAYOUT_MAX_STEP, width * 0.2),
+      );
       pathStep =
-        simNodes.length > 1 ? Math.min(computedPathStep, maxPathStep) : 0;
+        simNodes.length > 1
+          ? Math.max(
+              PATH_LAYOUT_MIN_STEP,
+              Math.min(computedPathStep, maxPathStep),
+            )
+          : 0;
       const routeWidth = pathStep * hopCount;
       const routeStartX = (width - routeWidth) / 2;
-      const laneOffset = Math.max(20, Math.min(52, height * 0.08));
-      const lastPathIndex = Math.max(0, simNodes.length - 1);
+
+      const laneValues = simNodes
+        .map((node) => Number(node.tracePathLane))
+        .filter((lane) => Number.isFinite(lane));
+      const minLane = laneValues.length ? Math.min(...laneValues) : 0;
+      const maxLane = laneValues.length ? Math.max(...laneValues) : 0;
+      const laneSpan = Math.max(1, maxLane - minLane + 1);
+      const laneMidpoint = minLane + (maxLane - minLane) / 2;
+      const laneUsableHeight = Math.max(
+        1,
+        height - PATH_LAYOUT_VERTICAL_PADDING * 2,
+      );
+      const laneSpacing = Math.max(
+        PATH_LAYOUT_MIN_LANE_SPACING,
+        Math.min(
+          PATH_LAYOUT_MAX_LANE_SPACING,
+          laneUsableHeight / Math.max(1, laneSpan - 1),
+        ),
+      );
+      const lastPathIndex = Math.max(0, hopCount);
 
       simNodes.forEach((node) => {
         const pathIndex = Number(node.tracePathIndex) || 0;
+        const laneCandidates = Array.isArray(node.tracePathLanes)
+          ? node.tracePathLanes
+              .map((lane) => Number(lane))
+              .filter((lane) => Number.isFinite(lane))
+          : [];
+        const laneAnchor = laneCandidates.length
+          ? laneCandidates.reduce((sum, lane) => sum + lane, 0) /
+            laneCandidates.length
+          : Number.isFinite(Number(node.tracePathLane))
+            ? Number(node.tracePathLane)
+            : 0;
         const desiredX = routeStartX + pathIndex * pathStep;
         const desiredY =
           pathIndex === 0 || pathIndex === lastPathIndex
             ? height / 2
-            : height / 2 + (pathIndex % 2 === 0 ? -laneOffset : laneOffset);
+            : height / 2 + (laneAnchor - laneMidpoint) * laneSpacing;
         node.desiredX = desiredX;
         node.desiredY = desiredY;
         node.x = desiredX;
@@ -321,7 +369,7 @@ function BubbleMap({
           ? 320
           : PREWARM_TICKS;
     const resolvedChargeMultiplier = isPathLayout
-      ? 1.6
+      ? 0.25
       : physicsMode === "fast"
         ? 4.3
         : physicsMode === "detailed"
@@ -348,7 +396,7 @@ function BubbleMap({
           .id((d) => d.id)
           .distance((l) => {
             if (isPathLayout) {
-              return Math.max(70, pathStep * 0.92);
+              return Math.max(54, pathStep * 0.8);
             }
 
             return (
@@ -473,8 +521,61 @@ function BubbleMap({
         } else {
           onNodeClick && onNodeClick(d);
         }
-      })
-      .call(
+      });
+    if (isPathLayout) {
+      const handlePathNodePointerDown = (event, d) => {
+        if (event.button !== 0) return;
+        event.preventDefault();
+        event.stopPropagation();
+
+        const svgNode = svg.node();
+        if (!svgNode) return;
+
+        let active = true;
+
+        const applyDragPosition = (moveEvent) => {
+          if (!active) return;
+          const [x, y] = d3.pointer(moveEvent, svgNode);
+          d.fx = x;
+          d.fy = y;
+          d.x = x;
+          d.y = y;
+          nodeSel.attr(
+            "transform",
+            (node) => `translate(${node.x ?? 0},${node.y ?? 0})`,
+          );
+          linkSel
+            .attr("x1", (link) => link.source.x)
+            .attr("y1", (link) => link.source.y)
+            .attr("x2", (link) => link.target.x)
+            .attr("y2", (link) => link.target.y);
+          simulation.alphaTarget(0.18).restart();
+        };
+
+        const handlePointerUp = () => {
+          if (!active) return;
+          active = false;
+          window.removeEventListener("pointermove", applyDragPosition);
+          window.removeEventListener("pointerup", handlePointerUp);
+          window.removeEventListener("pointercancel", handlePointerUp);
+          d.fx = d.x;
+          d.fy = d.y;
+          if (!simulation.alphaTarget()) {
+            simulation.alphaTarget(0);
+          }
+        };
+
+        window.addEventListener("pointermove", applyDragPosition);
+        window.addEventListener("pointerup", handlePointerUp);
+        window.addEventListener("pointercancel", handlePointerUp);
+        applyDragPosition(event);
+      };
+
+      nodeSel
+        .on("mousedown.drag", null)
+        .on("pointerdown", handlePathNodePointerDown);
+    } else {
+      nodeSel.on("pointerdown", null).call(
         d3
           .drag()
           .on("start", (event, d) => {
@@ -493,6 +594,7 @@ function BubbleMap({
             d.fy = null;
           }),
       );
+    }
 
     // Outer glow ring
     nodeSel
@@ -821,6 +923,9 @@ function BubbleMap({
   useEffect(() => {
     if (!svgRef.current) return;
     const svg = d3.select(svgRef.current);
+    const highlightItems = Array.isArray(tracePathHighlights)
+      ? tracePathHighlights
+      : [];
     const traceNodeSet = new Set(
       (Array.isArray(traceNodeIds) ? traceNodeIds : []).map((id) =>
         String(id || "").trim(),
@@ -831,32 +936,143 @@ function BubbleMap({
         String(key || "").trim(),
       ),
     );
-    const hasTrace = traceNodeSet.size > 0;
+    const traceNodeColorMap = new Map();
+    const traceLinkColorMap = new Map();
+
+    highlightItems.forEach((item) => {
+      const color = String(item?.color || "").trim();
+      if (!color) {
+        return;
+      }
+
+      const itemNodeIds = Array.isArray(item?.nodeIds) ? item.nodeIds : [];
+      itemNodeIds.forEach((nodeId) => {
+        const normalizedNodeId = String(nodeId || "").trim();
+        if (!normalizedNodeId || traceNodeColorMap.has(normalizedNodeId)) {
+          return;
+        }
+        traceNodeColorMap.set(normalizedNodeId, color);
+      });
+
+      const itemLinkKeys = Array.isArray(item?.linkKeys) ? item.linkKeys : [];
+      itemLinkKeys.forEach((linkKey) => {
+        const normalizedLinkKey = String(linkKey || "").trim();
+        if (!normalizedLinkKey || traceLinkColorMap.has(normalizedLinkKey)) {
+          return;
+        }
+        traceLinkColorMap.set(normalizedLinkKey, color);
+      });
+    });
+
+    const hasTrace =
+      traceNodeSet.size > 0 ||
+      traceLinkSet.size > 0 ||
+      traceNodeColorMap.size > 0 ||
+      traceLinkColorMap.size > 0;
 
     svg.selectAll(".bubble-node").classed("is-trace-node", (d) => {
       const nodeId = String(d?.id || "").trim();
-      return hasTrace && traceNodeSet.has(nodeId);
+      return (
+        hasTrace && (traceNodeSet.has(nodeId) || traceNodeColorMap.has(nodeId))
+      );
     });
 
     svg.selectAll(".bubble-node").attr("opacity", (d) => {
       if (!hasTrace) return null;
       const nodeId = String(d?.id || "").trim();
-      return traceNodeSet.has(nodeId) ? 1 : 0.24;
+      return traceNodeSet.has(nodeId) || traceNodeColorMap.has(nodeId)
+        ? 1
+        : 0.24;
+    });
+
+    svg.selectAll(".bubble-circle").attr("stroke", (d) => {
+      const nodeId = String(d?.id || "").trim();
+      const traceColor = traceNodeColorMap.get(nodeId);
+
+      if (hasTrace && traceColor) {
+        return traceColor;
+      }
+
+      return d.isSearchRoot ? "#fff3bf" : holderPalette[d.type] || "#74b9ff";
+    });
+
+    svg.selectAll(".bubble-circle").attr("stroke-width", (d) => {
+      const nodeId = String(d?.id || "").trim();
+      const baseStrokeWidth = d.isSearchRoot ? 3.2 : 1.5;
+
+      if (
+        hasTrace &&
+        (traceNodeSet.has(nodeId) || traceNodeColorMap.has(nodeId))
+      ) {
+        return Math.max(baseStrokeWidth, 2.8);
+      }
+
+      return baseStrokeWidth;
     });
 
     svg.selectAll(".bubble-link").classed("is-trace-link", (d) => {
       const source = String(d?.source?.id ?? d?.source ?? "").trim();
       const target = String(d?.target?.id ?? d?.target ?? "").trim();
-      return hasTrace && traceLinkSet.has(`${source}->${target}`);
+      const linkKey = `${source}->${target}`;
+      return (
+        hasTrace &&
+        (traceLinkSet.has(linkKey) || traceLinkColorMap.has(linkKey))
+      );
+    });
+
+    svg.selectAll(".bubble-link").attr("stroke", (d) => {
+      const source = String(d?.source?.id ?? d?.source ?? "").trim();
+      const target = String(d?.target?.id ?? d?.target ?? "").trim();
+      const linkKey = `${source}->${target}`;
+      const traceColor = traceLinkColorMap.get(linkKey);
+
+      if (hasTrace && traceColor) {
+        return traceColor;
+      }
+
+      if (hasTrace && traceLinkSet.has(linkKey)) {
+        return linkActive;
+      }
+
+      return linkBase;
+    });
+
+    svg.selectAll(".bubble-link").attr("stroke-width", (d) => {
+      const source = String(d?.source?.id ?? d?.source ?? "").trim();
+      const target = String(d?.target?.id ?? d?.target ?? "").trim();
+      const linkKey = `${source}->${target}`;
+
+      if (
+        hasTrace &&
+        (traceLinkSet.has(linkKey) || traceLinkColorMap.has(linkKey))
+      ) {
+        return Math.max(linkWidthActive ?? 2, 2.4);
+      }
+
+      return linkWidthBase ?? 1;
     });
 
     svg.selectAll(".bubble-link").attr("stroke-opacity", (d) => {
-      if (!hasTrace) return null;
+      if (!hasTrace) return 1;
       const source = String(d?.source?.id ?? d?.source ?? "").trim();
       const target = String(d?.target?.id ?? d?.target ?? "").trim();
-      return traceLinkSet.has(`${source}->${target}`) ? 1 : 0.08;
+      const linkKey = `${source}->${target}`;
+      return traceLinkSet.has(linkKey) || traceLinkColorMap.has(linkKey)
+        ? 1
+        : 0.08;
     });
-  }, [traceLinkKeys, traceNodeIds]);
+  }, [
+    holderPalette,
+    linkActive,
+    linkBase,
+    linkWidthActive,
+    linkWidthBase,
+    selectedNodeId,
+    hoveredNodeId,
+    traceLinkKeys,
+    traceNodeIds,
+    tracePathHighlights,
+  ]);
 
   return (
     <div className="bubble-map-shell">

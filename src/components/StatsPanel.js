@@ -90,6 +90,21 @@ export default function StatsPanel({
   const maxSupply = Number(tokenInfo.maxSupply) || 0;
   const hasMetadataMaxSupply = Boolean(tokenInfo.hasMetadataMaxSupply);
   const hasPrice = Number.isFinite(tokenInfo.price);
+  const getHolderSharePct = (holder) => {
+    const pctFromHolder = Number(holder?.pct);
+    if (Number.isFinite(pctFromHolder) && pctFromHolder >= 0) {
+      return Math.min(100, Math.max(0, pctFromHolder));
+    }
+
+    if (currentSupply > 0) {
+      return Math.min(
+        100,
+        Math.max(0, ((Number(holder?.value) || 0) / currentSupply) * 100),
+      );
+    }
+
+    return 0;
+  };
   const [isTokenMenuOpen, setIsTokenMenuOpen] = useState(false);
   const [tokenSearchQuery, setTokenSearchQuery] = useState("");
   const [tokenMenuOffset, setTokenMenuOffset] = useState({ x: 0, y: 0 });
@@ -97,17 +112,12 @@ export default function StatsPanel({
 
   const top10pct = allHolders
     .slice()
-    .sort((a, b) => b.value - a.value)
+    .sort((a, b) => getHolderSharePct(b) - getHolderSharePct(a))
     .slice(0, 10)
-    .reduce((sum, h) => sum + h.value, 0);
-  const top10share =
-    currentSupply > 0
-      ? Math.min(100, (top10pct / currentSupply) * 100).toFixed(1)
-      : "0.0";
+    .reduce((sum, h) => sum + getHolderSharePct(h), 0);
+  const top10share = Math.min(100, Math.max(0, top10pct)).toFixed(1);
   const selectedNodeShare = selectedNode
-    ? currentSupply > 0
-      ? (((Number(selectedNode.value) || 0) / currentSupply) * 100).toFixed(2)
-      : (Number(selectedNode.pct) || 0).toFixed(2)
+    ? getHolderSharePct(selectedNode).toFixed(2)
     : "0.00";
 
   const sorted = useMemo(() => {
@@ -869,10 +879,7 @@ export default function StatsPanel({
             <div className="stats-section-title">Top Holders</div>
             <div className="holders-list">
               {sorted.slice(0, 15).map((h, i) => {
-                const holderShare =
-                  currentSupply > 0
-                    ? ((Number(h.value) || 0) / currentSupply) * 100
-                    : Number(h.pct) || 0;
+                const holderShare = getHolderSharePct(h);
 
                 return (
                   <div
