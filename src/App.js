@@ -1810,6 +1810,10 @@ export default function App() {
     MAPS_API_GRAPH_NODE_LIMIT,
   );
   const [isGraphMaxModeEnabled, setIsGraphMaxModeEnabled] = useState(false);
+  const [isGraphEnrichmentEnabled, setIsGraphEnrichmentEnabled] =
+    useState(false);
+  const [isGraphEnrichmentLoading, setIsGraphEnrichmentLoading] =
+    useState(false);
   const [overallMaxGraphStats, setOverallMaxGraphStats] = useState({
     wallets: 0,
     connections: 0,
@@ -1826,6 +1830,11 @@ export default function App() {
     () => String(searchedRootAddress || "").trim(),
     [searchedRootAddress],
   );
+  const canEnhanceTopLevelGraph =
+    !isConnectionsView &&
+    !String(activeGraphRootAddress || "").trim() &&
+    !isGraphMaxModeEnabled &&
+    MAPS_API_GRAPH_TOP_HOLDERS_LIMIT > 0;
   const [colorTheme, setColorTheme] = useState(() => {
     try {
       const stored = window.localStorage.getItem(COLOR_THEME_STORAGE_KEY);
@@ -1941,17 +1950,6 @@ export default function App() {
       String(initialUrlParams.traceTo || "").trim(),
     ),
   );
-  const [isTraceToolMinimized, setIsTraceToolMinimized] = useState(() => {
-    try {
-      return (
-        JSON.parse(
-          window.localStorage.getItem(TRACE_TOOL_UI_STORAGE_KEY) || "{}",
-        )?.isMinimized === true
-      );
-    } catch {
-      return false;
-    }
-  });
   const [traceToolPosition, setTraceToolPosition] = useState(() => {
     if (typeof window === "undefined") {
       return { left: 12, top: 74 };
@@ -2094,6 +2092,16 @@ export default function App() {
   }, [isStatsCollapsed]);
 
   useEffect(() => {
+    setIsGraphEnrichmentEnabled(false);
+    setIsGraphEnrichmentLoading(false);
+  }, [
+    selectedTokenSymbol,
+    isConnectionsView,
+    activeGraphRootAddress,
+    isGraphMaxModeEnabled,
+  ]);
+
+  useEffect(() => {
     try {
       window.localStorage.setItem(
         TRACE_LEGEND_UI_STORAGE_KEY,
@@ -2115,13 +2123,12 @@ export default function App() {
         JSON.stringify({
           left: traceToolPosition.left,
           top: traceToolPosition.top,
-          isMinimized: isTraceToolMinimized,
         }),
       );
     } catch {
       // Ignore storage access issues and keep the palette state in memory.
     }
-  }, [isTraceToolMinimized, traceToolPosition]);
+  }, [traceToolPosition]);
 
   useEffect(() => {
     if (typeof window === "undefined") return undefined;
@@ -2175,13 +2182,13 @@ export default function App() {
   useEffect(() => {
     if (typeof window === "undefined") return undefined;
     setTraceToolPosition({ left: 12, top: 74 });
-  }, [isTraceToolMinimized, isTraceToolOpen]);
+  }, [isTraceToolOpen]);
 
   useEffect(() => {
     function clampTraceToolPosition() {
       setTraceToolPosition((current) => {
-        const minWidth = isTraceToolMinimized ? 280 : 360;
-        const minHeight = isTraceToolMinimized ? 78 : 420;
+        const minWidth = 360;
+        const minHeight = 420;
         const maxLeft = Math.max(12, window.innerWidth - minWidth - 12);
         const maxTop = Math.max(12, window.innerHeight - minHeight - 12);
         return {
@@ -2193,7 +2200,7 @@ export default function App() {
 
     window.addEventListener("resize", clampTraceToolPosition);
     return () => window.removeEventListener("resize", clampTraceToolPosition);
-  }, [isTraceToolMinimized]);
+  }, []);
 
   const handleTraceLegendPointerDown = useCallback(
     (event) => {
@@ -3406,6 +3413,60 @@ export default function App() {
 
       const graphDecimals = apiTokenInfo?.decimals ?? 0;
       const mappedGraph = buildGraphDataFromApi(result.payload, graphDecimals);
+      const shouldTrackOverallMaxStats =
+        !isConnectionsView && !String(activeGraphRootAddress || "").trim();
+      const applyResolvedGraphState = ({
+        focusedGraph,
+        summaryNodes,
+        mapLinks,
+        baseGraph,
+        usedConnectionsTable = false,
+      }) => {
+        if (shouldTrackOverallMaxStats) {
+          const mappedLinkCount = Array.isArray(mappedGraph?.links)
+            ? mappedGraph.links.length
+            : 0;
+          const baseLinkCount = Array.isArray(baseGraph?.links)
+            ? baseGraph.links.length
+            : 0;
+
+          setOverallMaxGraphStats({
+            wallets: Array.isArray(summaryNodes) ? summaryNodes.length : 0,
+            connections: Math.max(mappedLinkCount, baseLinkCount),
+          });
+        }
+
+        setMapNodes(focusedGraph.nodes);
+        setSummaryNodes(summaryNodes);
+        setMapLinks(mapLinks);
+        setMapLoadingEvidence({
+          wallets: Array.isArray(summaryNodes) ? summaryNodes.length : 0,
+          links: Array.isArray(mapLinks) ? mapLinks.length : 0,
+        });
+        setMapLoadingProgress(94);
+        setTrackedTokenSupply(
+          mappedGraph?.totalSupply > 0
+            ? mappedGraph.totalSupply
+            : focusedGraph.totalValue || 0,
+        );
+        if (focusedGraph.rootNodeId) {
+          const focusedRootNode = focusedGraph.nodes.find(
+            (node) => node.id === focusedGraph.rootNodeId,
+          );
+          setSelectedNode(focusedRootNode || null);
+        }
+        setMapDataStatus(
+          activeGraphRootAddress
+            ? isConnectionsView
+              ? usedConnectionsTable
+                ? `Live graph loaded for ${shortenAddress(activeGraphRootAddress)} [connections-phase:table]`
+                : `Live graph loaded for ${shortenAddress(activeGraphRootAddress)} [connections-phase:base]`
+              : `Live graph loaded for ${shortenAddress(activeGraphRootAddress)}`
+            : `Live graph loaded from ${graphEndpoint}`,
+        );
+        setMapLoadingProgress(100);
+        setIsMapLoading(false);
+      };
       setMapLoadingProfile(
         resolveMapLoadingProfile(
           Array.isArray(mappedGraph?.nodes) ? mappedGraph.nodes.length : 0,
@@ -3424,14 +3485,29 @@ export default function App() {
       const shouldFetchTopHolders =
         isTopLevelTokenGraph &&
         !isGraphMaxModeEnabled &&
-        MAPS_API_GRAPH_TOP_HOLDERS_LIMIT > 0;
+        MAPS_API_GRAPH_TOP_HOLDERS_LIMIT > 0 &&
+        isGraphEnrichmentEnabled;
 
       const shouldApplyTopHoldersSeed = shouldFetchTopHolders;
 
       let seededGraph = null;
       let topHoldersForSummary = [];
 
+      if (!shouldFetchTopHolders) {
+        setIsGraphEnrichmentLoading(false);
+      }
+
+      if (shouldFetchTopHolders && Array.isArray(mappedGraph?.nodes)) {
+        applyResolvedGraphState({
+          focusedGraph: mappedGraph,
+          summaryNodes: mappedGraph.nodes,
+          mapLinks: Array.isArray(mappedGraph?.links) ? mappedGraph.links : [],
+          baseGraph: mappedGraph,
+        });
+      }
+
       if (shouldFetchTopHolders) {
+        setIsGraphEnrichmentLoading(true);
         try {
           const topHoldersResult = await fetchTopHoldersFromApi(
             MAPS_API_BASE_URL,
@@ -3492,7 +3568,12 @@ export default function App() {
             applyTokenNotFoundGraphState(error, "top-holders");
             return;
           }
+          setIsGraphEnrichmentEnabled(false);
           seededGraph = null;
+        } finally {
+          if (isMounted) {
+            setIsGraphEnrichmentLoading(false);
+          }
         }
 
         if (!seededGraph && shouldApplyTopHoldersSeed) {
@@ -3604,9 +3685,6 @@ export default function App() {
         return;
       }
 
-      const shouldTrackOverallMaxStats =
-        !isConnectionsView && !String(activeGraphRootAddress || "").trim();
-
       const summaryBaseNodes =
         isTopLevelTokenGraph && Array.isArray(mappedGraph?.nodes)
           ? shouldApplyTopHoldersSeed
@@ -3633,55 +3711,13 @@ export default function App() {
           ? mappedGraph.links
           : focusedGraph.links;
 
-      if (shouldTrackOverallMaxStats) {
-        const mappedLinkCount = Array.isArray(mappedGraph?.links)
-          ? mappedGraph.links.length
-          : 0;
-        const baseLinkCount = Array.isArray(baseGraph?.links)
-          ? baseGraph.links.length
-          : 0;
-
-        setOverallMaxGraphStats({
-          wallets: Array.isArray(mergedSummaryNodes)
-            ? mergedSummaryNodes.length
-            : 0,
-          connections: Math.max(mappedLinkCount, baseLinkCount),
-        });
-      }
-
-      setMapNodes(focusedGraph.nodes);
-      setSummaryNodes(mergedSummaryNodes);
-      setMapLinks(resolvedMapLinks);
-      setMapLoadingEvidence({
-        wallets: Array.isArray(mergedSummaryNodes)
-          ? mergedSummaryNodes.length
-          : 0,
-        links: Array.isArray(resolvedMapLinks) ? resolvedMapLinks.length : 0,
+      applyResolvedGraphState({
+        focusedGraph,
+        summaryNodes: mergedSummaryNodes,
+        mapLinks: resolvedMapLinks,
+        baseGraph,
+        usedConnectionsTable,
       });
-      setMapLoadingProgress(94);
-      // Prefer the API's explicit totalSupply; fall back to discovered sum.
-      setTrackedTokenSupply(
-        mappedGraph?.totalSupply > 0
-          ? mappedGraph.totalSupply
-          : focusedGraph.totalValue || 0,
-      );
-      if (focusedGraph.rootNodeId) {
-        const focusedRootNode = focusedGraph.nodes.find(
-          (node) => node.id === focusedGraph.rootNodeId,
-        );
-        setSelectedNode(focusedRootNode || null);
-      }
-      setMapDataStatus(
-        activeGraphRootAddress
-          ? isConnectionsView
-            ? usedConnectionsTable
-              ? `Live graph loaded for ${shortenAddress(activeGraphRootAddress)} [connections-phase:table]`
-              : `Live graph loaded for ${shortenAddress(activeGraphRootAddress)} [connections-phase:base]`
-            : `Live graph loaded for ${shortenAddress(activeGraphRootAddress)}`
-          : `Live graph loaded from ${graphEndpoint}`,
-      );
-      setMapLoadingProgress(100);
-      setIsMapLoading(false);
     }
 
     fetchMapGraph().catch(() => {
@@ -3714,6 +3750,7 @@ export default function App() {
     apiTokenInfo?.decimals,
     graphEdgeLimit,
     graphNodeLimit,
+    isGraphEnrichmentEnabled,
     isGraphMaxModeEnabled,
     isConnectionsView,
     searchedRootAddress,
@@ -6258,7 +6295,7 @@ export default function App() {
       const isInsideTraceLegend = traceLegendPanelRef.current?.contains(target);
       const isOnTraceToggle = traceToggleButtonRef.current?.contains(target);
       if (isInsideTracePanel || isInsideTraceLegend || isOnTraceToggle) return;
-      setIsTraceToolMinimized(true);
+      setIsTraceToolOpen(false);
     }
 
     document.addEventListener("pointerdown", handlePointerDown, true);
@@ -6629,6 +6666,39 @@ export default function App() {
           >
             {isTraceToolOpen ? "Hide Trace" : "Trace Path"}
           </button>
+          {canEnhanceTopLevelGraph ? (
+            <button
+              type="button"
+              className={`app-shell-action-btn app-shell-action-btn-secondary ${isGraphEnrichmentEnabled ? "is-active" : ""}`}
+              onClick={() => {
+                if (isGraphEnrichmentEnabled || isGraphEnrichmentLoading) {
+                  return;
+                }
+                setIsGraphEnrichmentEnabled(true);
+              }}
+              disabled={isGraphEnrichmentEnabled || isGraphEnrichmentLoading}
+              aria-label={
+                isGraphEnrichmentLoading
+                  ? "Enhancing graph with top holder network"
+                  : isGraphEnrichmentEnabled
+                    ? "Graph enrichment enabled"
+                    : "Enhance graph with top holder network"
+              }
+              title={
+                isGraphEnrichmentLoading
+                  ? "Enhancing graph with top holder network"
+                  : isGraphEnrichmentEnabled
+                    ? "Graph enrichment enabled"
+                    : "Load top holder network enrichment"
+              }
+            >
+              {isGraphEnrichmentLoading
+                ? "Enhancing..."
+                : isGraphEnrichmentEnabled
+                  ? "Enhanced"
+                  : "Enhance Graph"}
+            </button>
+          ) : null}
           <button
             type="button"
             ref={compareButtonRef}
@@ -7219,7 +7289,7 @@ export default function App() {
               <form
                 ref={traceToolPanelRef}
                 id="map-trace-tool"
-                className={`map-trace-tool ${isTraceToolMinimized ? "is-minimized" : ""}`}
+                className="map-trace-tool"
                 role="group"
                 aria-label="Trace path tool"
                 onSubmit={handleTraceToolSubmit}
@@ -7243,23 +7313,6 @@ export default function App() {
                     <strong>Trace path tool</strong>
                   </div>
                   <div className="map-trace-tool-header-actions">
-                    <button
-                      type="button"
-                      className="map-trace-toggle"
-                      onClick={() =>
-                        setIsTraceToolMinimized((collapsed) => !collapsed)
-                      }
-                      aria-label={
-                        isTraceToolMinimized
-                          ? "Expand trace path tool"
-                          : "Minimize trace path tool"
-                      }
-                      title={
-                        isTraceToolMinimized ? "Expand tool" : "Minimize tool"
-                      }
-                    >
-                      {isTraceToolMinimized ? "+" : "–"}
-                    </button>
                     <button
                       type="button"
                       className="map-trace-submit map-trace-path-action"

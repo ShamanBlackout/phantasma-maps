@@ -2045,6 +2045,21 @@
   border-color: rgba(132, 110, 78, 0.64);
 }
 
+.app-shell-action-btn-secondary {
+  color: rgba(194, 216, 240, 0.9);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.app-shell-action-btn-secondary.is-active {
+  border-color: rgba(var(--accent-rgb), 0.48);
+  background: rgba(var(--accent-rgb), 0.18);
+}
+
+.app-shell-action-btn:disabled {
+  opacity: 0.62;
+  cursor: progress;
+}
+
 .app-shell-select-wrap {
   display: inline-flex;
   align-items: center;
@@ -2631,16 +2646,6 @@
   gap: 8px;
 }
 
-.map-trace-tool.is-minimized {
-  width: min(280px, calc(100vw - 24px));
-  max-height: none;
-  overflow: visible;
-}
-
-.map-trace-tool.is-minimized .map-trace-tool-body {
-  display: none;
-}
-
 .map-trace-tool label {
   display: flex;
   flex-direction: column;
@@ -2981,14 +2986,6 @@
 .stats-action-btn:focus-visible {
   outline: none;
   box-shadow: var(--focus-ring);
-}
-
-.stats-action-connections {
-  /* Emphasize "Open Connections" action */
-}
-
-.stats-action-copy-link {
-  /* Copy share link button */
 }
 
 /* Light theme overrides */
