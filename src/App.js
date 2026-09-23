@@ -98,6 +98,12 @@ const PHANTASMA_TX_EXPLORER_BASE =
 const SOUL_PRICE_API_URL =
   parseEnvString("REACT_APP_SOUL_PRICE_API_URL") ||
   "https://api.coingecko.com/api/v3/simple/price?ids=phantasma&vs_currencies=usd&include_24hr_change=true";
+const TRACKED_TOKEN_PRICE_API_BASE_URL =
+  parseEnvString("REACT_APP_TRACKED_TOKEN_PRICES_API_URL") ||
+  "https://apiops.saturnx.cc/v1/tokens";
+const TRACKED_TOKEN_PRICE_NETWORK =
+  parseEnvString("REACT_APP_TRACKED_TOKEN_PRICE_NETWORK", "mainnet") ||
+  "mainnet";
 const CMC_SOUL_QUOTES_API_URL =
   parseEnvString("REACT_APP_CMC_SOUL_QUOTES_API_URL") ||
   "https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest?symbol=SOUL&convert=USD";
@@ -1539,6 +1545,119 @@ function parseCoinMarketCapQuote(payload) {
   };
 }
 
+function parseTrackedTokenQuote(payload, tokenSymbol) {
+  const normalizedSymbol = String(tokenSymbol || "")
+    .trim()
+    .toUpperCase();
+  const directToken =
+    payload?.data?.price !== undefined
+      ? payload.data
+      : payload?.price !== undefined
+        ? payload
+        : null;
+  const tokenCollection =
+    payload?.tokens ??
+    payload?.prices ??
+    payload?.quotes ??
+    payload?.data?.tokens ??
+    payload?.data?.prices ??
+    payload?.data?.quotes ??
+    payload?.data ??
+    payload;
+  const candidates = directToken
+    ? [directToken]
+    : Array.isArray(tokenCollection)
+      ? tokenCollection
+      : Array.isArray(tokenCollection?.items)
+        ? tokenCollection.items
+        : Array.isArray(tokenCollection?.tokens)
+          ? tokenCollection.tokens
+          : tokenCollection && typeof tokenCollection === "object"
+            ? Object.entries(tokenCollection).map(([symbol, token]) => ({
+                ...(token && typeof token === "object"
+                  ? token
+                  : { price: token }),
+                symbol: token?.symbol ?? token?.tokenSymbol ?? symbol,
+              }))
+            : [];
+
+  const token = candidates.find((candidate) => {
+    const symbol = String(
+      candidate?.symbol ??
+        candidate?.tokenSymbol ??
+        candidate?.token_symbol ??
+        candidate?.token ??
+        candidate?.name ??
+        "",
+    )
+      .trim()
+      .toUpperCase();
+    return symbol === normalizedSymbol || (!symbol && candidates.length === 1);
+  });
+
+  if (!token) return null;
+
+  const usdPrice = Number(
+    token?.priceUsd ??
+      token?.price_usd ??
+      token?.currentPrice ??
+      token?.current_price ??
+      token?.usdPrice ??
+      token?.usd_price ??
+      token?.price ??
+      token?.usd,
+  );
+  if (!Number.isFinite(usdPrice)) return null;
+
+  const usdChange24h = Number(
+    token?.priceChange24h ??
+      token?.price_change_24h ??
+      token?.change24h ??
+      token?.change_24h ??
+      token?.changePercent24h ??
+      token?.change_percent_24h ??
+      token?.priceChange ??
+      token?.price_change ??
+      token?.priceChangePercentage24h ??
+      token?.price_change_percentage_24h ??
+      token?.change ??
+      token?.changePercent ??
+      token?.change_percent ??
+      token?.change_24h_percent ??
+      token?.percentChange24h ??
+      token?.percent_change_24h ??
+      token?.percentChange24H,
+  );
+
+  return {
+    price: usdPrice,
+    priceChange24h: Number.isFinite(usdChange24h) ? usdChange24h : null,
+  };
+}
+
+async function fetchTrackedTokenQuote(tokenSymbol) {
+  const endpoint = `${TRACKED_TOKEN_PRICE_API_BASE_URL.replace(/\/$/, "")}/${encodeURIComponent(tokenSymbol)}?network=${encodeURIComponent(TRACKED_TOKEN_PRICE_NETWORK)}`;
+  const result = await fetchJsonWithTimeout(endpoint);
+  if (!result.ok) return result;
+
+  const quote = parseTrackedTokenQuote(result.payload, tokenSymbol);
+  if (!quote) {
+    return {
+      ok: false,
+      status: result.status,
+      retryAfterMs: result.retryAfterMs,
+    };
+  }
+
+  return {
+    ok: true,
+    status: result.status,
+    retryAfterMs: result.retryAfterMs,
+    quote,
+    source: "saturnx",
+  };
+}
+
 async function fetchSoulQuoteFromCoinGecko() {
   const result = await fetchJsonWithTimeout(SOUL_PRICE_API_URL);
   if (!result.ok) return result;
@@ -1734,6 +1853,7 @@ export default function App() {
     resetTransactionState,
   } = useTransactionState();
   const [liveTokenInfo, setLiveTokenInfo] = useState(TOKEN_INFO);
+  const [trackedTokenQuotes, setTrackedTokenQuotes] = useState({});
   const [selectedTokenSymbol, setSelectedTokenSymbol] = useState(() => {
     const urlToken = initialUrlParams.tokenSymbol;
     if (urlToken) return urlToken;
@@ -2849,21 +2969,30 @@ export default function App() {
         : 0
       : null;
 
-    const resolvedPrice = Number.isFinite(apiTokenInfo?.price)
-      ? apiTokenInfo.price
-      : selectedTokenSymbol === TOKEN_INFO.name
-        ? liveTokenInfo.price
-        : isUsingMockApiFallback
-          ? (fallbackTokenInfo?.price ?? null)
-          : null;
+    const trackedTokenQuote = trackedTokenQuotes[selectedTokenSymbol] || null;
+    const resolvedPrice =
+      selectedTokenSymbol !== TOKEN_INFO.name &&
+      Number.isFinite(trackedTokenQuote?.price)
+        ? trackedTokenQuote.price
+        : Number.isFinite(apiTokenInfo?.price)
+          ? apiTokenInfo.price
+          : selectedTokenSymbol === TOKEN_INFO.name
+            ? liveTokenInfo.price
+            : isUsingMockApiFallback
+              ? (fallbackTokenInfo?.price ?? null)
+              : null;
 
-    const resolvedPriceChange24h = Number.isFinite(apiTokenInfo?.priceChange24h)
-      ? apiTokenInfo.priceChange24h
-      : selectedTokenSymbol === TOKEN_INFO.name
-        ? liveTokenInfo.priceChange24h
-        : isUsingMockApiFallback
-          ? (fallbackTokenInfo?.priceChange24h ?? null)
-          : null;
+    const resolvedPriceChange24h =
+      selectedTokenSymbol !== TOKEN_INFO.name &&
+      Number.isFinite(trackedTokenQuote?.priceChange24h)
+        ? trackedTokenQuote.priceChange24h
+        : Number.isFinite(apiTokenInfo?.priceChange24h)
+          ? apiTokenInfo.priceChange24h
+          : selectedTokenSymbol === TOKEN_INFO.name
+            ? liveTokenInfo.priceChange24h
+            : isUsingMockApiFallback
+              ? (fallbackTokenInfo?.priceChange24h ?? null)
+              : null;
 
     return {
       name: selectedTokenSymbol,
@@ -2885,6 +3014,7 @@ export default function App() {
     selectedMockTokenData,
     selectedTokenSymbol,
     trackedTokenSupply,
+    trackedTokenQuotes,
     liveTokenInfo.price,
     liveTokenInfo.priceChange24h,
   ]);
@@ -3848,6 +3978,45 @@ export default function App() {
       }
     };
   }, []);
+
+  useEffect(() => {
+    const normalizedTokenSymbol = String(selectedTokenSymbol || "")
+      .trim()
+      .toUpperCase();
+    if (!normalizedTokenSymbol || normalizedTokenSymbol === TOKEN_INFO.name) {
+      return undefined;
+    }
+
+    let isActive = true;
+    let timeoutId;
+
+    async function fetchTrackedTokenPrice() {
+      try {
+        const result = await fetchTrackedTokenQuote(normalizedTokenSymbol);
+        if (isActive && result.ok && result.quote) {
+          setTrackedTokenQuotes((current) => ({
+            ...current,
+            [normalizedTokenSymbol]: result.quote,
+          }));
+          setPriceLastUpdatedAt(Date.now());
+        }
+      } finally {
+        if (isActive) {
+          timeoutId = window.setTimeout(
+            fetchTrackedTokenPrice,
+            SOUL_PRICE_BASE_POLL_INTERVAL_MS,
+          );
+        }
+      }
+    }
+
+    fetchTrackedTokenPrice();
+
+    return () => {
+      isActive = false;
+      if (timeoutId) window.clearTimeout(timeoutId);
+    };
+  }, [selectedTokenSymbol]);
 
   useEffect(() => {
     let isActive = true;
