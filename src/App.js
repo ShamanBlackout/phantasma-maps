@@ -11,7 +11,7 @@ import StatsPanel from "./components/StatsPanel";
 import TransactionsModal from "./components/TransactionsModal";
 import SelectedNodeCard from "./components/SelectedNodeCard";
 import useTransactionState from "./hooks/useTransactionState";
-import useUrlState, { readUrlParams } from "./hooks/useUrlState";
+import { readUrlParams } from "./hooks/useUrlState";
 import { fetchJsonWithTimeout } from "./api/http";
 import {
   createActivityEndpoint as buildActivityEndpoint,
@@ -158,12 +158,8 @@ const TOKEN_METADATA_POLL_INTERVAL_MS = parseEnvMs(
   "REACT_APP_TOKEN_METADATA_POLL_INTERVAL_MS",
   60000,
 );
-const MAP_LOADING_MIN_VISIBLE_MS = 480;
 const MAP_LOADING_COMPLETE_HOLD_MS = 120;
 const MAP_LOADING_EXIT_MS = 190;
-const MAP_LOADING_STAGE_BALANCES_MAX = 35;
-const MAP_LOADING_STAGE_ADDRESSES_MAX = 70;
-const MAP_LOADING_PHASE_MIN_VISIBLE_MS = 280;
 const MAP_LOADING_SLOW_THRESHOLD_MS = 3500;
 const MAP_LOADING_STALLED_THRESHOLD_MS = 8000;
 const MAP_LOADING_SMALL_GRAPH_NODE_THRESHOLD = 80;
@@ -1890,7 +1886,7 @@ export default function App() {
   const [isMapLoaderExiting, setIsMapLoaderExiting] = useState(false);
   const [isMapLoadingReadyState, setIsMapLoadingReadyState] = useState(false);
   const [isMapLoadingSlow, setIsMapLoadingSlow] = useState(false);
-  const [isMapLoadingStalled, setIsMapLoadingStalled] = useState(false);
+  const [, setIsMapLoadingStalled] = useState(false);
   const [mapLoadingProgress, setMapLoadingProgress] = useState(0);
   const [mapLoadingProfile, setMapLoadingProfile] = useState(() =>
     resolveMapLoadingProfile(200, 300),
@@ -2017,7 +2013,7 @@ export default function App() {
   });
   const [isOnboardingAt, setIsOnboardingAt] = useState("skill-selection");
   const [onboardingTutorialStep, setOnboardingTutorialStep] = useState(0);
-  const [discoveryHintsDismissed, setDiscoveryHintsDismissed] = useState(() => {
+  const [discoveryHintsDismissed] = useState(() => {
     try {
       return (
         window.localStorage.getItem(DISCOVERY_HINTS_DISMISSED_KEY) === "true"
@@ -2163,8 +2159,7 @@ export default function App() {
     }
   });
   const [tokenAnalyticsTopMovers, setTokenAnalyticsTopMovers] = useState({});
-  const [tokenAnalyticsTopMoversStatus, setTokenAnalyticsTopMoversStatus] =
-    useState("");
+  const [, setTokenAnalyticsTopMoversStatus] = useState("");
   const [isTokenTopMoversLoading, setIsTokenTopMoversLoading] = useState(false);
   const [topMoversHorizon, setTopMoversHorizon] = useState("7d");
   const [topMoversMode, setTopMoversMode] = useState("net");
@@ -4364,44 +4359,47 @@ export default function App() {
     return `${primaryLabel} - ${secondaryLabel}`;
   }
 
-  function buildTraceSearchOptions(query, selectedId) {
-    const normalizedQuery = String(query || "")
-      .trim()
-      .toLowerCase();
-    const matchedNodes = normalizedQuery
-      ? filteredNodes.filter((node) => {
-          const id = String(node?.id || "").toLowerCase();
-          const label = String(node?.label || "").toLowerCase();
-          const shortAddr = String(node?.shortAddr || "").toLowerCase();
-          return (
-            id.includes(normalizedQuery) ||
-            label.includes(normalizedQuery) ||
-            shortAddr.includes(normalizedQuery)
-          );
-        })
-      : filteredNodes;
+  const buildTraceSearchOptions = useCallback(
+    (query, selectedId) => {
+      const normalizedQuery = String(query || "")
+        .trim()
+        .toLowerCase();
+      const matchedNodes = normalizedQuery
+        ? filteredNodes.filter((node) => {
+            const id = String(node?.id || "").toLowerCase();
+            const label = String(node?.label || "").toLowerCase();
+            const shortAddr = String(node?.shortAddr || "").toLowerCase();
+            return (
+              id.includes(normalizedQuery) ||
+              label.includes(normalizedQuery) ||
+              shortAddr.includes(normalizedQuery)
+            );
+          })
+        : filteredNodes;
 
-    const limitedNodes = matchedNodes.slice(0, 160);
-    if (!selectedId || limitedNodes.some((node) => node.id === selectedId)) {
-      return limitedNodes;
-    }
+      const limitedNodes = matchedNodes.slice(0, 160);
+      if (!selectedId || limitedNodes.some((node) => node.id === selectedId)) {
+        return limitedNodes;
+      }
 
-    const selectedNode = filteredNodes.find((node) => node.id === selectedId);
-    if (!selectedNode) {
-      return limitedNodes;
-    }
+      const selectedNode = filteredNodes.find((node) => node.id === selectedId);
+      if (!selectedNode) {
+        return limitedNodes;
+      }
 
-    return [selectedNode, ...limitedNodes].slice(0, 160);
-  }
+      return [selectedNode, ...limitedNodes].slice(0, 160);
+    },
+    [filteredNodes],
+  );
 
   const traceFromOptions = useMemo(
     () => buildTraceSearchOptions(traceFromQuery, traceFromNodeId),
-    [filteredNodes, traceFromNodeId, traceFromQuery],
+    [buildTraceSearchOptions, traceFromNodeId, traceFromQuery],
   );
 
   const traceToOptions = useMemo(
     () => buildTraceSearchOptions(traceToQuery, traceToNodeId),
-    [filteredNodes, traceToNodeId, traceToQuery],
+    [buildTraceSearchOptions, traceToNodeId, traceToQuery],
   );
 
   const traceFromAddress = useMemo(() => {
@@ -5841,7 +5839,7 @@ export default function App() {
         linkKeys,
       };
     });
-  }, [traceRenderableDbPaths]);
+  }, [traceListedDbPaths.length, traceRenderableDbPaths]);
 
   const traceRenderableDbPathsGraph = useMemo(
     () => buildTracePathGraph(traceRenderableDbPaths, tracePathKnownNodesById),
@@ -6332,7 +6330,7 @@ export default function App() {
     setSavedViews((current) => current.filter((view) => view.id !== viewId));
   }, []);
 
-  function exportVisibleGraphPreset() {
+  const exportVisibleGraphPreset = useCallback(() => {
     const graphPayload = {
       token: selectedTokenSymbol,
       nodes: filteredNodes,
@@ -6345,7 +6343,7 @@ export default function App() {
       `phantasma-visible-graph-${selectedTokenSymbol.toLowerCase()}.json`,
     );
     setIsExportPresetsOpen(false);
-  }
+  }, [filteredLinks, filteredNodes, selectedTokenSymbol]);
 
   function exportTopHoldersPreset() {
     const headers = ["Rank", "Address", "Label", "Amount", "Share (%)", "Type"];
@@ -6557,6 +6555,7 @@ export default function App() {
       setIsTraceToolOpen,
       setSearchedRootAddress,
       setActiveHolderTypeFilter,
+      exportVisibleGraphPreset,
     ],
   );
 
@@ -6624,12 +6623,6 @@ export default function App() {
         : isMapLoadingSlow
           ? "Still processing a larger graph payload"
           : "Preparing graph render";
-  const isBalancesComplete =
-    mapLoadingDisplayedPhase !== "balances" && mapLoadingDisplayedPhase !== "";
-  const isAddressComplete =
-    mapLoadingDisplayedPhase === "topology" ||
-    mapLoadingDisplayedPhase === "ready";
-  const isTopologyComplete = mapLoadingDisplayedPhase === "ready";
   const mapLoadingAriaStatus =
     mapLoadingDisplayedPhase === "ready"
       ? "Graph ready"
