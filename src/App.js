@@ -1549,12 +1549,21 @@ function parseTrackedTokenQuote(payload, tokenSymbol) {
   const normalizedSymbol = String(tokenSymbol || "")
     .trim()
     .toUpperCase();
-  const directToken =
-    payload?.data?.price !== undefined
+  const dataToken =
+    payload?.data &&
+    !Array.isArray(payload.data) &&
+    typeof payload.data === "object" &&
+    (payload.data.symbol ||
+      payload.data.tokenSymbol ||
+      payload.data.priceUsd !== undefined ||
+      payload.data.price !== undefined)
       ? payload.data
-      : payload?.price !== undefined
-        ? payload
-        : null;
+      : null;
+  const directToken = dataToken
+    ? dataToken
+    : payload?.price !== undefined
+      ? payload
+      : null;
   const tokenCollection =
     payload?.tokens ??
     payload?.prices ??
@@ -1612,6 +1621,8 @@ function parseTrackedTokenQuote(payload, tokenSymbol) {
   const usdChange24h = Number(
     token?.priceChange24h ??
       token?.price_change_24h ??
+      token?.change?.h24 ??
+      token?.change?.h24Percent ??
       token?.change24h ??
       token?.change_24h ??
       token?.changePercent24h ??
