@@ -181,6 +181,33 @@ export default function Header({
     setIsSettingsOpen(false);
   }
 
+  function formatCompactUsdPrice(value) {
+    const numericValue = Number(value);
+    if (!Number.isFinite(numericValue)) return "N/A";
+
+    const absoluteValue = Math.abs(numericValue);
+    if (absoluteValue >= 1) {
+      return `$${numericValue.toLocaleString(undefined, {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      })}`;
+    }
+    if (absoluteValue >= 0.01) {
+      return `$${numericValue.toLocaleString(undefined, {
+        minimumFractionDigits: 4,
+        maximumFractionDigits: 4,
+      })}`;
+    }
+    if (absoluteValue >= 0.000001) {
+      return `$${numericValue.toLocaleString(undefined, {
+        minimumFractionDigits: 6,
+        maximumFractionDigits: 6,
+      })}`;
+    }
+
+    return `$${numericValue.toExponential(2)}`;
+  }
+
   const priceChange24h = Number(tokenInfo.priceChange24h) || 0;
   const hasPrice = Number.isFinite(tokenInfo.price);
   const priceUp = priceChange24h >= 0;
@@ -576,7 +603,7 @@ export default function Header({
                 {tokenDisplayName}
               </span>
               <strong className="header-status-chip-value">
-                {hasPrice ? `$${tokenInfo.price.toFixed(5)}` : "N/A"}
+                {hasPrice ? formatCompactUsdPrice(tokenInfo.price) : "N/A"}
               </strong>
               {hasPrice ? (
                 <span

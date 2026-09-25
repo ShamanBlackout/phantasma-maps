@@ -2,6 +2,8 @@ import React from "react";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import App from "./App";
+import { createGraphEndpoint } from "./api/mapsApi";
+import { fetchJsonWithTimeout } from "./api/http";
 
 function createLargeGraphPayload(nodeCount = 305, edgeCount = 1300) {
   const nodes = Array.from({ length: nodeCount }, (_, index) => ({
@@ -170,6 +172,45 @@ beforeEach(() => {
 
 afterEach(() => {
   global.fetch.mockClear();
+});
+
+test("token graph requests include the configured edge limit to avoid GHOSTDOGS timeouts", () => {
+  const endpoint = createGraphEndpoint("http://127.0.0.1:3000", "GHOSTDOGS", {
+    rootAddress: "",
+    depth: 2,
+    edgeLimit: 400,
+    defaultEdgeLimit: 1200,
+  });
+
+  expect(endpoint).toContain("/graph/token/GHOSTDOGS?");
+  expect(endpoint).toContain("edgeLimit=400");
+});
+
+test("retries transient fetch failures with exponential backoff", async () => {
+  let attempts = 0;
+  global.fetch = jest.fn(async () => {
+    attempts += 1;
+    if (attempts < 3) {
+      throw new Error("temporary network error");
+    }
+
+    return {
+      ok: true,
+      status: 200,
+      headers: { get: () => null },
+      json: async () => ({ data: { ok: true } }),
+    };
+  });
+
+  const result = await fetchJsonWithTimeout(
+    "https://example.com/retry-test",
+    {},
+    2000,
+    { maxRetries: 3, baseDelayMs: 10 },
+  );
+
+  expect(result.ok).toBe(true);
+  expect(global.fetch).toHaveBeenCalledTimes(3);
 });
 
 test("renders the current map application shell", async () => {

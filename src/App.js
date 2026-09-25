@@ -450,7 +450,7 @@ function buildGraphDataFromApi(graphPayload, decimals = 0) {
   const apiNodes = Array.isArray(graphPayload?.nodes) ? graphPayload.nodes : [];
   const apiEdges = Array.isArray(graphPayload?.edges) ? graphPayload.edges : [];
 
-  if (!apiNodes.length || !apiEdges.length) {
+  if (!apiNodes.length) {
     return null;
   }
 
@@ -3499,23 +3499,36 @@ export default function App() {
             );
             setMapLoadingEvidence({ wallets: null, links: null });
           } else {
-            setIsUsingMockApiFallback(true);
-            setTrackedTokenSupply(
-              selectedMockTokenData?.tokenInfo?.totalSupply || 0,
-            );
             const fallbackNodes = selectedMockTokenData?.holders || [];
             const fallbackLinks = selectedMockTokenData?.links || [];
-            setMapNodes(fallbackNodes);
-            setSummaryNodes(fallbackNodes);
-            setMapLinks(fallbackLinks);
-            setMapLoadingEvidence({
-              wallets: fallbackNodes.length,
-              links: fallbackLinks.length,
-            });
-            setTokenSelectorStatus("API unavailable; showing mock tokens");
-            setMapDataStatus(
-              `Using cached data while the network service recovers...${formatApiErrorMeta(result)}`,
-            );
+            const hasMockFallback = fallbackNodes.length > 0;
+
+            setIsUsingMockApiFallback(hasMockFallback);
+            if (hasMockFallback) {
+              setTrackedTokenSupply(
+                selectedMockTokenData?.tokenInfo?.totalSupply || 0,
+              );
+              setMapNodes(fallbackNodes);
+              setSummaryNodes(fallbackNodes);
+              setMapLinks(fallbackLinks);
+              setMapLoadingEvidence({
+                wallets: fallbackNodes.length,
+                links: fallbackLinks.length,
+              });
+              setTokenSelectorStatus("API unavailable; showing mock tokens");
+              setMapDataStatus(
+                `Using cached data while the network service recovers...${formatApiErrorMeta(result)}`,
+              );
+            } else {
+              setTrackedTokenSupply(0);
+              setMapNodes([]);
+              setSummaryNodes([]);
+              setMapLinks([]);
+              setMapLoadingEvidence({ wallets: 0, links: 0 });
+              setMapDataStatus(
+                `Unable to load ${selectedTokenSymbol} from the live API. The token selector remains available; retry when the API recovers.${formatApiErrorMeta(result)}`,
+              );
+            }
           }
         } else {
           if (isConnectionsView) {
@@ -3772,11 +3785,7 @@ export default function App() {
       }
 
       if (!focusedGraph) {
-        if (
-          !mappedGraph ||
-          !mappedGraph.nodes.length ||
-          !mappedGraph.links.length
-        ) {
+        if (!mappedGraph || !mappedGraph.nodes.length) {
           if (isConnectionsView) {
             setMapDataStatus(
               "No transaction history found for this wallet in the current time range.",
@@ -6154,20 +6163,6 @@ export default function App() {
         return;
       }
 
-      if (result.isTokenNotFound) {
-        setLastApiError(
-          buildApiErrorRecord(
-            result.error,
-            "snapshot",
-            "Token snapshot is not available in the database",
-          ),
-        );
-        setCurrentSnapshotStatus(
-          buildTokenNotFoundStatus(currentKey, result.error),
-        );
-        return;
-      }
-
       setCurrentSnapshotStatus(`Unable to load ${currentKey} snapshot.`);
     }
 
@@ -7289,7 +7284,9 @@ export default function App() {
             currentSupply={currentSupplyBase}
             colorTheme={colorTheme}
             preserveUnconnectedNodes={
-              hasTraceDbPathsGraph ? true : isTokenGraphMaxModeActive
+              hasTraceDbPathsGraph ||
+              isTokenGraphMaxModeActive ||
+              renderedGraphLinks.length === 0
             }
             physicsMode={physicsMode}
             layoutMode={hasTraceDbPathsGraph ? "path" : "organic"}
