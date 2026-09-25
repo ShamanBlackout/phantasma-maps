@@ -32,75 +32,152 @@ function parseEnvelopePayload(payload) {
   };
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+function getRetryDelayMs({ attempt, retryAfterMs, baseDelayMs, maxDelayMs }) {
+  if (Number.isFinite(retryAfterMs) && retryAfterMs > 0) {
+    return retryAfterMs;
+  }
+
+  return Math.min(baseDelayMs * 2 ** attempt, maxDelayMs);
+}
+
 export async function fetchJsonWithTimeout(
   url,
   options = {},
   timeoutMs = 7000,
+  retryOptions = {},
 ) {
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  const {
+    maxRetries = 3,
+    baseDelayMs = 250,
+    maxDelayMs = 5000,
+    retryableStatuses = [408, 425, 429, 500, 502, 503, 504],
+  } = retryOptions;
 
-  try {
-    const response = await fetch(url, {
-      cache: "no-store",
-      ...options,
-      signal: controller.signal,
-    });
+  let lastResult = null;
 
-    const retryAfterFromHeader = parseRetryAfterMs(response);
+  for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
-    let rawPayload = null;
     try {
-      rawPayload = await response.json();
-    } catch {
-      rawPayload = null;
-    }
+      const response = await fetch(url, {
+        cache: "no-store",
+        ...options,
+        signal: controller.signal,
+      });
 
-    const normalized = parseEnvelopePayload(rawPayload);
+      const retryAfterFromHeader = parseRetryAfterMs(response);
 
-    if (!response.ok) {
-      const envelopeRetryAfter = Number(rawPayload?.retryAfterMs);
-      const retryAfterMs =
-        Number.isFinite(envelopeRetryAfter) && envelopeRetryAfter > 0
-          ? envelopeRetryAfter
-          : retryAfterFromHeader;
+      let rawPayload = null;
+      try {
+        rawPayload = await response.json();
+      } catch {
+        rawPayload = null;
+      }
+
+      const normalized = parseEnvelopePayload(rawPayload);
+
+      if (!response.ok) {
+        const envelopeRetryAfter = Number(rawPayload?.retryAfterMs);
+        const retryAfterMs =
+          Number.isFinite(envelopeRetryAfter) && envelopeRetryAfter > 0
+            ? envelopeRetryAfter
+            : retryAfterFromHeader;
+
+        const shouldRetry =
+          attempt < maxRetries &&
+          (retryableStatuses.includes(response.status) ||
+            response.status === 0);
+
+        if (shouldRetry) {
+          await sleep(
+            getRetryDelayMs({
+              attempt,
+              retryAfterMs,
+              baseDelayMs,
+              maxDelayMs,
+            }),
+          );
+          continue;
+        }
+
+        lastResult = {
+          ok: false,
+          status: response.status,
+          isNetworkError: false,
+          retryAfterMs,
+          errorCode:
+            typeof rawPayload?.error?.code === "string"
+              ? rawPayload.error.code
+              : null,
+          errorMessage:
+            typeof rawPayload?.error?.message === "string"
+              ? rawPayload.error.message
+              : `Request failed with status ${response.status}`,
+          errorDetails:
+            rawPayload?.error?.details &&
+            typeof rawPayload.error.details === "object"
+              ? rawPayload.error.details
+              : null,
+          requestId: normalized.requestId,
+          meta: normalized.meta,
+          payload: normalized.data,
+          rawPayload,
+        };
+        return lastResult;
+      }
+
       return {
-        ok: false,
+        ok: true,
         status: response.status,
         isNetworkError: false,
-        retryAfterMs,
-        errorCode:
-          typeof rawPayload?.error?.code === "string"
-            ? rawPayload.error.code
-            : null,
-        errorMessage:
-          typeof rawPayload?.error?.message === "string"
-            ? rawPayload.error.message
-            : `Request failed with status ${response.status}`,
-        errorDetails:
-          rawPayload?.error?.details &&
-          typeof rawPayload.error.details === "object"
-            ? rawPayload.error.details
-            : null,
-        requestId: normalized.requestId,
-        meta: normalized.meta,
         payload: normalized.data,
         rawPayload,
+        requestId: normalized.requestId,
+        meta: normalized.meta,
+        retryAfterMs: retryAfterFromHeader,
       };
-    }
+    } catch {
+      const shouldRetry = attempt < maxRetries;
+      if (shouldRetry) {
+        await sleep(
+          getRetryDelayMs({
+            attempt,
+            retryAfterMs: null,
+            baseDelayMs,
+            maxDelayMs,
+          }),
+        );
+        continue;
+      }
 
-    return {
-      ok: true,
-      status: response.status,
-      isNetworkError: false,
-      payload: normalized.data,
-      rawPayload,
-      requestId: normalized.requestId,
-      meta: normalized.meta,
-      retryAfterMs: retryAfterFromHeader,
-    };
-  } catch {
-    return {
+      lastResult = {
+        ok: false,
+        status: 0,
+        isNetworkError: true,
+        retryAfterMs: null,
+        errorCode: "NETWORK_ERROR",
+        errorMessage: "Network request failed",
+        errorDetails: null,
+        requestId: null,
+        meta: null,
+        payload: null,
+        rawPayload: null,
+      };
+      return lastResult;
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  }
+
+  return (
+    lastResult || {
       ok: false,
       status: 0,
       isNetworkError: true,
@@ -112,8 +189,6 @@ export async function fetchJsonWithTimeout(
       meta: null,
       payload: null,
       rawPayload: null,
-    };
-  } finally {
-    clearTimeout(timeoutId);
-  }
+    }
+  );
 }

@@ -41,15 +41,19 @@ export function createGraphEndpoint(
   const base = normalizeBase(baseUrl);
   const activeRootAddress = String(rootAddress || "").trim();
 
-  if (activeRootAddress) {
-    const normalizedEdgeLimit =
-      Number.isFinite(Number(edgeLimit)) && Number(edgeLimit) > 0
-        ? Math.floor(Number(edgeLimit))
-        : defaultEdgeLimit;
+  const normalizedDepth =
+    Number.isFinite(Number(depth)) && Number(depth) > 0
+      ? Math.floor(Number(depth))
+      : 2;
+  const normalizedEdgeLimit =
+    Number.isFinite(Number(edgeLimit)) && Number(edgeLimit) > 0
+      ? Math.floor(Number(edgeLimit))
+      : defaultEdgeLimit;
 
+  if (activeRootAddress) {
     const params = new URLSearchParams({
       token: tokenSymbol,
-      depth: String(depth),
+      depth: String(normalizedDepth),
       edgeLimit: String(normalizedEdgeLimit),
     });
     return `${base}/graph/address/${encodeURIComponent(activeRootAddress)}?${params.toString()}`;
@@ -59,7 +63,11 @@ export function createGraphEndpoint(
     return `${base}/graph/token/${encodeURIComponent(tokenSymbol)}/max`;
   }
 
-  const params = new URLSearchParams();
+  const params = new URLSearchParams({
+    depth: String(normalizedDepth),
+    edgeLimit: String(normalizedEdgeLimit),
+  });
+
   const normalizedTopHoldersLimit =
     Number.isFinite(Number(topHoldersLimit)) && Number(topHoldersLimit) > 0
       ? Math.floor(Number(topHoldersLimit))
@@ -71,10 +79,7 @@ export function createGraphEndpoint(
     params.set("withTopHolders", "true");
   }
 
-  const query = params.toString();
-  return query
-    ? `${base}/graph/token/${encodeURIComponent(tokenSymbol)}?${query}`
-    : `${base}/graph/token/${encodeURIComponent(tokenSymbol)}`;
+  return `${base}/graph/token/${encodeURIComponent(tokenSymbol)}?${params.toString()}`;
 }
 
 export function createConnectionsEndpoint(baseUrl, address, tokenSymbol) {

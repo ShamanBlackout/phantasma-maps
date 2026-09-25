@@ -105,6 +105,33 @@ export default function StatsPanel({
 
     return 0;
   };
+  function formatCompactUsdPrice(value) {
+    const numericValue = Number(value);
+    if (!Number.isFinite(numericValue)) return "N/A";
+
+    const absoluteValue = Math.abs(numericValue);
+    if (absoluteValue >= 1) {
+      return `$${numericValue.toLocaleString(undefined, {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      })}`;
+    }
+    if (absoluteValue >= 0.01) {
+      return `$${numericValue.toLocaleString(undefined, {
+        minimumFractionDigits: 4,
+        maximumFractionDigits: 4,
+      })}`;
+    }
+    if (absoluteValue >= 0.000001) {
+      return `$${numericValue.toLocaleString(undefined, {
+        minimumFractionDigits: 6,
+        maximumFractionDigits: 6,
+      })}`;
+    }
+
+    return `$${numericValue.toExponential(2)}`;
+  }
+
   const [isTokenMenuOpen, setIsTokenMenuOpen] = useState(false);
   const [tokenSearchQuery, setTokenSearchQuery] = useState("");
   const [tokenMenuOffset, setTokenMenuOffset] = useState({ x: 0, y: 0 });
@@ -432,7 +459,7 @@ export default function StatsPanel({
             <div className="stats-token-row">
               <span className="stats-label">Price</span>
               <span className="stats-value">
-                {hasPrice ? `$${tokenInfo.price.toFixed(5)}` : "N/A"}
+                {hasPrice ? formatCompactUsdPrice(tokenInfo.price) : "N/A"}
               </span>
             </div>
             <div className="stats-token-row">
