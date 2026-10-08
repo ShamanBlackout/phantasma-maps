@@ -25,6 +25,12 @@
   "eslintConfig": {
     "extends": "react-app"
   },
+  "jest": {
+    "transformIgnorePatterns": [
+      "[/\\\\]node_modules[/\\\\](?!((d3|d3-[^/\\\\]+|internmap|delaunator|robust-predicates)[/\\\\])).+\\.(js|jsx|mjs|cjs|ts|tsx)$",
+      "^.+\\.module\\.(css|sass|scss)$"
+    ]
+  },
   "browserslist": {
     "production": [
       ">0.2%",

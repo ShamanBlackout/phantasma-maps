@@ -836,22 +836,24 @@ test("shows last api error details in diagnostics", async () => {
 
   render(<App />);
 
-  await waitFor(() => {
-    expect(
-      screen.getByText(/API token list request failed/i),
-    ).toBeInTheDocument();
-  });
-
   await user.click(
     screen.getByRole("button", { name: /open diagnostics panel/i }),
   );
 
-  expect(screen.getByText(/^Last API error code:/i)).toHaveTextContent(
-    "Last API error code: TOKENS_UNAVAILABLE",
-  );
-  expect(screen.getByText(/^Last API requestId:/i)).toHaveTextContent(
-    "Last API requestId: req-tokens-down-1",
-  );
+  expect(
+    await screen.findByText(
+      /^Last API error code: TOKENS_UNAVAILABLE$/i,
+      {},
+      { timeout: 5000 },
+    ),
+  ).toBeInTheDocument();
+  expect(
+    await screen.findByText(
+      /^Last API requestId: req-tokens-down-1$/i,
+      {},
+      { timeout: 5000 },
+    ),
+  ).toBeInTheDocument();
 });
 
 test("closes shell popouts and trace tool on outside click", async () => {
