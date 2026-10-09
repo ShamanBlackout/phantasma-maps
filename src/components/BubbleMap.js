@@ -1,11 +1,14 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import * as d3 from "d3";
 import { getGraphThemeStyle, getHolderPalette } from "../theme/holderPalettes";
+import {
+  getLayoutPrewarmTicks,
+  PREWARM_ALPHA_MIN,
+  PREWARM_START_ALPHA,
+} from "../graph/layout";
 
 const PAN_HINT_THRESHOLD = 20;
-const PREWARM_TICKS = 220;
 const BOUNDS_UPDATE_EVERY = 5;
-
 const FIT_DURATION_MS = 220;
 const RESIZE_REFIT_IDLE_MS = 1800;
 const GRAPH_REVEAL_LINK_DELAY_MS = 90;
@@ -19,6 +22,14 @@ const PATH_LAYOUT_MAX_STEP = 210;
 const PATH_LAYOUT_MIN_LANE_SPACING = 22;
 const PATH_LAYOUT_MAX_LANE_SPACING = 62;
 const PATH_LAYOUT_VERTICAL_PADDING = 30;
+
+function easeCubicOut(progress) {
+  return 1 - (1 - progress) ** 3;
+}
+
+function getNodeId(endpoint) {
+  return typeof endpoint === "object" ? endpoint?.id : endpoint;
+}
 
 function BubbleMap({
   nodes,
@@ -52,29 +63,23 @@ function BubbleMap({
   const bubbleLabelColor = colorTheme === "light" ? "#1f3248" : "white";
   const bubblePctColor =
     colorTheme === "light" ? "rgba(31,50,72,0.72)" : "rgba(255,255,255,0.7)";
-
-  function formatSharePct(node) {
-    const parsedValue = Number(node?.value);
-    if (Number.isFinite(currentSupply) && currentSupply > 0) {
-      return `${(((Number.isFinite(parsedValue) ? parsedValue : 0) / currentSupply) * 100).toFixed(2)}%`;
-    }
-
-    const fallbackPct = Number(node?.pct);
-    return `${(Number.isFinite(fallbackPct) ? fallbackPct : 0).toFixed(2)}%`;
-  }
-
-  const svgRef = useRef(null);
+  const canvasRef = useRef(null);
   const boundsRef = useRef(null);
   const transformRef = useRef(d3.zoomIdentity);
-  const viewportRef = useRef({ width: 0, height: 0 });
+  const viewportRef = useRef({ width: 0, height: 0, pixelRatio: 1 });
   const zoomRef = useRef(null);
-  const prevGraphSignatureRef = useRef("");
+  const redrawRef = useRef(() => {});
+  const renderFrameRef = useRef(null);
   const panHintFrameRef = useRef(null);
   const resizeFitFrameRef = useRef(null);
   const pendingBoundsRef = useRef(null);
-  const lastTouchedIdRef = useRef(null);
   const lastManualViewportChangeAtRef = useRef(0);
+  const lastTouchedIdRef = useRef(null);
+  const activePointerRef = useRef(null);
+  const focusedNodeIndexRef = useRef(-1);
+  const latestPropsRef = useRef(null);
   const [hoveredNodeId, setHoveredNodeId] = useState(null);
+  const [focusedNodeId, setFocusedNodeId] = useState(null);
   const [graphRenderCycle, setGraphRenderCycle] = useState(0);
   const [panHints, setPanHints] = useState({
     left: false,
@@ -83,7 +88,20 @@ function BubbleMap({
     down: false,
   });
 
-  function updatePanHints(nextBounds = boundsRef.current) {
+  latestPropsRef.current = {
+    selectedNodeId,
+    hoveredNodeId,
+    focusedNodeId,
+    preserveUnconnectedNodes,
+    traceNodeIds,
+    traceLinkKeys,
+    tracePathHighlights,
+    currentSupply,
+    onNodeClick,
+    onNodeHover,
+  };
+
+  const updatePanHints = useCallback((nextBounds = boundsRef.current) => {
     const transform = transformRef.current;
     const { width, height } = viewportRef.current;
 
@@ -96,7 +114,6 @@ function BubbleMap({
     const visibleRight = (width - transform.x) / transform.k;
     const visibleTop = (0 - transform.y) / transform.k;
     const visibleBottom = (height - transform.y) / transform.k;
-
     const nextHints = {
       left: nextBounds.minX < visibleLeft - PAN_HINT_THRESHOLD,
       right: nextBounds.maxX > visibleRight + PAN_HINT_THRESHOLD,
@@ -104,69 +121,58 @@ function BubbleMap({
       down: nextBounds.maxY > visibleBottom + PAN_HINT_THRESHOLD,
     };
 
-    setPanHints((current) => {
-      if (
-        current.left === nextHints.left &&
-        current.right === nextHints.right &&
-        current.up === nextHints.up &&
-        current.down === nextHints.down
-      ) {
-        return current;
-      }
-      return nextHints;
-    });
-  }
+    setPanHints((current) =>
+      current.left === nextHints.left &&
+      current.right === nextHints.right &&
+      current.up === nextHints.up &&
+      current.down === nextHints.down
+        ? current
+        : nextHints,
+    );
+  }, []);
 
-  function schedulePanHintUpdate(nextBounds = boundsRef.current) {
+  const schedulePanHintUpdate = useCallback((nextBounds = boundsRef.current) => {
     pendingBoundsRef.current = nextBounds;
     if (panHintFrameRef.current !== null) return;
     panHintFrameRef.current = window.requestAnimationFrame(() => {
       panHintFrameRef.current = null;
       updatePanHints(pendingBoundsRef.current);
     });
-  }
+  }, [updatePanHints]);
 
-  function buildGraphSignature(nextNodes, nextLinks, theme) {
-    const nodeSig = nextNodes
-      .map(
-        (n) =>
-          `${n.id}:${n.value}:${n.visualValue ?? ""}:${n.type}:${n.tracePathIndex ?? ""}`,
-      )
-      .join("|");
-    const linkSig = nextLinks
-      .map((l) => {
-        const src = typeof l.source === "object" ? l.source?.id : l.source;
-        const tgt = typeof l.target === "object" ? l.target?.id : l.target;
-        return `${src}>${tgt}`;
-      })
-      .join("|");
-    return `${nodeSig}__${linkSig}__${theme}__${physicsMode}__${layoutMode}__${labelDensityMode}`;
-  }
+  const scheduleRedraw = useCallback(() => {
+    if (renderFrameRef.current !== null) return;
+    renderFrameRef.current = window.requestAnimationFrame(() => {
+      renderFrameRef.current = null;
+      redrawRef.current();
+    });
+  }, []);
 
-  // ── Fit all nodes into the current viewport ─────────────────────────────
-  function fitToView() {
-    if (!svgRef.current || !boundsRef.current || !zoomRef.current) return;
-    const el = svgRef.current;
-    const w = el.clientWidth;
-    const h = el.clientHeight;
-    if (!w || !h) return;
+  const fitToView = useCallback(() => {
+    const canvas = canvasRef.current;
+    const bounds = boundsRef.current;
+    const zoom = zoomRef.current;
+    if (!canvas || !bounds || !zoom) return;
 
-    const b = boundsRef.current;
-    const pad = 48;
-    const bw = b.maxX - b.minX + pad * 2;
-    const bh = b.maxY - b.minY + pad * 2;
-    const k = Math.min(w / bw, h / bh, 1);
-    const tx = (w - k * (b.minX + b.maxX)) / 2;
-    const ty = (h - k * (b.minY + b.maxY)) / 2;
-    const fitTransform = d3.zoomIdentity.translate(tx, ty).scale(k);
+    const { width, height } = viewportRef.current;
+    if (!width || !height) return;
 
-    d3.select(el)
+    const padding = 48;
+    const boundsWidth = bounds.maxX - bounds.minX + padding * 2;
+    const boundsHeight = bounds.maxY - bounds.minY + padding * 2;
+    const scale = Math.min(width / boundsWidth, height / boundsHeight, 1);
+    const translateX = (width - scale * (bounds.minX + bounds.maxX)) / 2;
+    const translateY = (height - scale * (bounds.minY + bounds.maxY)) / 2;
+    const fitTransform = d3.zoomIdentity
+      .translate(translateX, translateY)
+      .scale(scale);
+
+    d3.select(canvas)
       .transition()
       .duration(FIT_DURATION_MS)
-      .call(zoomRef.current.transform, fitTransform);
-  }
+      .call(zoom.transform, fitTransform);
+  }, []);
 
-  // Expose fitToView to parent without forwardRef
   const fitToViewRef = useRef(fitToView);
   fitToViewRef.current = fitToView;
   useEffect(() => {
@@ -175,19 +181,26 @@ function BubbleMap({
     return () => onReady(null);
   }, [onReady]);
 
-  // ── ResizeObserver: keep viewport ref in sync ─────────────────────────────
   useEffect(() => {
-    const el = svgRef.current;
-    if (!el) return;
+    const canvas = canvasRef.current;
+    if (!canvas) return undefined;
 
     const observer = new ResizeObserver((entries) => {
       for (const entry of entries) {
         const { width, height } = entry.contentRect;
         if (!width || !height) continue;
-        const prevViewport = viewportRef.current;
+
+        const pixelRatio = Math.min(window.devicePixelRatio || 1, 2);
+        const backingWidth = Math.round(width * pixelRatio);
+        const backingHeight = Math.round(height * pixelRatio);
         const didViewportChange =
-          prevViewport.width !== width || prevViewport.height !== height;
-        viewportRef.current = { width, height };
+          viewportRef.current.width !== width ||
+          viewportRef.current.height !== height;
+
+        viewportRef.current = { width, height, pixelRatio };
+        if (canvas.width !== backingWidth) canvas.width = backingWidth;
+        if (canvas.height !== backingHeight) canvas.height = backingHeight;
+        scheduleRedraw();
         schedulePanHintUpdate();
 
         if (!didViewportChange) continue;
@@ -209,7 +222,7 @@ function BubbleMap({
       }
     });
 
-    observer.observe(el);
+    observer.observe(canvas);
     return () => {
       observer.disconnect();
       if (resizeFitFrameRef.current !== null) {
@@ -217,202 +230,192 @@ function BubbleMap({
         resizeFitFrameRef.current = null;
       }
     };
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [schedulePanHintUpdate, scheduleRedraw]);
 
-  useEffect(() => {
-    return () => {
+  useEffect(
+    () => () => {
+      if (renderFrameRef.current !== null) {
+        window.cancelAnimationFrame(renderFrameRef.current);
+      }
       if (panHintFrameRef.current !== null) {
         window.cancelAnimationFrame(panHintFrameRef.current);
       }
       if (resizeFitFrameRef.current !== null) {
         window.cancelAnimationFrame(resizeFitFrameRef.current);
       }
-    };
-  }, []);
+    },
+    [],
+  );
 
-  // ── Main effect: rebuild simulation when nodes/links change ──────────────
   useEffect(() => {
-    if (!svgRef.current) return;
+    const canvas = canvasRef.current;
+    if (!canvas) return undefined;
+
+    const resetHover = () => {
+      setHoveredNodeId(null);
+      setFocusedNodeId(null);
+      latestPropsRef.current?.onNodeHover?.(null);
+    };
 
     if (!nodes.length) {
-      prevGraphSignatureRef.current = "";
       boundsRef.current = null;
       transformRef.current = d3.zoomIdentity;
-      d3.select(svgRef.current).selectAll("*").remove();
-      setHoveredNodeId(null);
-      if (onNodeHover) onNodeHover(null);
+      canvas.__graphData = null;
+      redrawRef.current = () => {
+        const context = canvas.getContext("2d");
+        if (!context) return;
+        context.setTransform(1, 0, 0, 1, 0, 0);
+        context.clearRect(0, 0, canvas.width, canvas.height);
+      };
+      resetHover();
+      scheduleRedraw();
       setPanHints({ left: false, right: false, up: false, down: false });
-      return;
+      return undefined;
     }
 
-    const graphSignature = buildGraphSignature(nodes, links, colorTheme);
-    if (prevGraphSignatureRef.current === graphSignature) {
-      return;
-    }
-    prevGraphSignatureRef.current = graphSignature;
-    setGraphRenderCycle((current) => current + 1);
+    focusedNodeIndexRef.current = -1;
+    setFocusedNodeId(null);
+    setGraphRenderCycle((cycle) => cycle + 1);
 
-    const el = svgRef.current;
-    const width = el.clientWidth || 900;
-    const height = el.clientHeight || 650;
-    viewportRef.current = { width, height };
+    const width = canvas.clientWidth || 900;
+    const height = canvas.clientHeight || 650;
+    viewportRef.current = {
+      ...viewportRef.current,
+      width,
+      height,
+      pixelRatio: Math.min(window.devicePixelRatio || 1, 2),
+    };
     transformRef.current = d3.zoomIdentity;
+    const context = canvas.getContext("2d");
+    if (!context) {
+      throw new Error("Canvas 2D rendering context is unavailable.");
+    }
 
-    const svg = d3.select(el);
-    svg.selectAll("*").remove();
     const prefersReducedMotion =
       typeof window !== "undefined" &&
       typeof window.matchMedia === "function" &&
       window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-
-    const container = svg.append("g").style("will-change", "transform");
-
-    // ── Scales ────────────────────────────────────────────────────────────
     const getRenderValue = (node) =>
       Number.isFinite(Number(node.visualValue))
         ? Number(node.visualValue)
         : Number(node.value) || 0;
-    const maxVal = d3.max(nodes, (d) => getRenderValue(d));
-    const rScale = d3.scaleSqrt().domain([0, maxVal]).range([7, 68]);
-
-    // ── Deep-copy data so D3 can mutate freely ────────────────────────────
-    const simNodes = nodes.map((d) => ({ ...d }));
-    const nodeIndex = new Map(simNodes.map((d) => [d.id, d]));
+    const maxValue = d3.max(nodes, getRenderValue);
+    const radiusScale = d3.scaleSqrt().domain([0, maxValue]).range([7, 68]);
+    const simNodes = nodes.map((node) => ({ ...node }));
+    const nodeIndex = new Map(simNodes.map((node) => [node.id, node]));
     const simLinks = links
-      .filter((l) => nodeIndex.has(l.source) && nodeIndex.has(l.target))
-      .map((l) => ({ source: l.source, target: l.target }));
+      .filter(
+        (link) =>
+          nodeIndex.has(getNodeId(link.source)) &&
+          nodeIndex.has(getNodeId(link.target)),
+      )
+      .map((link) => ({
+        ...link,
+        source: getNodeId(link.source),
+        target: getNodeId(link.target),
+      }));
     const isPathLayout =
       layoutMode === "path" &&
       simNodes.every((node) => Number.isFinite(Number(node.tracePathIndex)));
-
     let pathStep = 0;
-    if (isPathLayout) {
-      const maxTracePathIndex = d3.max(simNodes, (node) =>
-        Number.isFinite(Number(node.tracePathIndex))
-          ? Number(node.tracePathIndex)
-          : 0,
-      );
-      const hopCount = Math.max(1, Number(maxTracePathIndex) || 1);
-      const horizontalPadding = Math.max(56, width * 0.06);
-      const usableWidth = Math.max(1, width - horizontalPadding * 2);
-      const computedPathStep = usableWidth / hopCount;
-      const maxPathStep = Math.max(
-        PATH_LAYOUT_MIN_STEP,
-        Math.min(PATH_LAYOUT_MAX_STEP, width * 0.2),
-      );
-      pathStep =
-        simNodes.length > 1
-          ? Math.max(
-              PATH_LAYOUT_MIN_STEP,
-              Math.min(computedPathStep, maxPathStep),
-            )
-          : 0;
-      const routeWidth = pathStep * hopCount;
-      const routeStartX = (width - routeWidth) / 2;
 
+    if (isPathLayout) {
+      const maxPathIndex =
+        d3.max(simNodes, (node) => Number(node.tracePathIndex) || 0) || 1;
+      const horizontalPadding = Math.max(56, width * 0.06);
+      pathStep = Math.max(
+        PATH_LAYOUT_MIN_STEP,
+        Math.min(
+          Math.max(
+            PATH_LAYOUT_MIN_STEP,
+            Math.min(PATH_LAYOUT_MAX_STEP, width * 0.2),
+          ),
+          Math.max(1, width - horizontalPadding * 2) / maxPathIndex,
+        ),
+      );
+      const routeStartX = (width - pathStep * maxPathIndex) / 2;
       const laneValues = simNodes
         .map((node) => Number(node.tracePathLane))
-        .filter((lane) => Number.isFinite(lane));
+        .filter(Number.isFinite);
       const minLane = laneValues.length ? Math.min(...laneValues) : 0;
       const maxLane = laneValues.length ? Math.max(...laneValues) : 0;
-      const laneSpan = Math.max(1, maxLane - minLane + 1);
       const laneMidpoint = minLane + (maxLane - minLane) / 2;
-      const laneUsableHeight = Math.max(
-        1,
-        height - PATH_LAYOUT_VERTICAL_PADDING * 2,
-      );
+      const laneSpan = Math.max(1, maxLane - minLane + 1);
       const laneSpacing = Math.max(
         PATH_LAYOUT_MIN_LANE_SPACING,
         Math.min(
           PATH_LAYOUT_MAX_LANE_SPACING,
-          laneUsableHeight / Math.max(1, laneSpan - 1),
+          Math.max(1, height - PATH_LAYOUT_VERTICAL_PADDING * 2) /
+            Math.max(1, laneSpan - 1),
         ),
       );
-      const lastPathIndex = Math.max(0, hopCount);
 
       simNodes.forEach((node) => {
-        const pathIndex = Number(node.tracePathIndex) || 0;
         const laneCandidates = Array.isArray(node.tracePathLanes)
-          ? node.tracePathLanes
-              .map((lane) => Number(lane))
-              .filter((lane) => Number.isFinite(lane))
+          ? node.tracePathLanes.map(Number).filter(Number.isFinite)
           : [];
         const laneAnchor = laneCandidates.length
           ? laneCandidates.reduce((sum, lane) => sum + lane, 0) /
             laneCandidates.length
-          : Number.isFinite(Number(node.tracePathLane))
-            ? Number(node.tracePathLane)
-            : 0;
-        const desiredX = routeStartX + pathIndex * pathStep;
-        const desiredY =
-          pathIndex === 0 || pathIndex === lastPathIndex
+          : Number(node.tracePathLane) || 0;
+        const pathIndex = Number(node.tracePathIndex) || 0;
+        node.desiredX = routeStartX + pathIndex * pathStep;
+        node.desiredY =
+          pathIndex === 0 || pathIndex === maxPathIndex
             ? height / 2
             : height / 2 + (laneAnchor - laneMidpoint) * laneSpacing;
-        node.desiredX = desiredX;
-        node.desiredY = desiredY;
-        node.x = desiredX;
-        node.y = desiredY;
+        node.x = node.desiredX;
+        node.y = node.desiredY;
       });
     }
+
     const revealOrderById = new Map(
       [...simNodes]
-        .sort((a, b) => getRenderValue(b) - getRenderValue(a))
+        .sort((left, right) => getRenderValue(right) - getRenderValue(left))
         .map((node, index) => [node.id, index]),
     );
-
-    // ── Force simulation ──────────────────────────────────────────────────
-    const resolvedPrewarmTicks = isPathLayout
-      ? 140
-      : physicsMode === "fast"
-        ? 120
-        : physicsMode === "detailed"
-          ? 320
-          : PREWARM_TICKS;
-    const resolvedChargeMultiplier = isPathLayout
+    const resolvedAlphaDecay = physicsMode === "detailed" ? 0.032 : 0.04;
+    const resolvedPrewarmTicks = getLayoutPrewarmTicks(resolvedAlphaDecay);
+    const chargeMultiplier = isPathLayout
       ? 0.25
       : physicsMode === "fast"
         ? 4.3
         : physicsMode === "detailed"
           ? 6.2
           : 5.5;
-    const resolvedLinkStrength = isPathLayout
+    const linkStrength = isPathLayout
       ? 0.95
       : physicsMode === "fast"
         ? 0.2
         : physicsMode === "detailed"
           ? 0.32
           : 0.25;
-    const resolvedCollisionIterations =
-      physicsMode === "fast" ? 1 : physicsMode === "detailed" ? 2 : 1;
-
+    const collisionIterations = physicsMode === "detailed" ? 2 : 1;
     const simulation = d3
       .forceSimulation(simNodes)
-      .alphaDecay(physicsMode === "detailed" ? 0.032 : 0.04)
-      .alphaMin(0.02)
+      .alpha(PREWARM_START_ALPHA)
+      .alphaDecay(resolvedAlphaDecay)
+      .alphaMin(PREWARM_ALPHA_MIN)
       .force(
         "link",
         d3
           .forceLink(simLinks)
-          .id((d) => d.id)
-          .distance((l) => {
-            if (isPathLayout) {
-              return Math.max(54, pathStep * 0.8);
-            }
-
-            return (
-              rScale(getRenderValue(l.source)) +
-              rScale(getRenderValue(l.target)) +
-              18
-            );
-          })
-          .strength(resolvedLinkStrength),
+          .id((node) => node.id)
+          .distance((link) =>
+            isPathLayout
+              ? Math.max(54, pathStep * 0.8)
+              : radiusScale(getRenderValue(link.source)) +
+                radiusScale(getRenderValue(link.target)) +
+                18,
+          )
+          .strength(linkStrength),
       )
       .force(
         "charge",
         d3
           .forceManyBody()
           .strength(
-            (d) => -rScale(getRenderValue(d)) * resolvedChargeMultiplier,
+            (node) => -radiusScale(getRenderValue(node)) * chargeMultiplier,
           ),
       )
       .force(
@@ -422,377 +425,347 @@ function BubbleMap({
       .force(
         "x",
         isPathLayout
-          ? d3.forceX((d) => d.desiredX ?? width / 2).strength(0.9)
+          ? d3.forceX((node) => node.desiredX ?? width / 2).strength(0.9)
           : d3.forceX(width / 2).strength(0.035),
       )
       .force(
         "y",
         isPathLayout
-          ? d3.forceY((d) => d.desiredY ?? height / 2).strength(0.78)
+          ? d3.forceY((node) => node.desiredY ?? height / 2).strength(0.78)
           : d3.forceY(height / 2).strength(0.035),
       )
       .force(
         "collision",
         d3
           .forceCollide()
-          .radius((d) => rScale(getRenderValue(d)) + 3)
+          .radius((node) => radiusScale(getRenderValue(node)) + 3)
           .strength(0.5)
-          .iterations(resolvedCollisionIterations),
+          .iterations(collisionIterations),
       );
 
     simulation.stop();
-    for (let i = 0; i < resolvedPrewarmTicks; i += 1) {
+    for (let tick = 0; tick < resolvedPrewarmTicks; tick += 1) {
       simulation.tick();
     }
 
-    // ── Links ─────────────────────────────────────────────────────────────
-    const linkSel = container
-      .append("g")
-      .attr("class", "links")
-      .selectAll("line")
-      .data(simLinks)
-      .enter()
-      .append("line")
-      .attr("class", "bubble-link")
-      .attr("stroke", graphThemeStyle.linkBase)
-      .attr("stroke-width", graphThemeStyle.linkWidthBase ?? 1)
-      .attr("stroke-opacity", prefersReducedMotion ? 1 : 0);
+    const linkIndex = new Map();
+    simLinks.forEach((link) => {
+      const sourceId = link.source.id;
+      const targetId = link.target.id;
+      if (!linkIndex.has(sourceId)) linkIndex.set(sourceId, new Set());
+      if (!linkIndex.has(targetId)) linkIndex.set(targetId, new Set());
+      linkIndex.get(sourceId).add(targetId);
+      linkIndex.get(targetId).add(sourceId);
+    });
+    canvas.__simulation = simulation;
+    canvas.__graphData = {
+      nodes: simNodes,
+      linkIndex,
+      radiusScale: (node) => radiusScale(getRenderValue(node)),
+    };
 
-    // ── Node groups ───────────────────────────────────────────────────────
-    const nodeSel = container
-      .append("g")
-      .attr("class", "nodes")
-      .selectAll("g")
-      .data(simNodes)
-      .enter()
-      .append("g")
-      .attr("class", "bubble-node")
-      .style("cursor", "pointer")
-      .on("mouseenter", function () {
-        const nodeData = d3.select(this).datum();
-        setHoveredNodeId(nodeData?.id ?? null);
-        if (onNodeHover && nodeData) onNodeHover(nodeData);
-        d3.select(this)
-          .select(".bubble-glow")
-          .interrupt()
-          .transition()
-          .duration(140)
-          .attr("fill-opacity", graphThemeStyle.hoverGlowOpacity ?? 0.2)
-          .attr(
-            "stroke",
-            graphThemeStyle.hoverStroke ?? "rgba(255,255,255,0.55)",
-          )
-          .attr("stroke-width", graphThemeStyle.hoverStrokeWidth ?? 1.5)
-          .attr("stroke-opacity", graphThemeStyle.hoverStrokeOpacity ?? 0.65);
-      })
-      .on("mouseleave", function () {
-        setHoveredNodeId(null);
-        if (onNodeHover) onNodeHover(null);
-        d3.select(this)
-          .select(".bubble-glow")
-          .interrupt()
-          .transition()
-          .duration(160)
-          .attr("fill-opacity", graphThemeStyle.baseGlowOpacity ?? 0.08)
-          .attr("stroke", null)
-          .attr("stroke-width", 0)
-          .attr("stroke-opacity", 0);
-      })
-      .on("click", (event, d) => {
-        event.stopPropagation();
-        // On touch devices: first tap previews (hover), second tap selects
-        const isTouch =
-          event.sourceEvent?.pointerType === "touch" ||
-          (typeof window !== "undefined" &&
-            !window.matchMedia("(pointer: fine)").matches);
-        if (isTouch) {
-          if (lastTouchedIdRef.current === d.id) {
-            // Second tap on same node → select
-            lastTouchedIdRef.current = null;
-            if (onNodeHover) onNodeHover(null);
-            setHoveredNodeId(null);
-            onNodeClick && onNodeClick(d);
-          } else {
-            // First tap → preview (hover)
-            lastTouchedIdRef.current = d.id;
-            setHoveredNodeId(d.id);
-            if (onNodeHover) onNodeHover(d);
-          }
-        } else {
-          onNodeClick && onNodeClick(d);
-        }
-      });
-    if (isPathLayout) {
-      const handlePathNodePointerDown = (event, d) => {
-        if (event.button !== 0) return;
-        event.preventDefault();
-        event.stopPropagation();
-
-        const svgNode = svg.node();
-        if (!svgNode) return;
-
-        let active = true;
-
-        const applyDragPosition = (moveEvent) => {
-          if (!active) return;
-          const [x, y] = d3.pointer(moveEvent, svgNode);
-          d.fx = x;
-          d.fy = y;
-          d.x = x;
-          d.y = y;
-          nodeSel.attr(
-            "transform",
-            (node) => `translate(${node.x ?? 0},${node.y ?? 0})`,
-          );
-          linkSel
-            .attr("x1", (link) => link.source.x)
-            .attr("y1", (link) => link.source.y)
-            .attr("x2", (link) => link.target.x)
-            .attr("y2", (link) => link.target.y);
-          simulation.alphaTarget(0.18).restart();
-        };
-
-        const handlePointerUp = () => {
-          if (!active) return;
-          active = false;
-          window.removeEventListener("pointermove", applyDragPosition);
-          window.removeEventListener("pointerup", handlePointerUp);
-          window.removeEventListener("pointercancel", handlePointerUp);
-          d.fx = d.x;
-          d.fy = d.y;
-          if (!simulation.alphaTarget()) {
-            simulation.alphaTarget(0);
-          }
-        };
-
-        window.addEventListener("pointermove", applyDragPosition);
-        window.addEventListener("pointerup", handlePointerUp);
-        window.addEventListener("pointercancel", handlePointerUp);
-        applyDragPosition(event);
-      };
-
-      nodeSel
-        .on("mousedown.drag", null)
-        .on("pointerdown", handlePathNodePointerDown);
-    } else {
-      nodeSel.on("pointerdown", null).call(
-        d3
-          .drag()
-          .on("start", (event, d) => {
-            if (!event.active) simulation.alphaTarget(0.18).restart();
-            d.fx = d.x;
-            d.fy = d.y;
-          })
-          .on("drag", (event, d) => {
-            event.sourceEvent?.preventDefault?.();
-            d.fx = event.x;
-            d.fy = event.y;
-          })
-          .on("end", (event, d) => {
-            if (!event.active) simulation.alphaTarget(0);
-            d.fx = null;
-            d.fy = null;
-          }),
-      );
-    }
-
-    // Outer glow ring
-    nodeSel
-      .append("circle")
-      .attr("class", "bubble-glow")
-      .attr("r", (d) => rScale(getRenderValue(d)) + 8)
-      .attr("fill", (d) => holderPalette[d.type] || "#74b9ff")
-      .attr(
-        "fill-opacity",
-        prefersReducedMotion ? (graphThemeStyle.baseGlowOpacity ?? 0.08) : 0,
-      )
-      .attr("stroke-width", 0)
-      .attr("stroke-opacity", 0)
-      .style("pointer-events", "none");
-
-    // Explicit ring for searched root node, so it remains visually distinct.
-    nodeSel
-      .filter((d) => d.isSearchRoot)
-      .append("circle")
-      .attr("class", "bubble-root-ring")
-      .attr("r", (d) => rScale(getRenderValue(d)) + 14)
-      .attr("fill", "none")
-      .attr("stroke", "#ffe08a")
-      .attr("stroke-width", 2.8)
-      .attr("stroke-opacity", 0.95)
-      .style("pointer-events", "none");
-
-    // Main bubble
-    nodeSel
-      .append("circle")
-      .attr("class", "bubble-circle")
-      .attr("r", (d) =>
-        prefersReducedMotion
-          ? rScale(getRenderValue(d))
-          : rScale(getRenderValue(d)) * 0.76,
-      )
-      .attr("fill", (d) => holderPalette[d.type] || "#74b9ff")
-      .attr("fill-opacity", prefersReducedMotion ? 0.72 : 0)
-      .attr("stroke", (d) =>
-        d.isSearchRoot ? "#fff3bf" : holderPalette[d.type] || "#74b9ff",
-      )
-      .attr("stroke-width", (d) => (d.isSearchRoot ? 3.2 : 1.5))
-      .attr("stroke-opacity", (d) =>
-        prefersReducedMotion ? (d.isSearchRoot ? 1 : 0.85) : 0,
-      );
-
-    // Primary label (for bubbles large enough)
     const labelThreshold =
       labelDensityMode === "minimal"
         ? 30
         : labelDensityMode === "detailed"
           ? 18
           : 22;
-    const pctThreshold =
+    const percentageThreshold =
       labelDensityMode === "minimal"
         ? 42
         : labelDensityMode === "detailed"
           ? 30
           : 36;
+    const graphStartedAt = performance.now();
+    const defaultGlowOpacity = graphThemeStyle.baseGlowOpacity ?? 0.08;
 
-    nodeSel
-      .filter((d) => rScale(getRenderValue(d)) > labelThreshold)
-      .append("text")
-      .attr("class", "bubble-label")
-      .text((d) => (d.label.length > 13 ? d.label.slice(0, 11) + "…" : d.label))
-      .attr("text-anchor", "middle")
-      .attr("dy", (d) => (rScale(getRenderValue(d)) > 36 ? "-0.3em" : "0.35em"))
-      .attr("fill", bubbleLabelColor)
-      .attr("font-size", (d) => Math.min(rScale(getRenderValue(d)) / 4.2, 13))
-      .attr("font-weight", "600")
-      .attr("opacity", prefersReducedMotion ? 1 : 0)
-      .style("pointer-events", "none");
+    const getRevealProgress = (startAt, duration, now) =>
+      prefersReducedMotion
+        ? 1
+        : easeCubicOut(Math.max(0, Math.min(1, (now - startAt) / duration)));
 
-    // Percentage sub-label (only for large bubbles)
-    nodeSel
-      .filter((d) => rScale(getRenderValue(d)) > pctThreshold)
-      .append("text")
-      .attr("class", "bubble-pct")
-      .text((d) => formatSharePct(d))
-      .attr("text-anchor", "middle")
-      .attr("dy", "1.1em")
-      .attr("fill", bubblePctColor)
-      .attr("font-size", (d) => Math.min(rScale(getRenderValue(d)) / 5.5, 11))
-      .attr("opacity", prefersReducedMotion ? 1 : 0)
-      .style("pointer-events", "none");
+    const drawGraph = () => {
+      const { width: viewportWidth, height: viewportHeight, pixelRatio } =
+        viewportRef.current;
+      if (!viewportWidth || !viewportHeight) return;
 
-    linkSel
-      .attr("x1", (d) => d.source.x)
-      .attr("y1", (d) => d.source.y)
-      .attr("x2", (d) => d.target.x)
-      .attr("y2", (d) => d.target.y);
-    nodeSel.attr("transform", (d) => `translate(${d.x ?? 0},${d.y ?? 0})`);
+      context.setTransform(1, 0, 0, 1, 0, 0);
+      context.clearRect(
+        0,
+        0,
+        canvas.width || viewportWidth * pixelRatio,
+        canvas.height || viewportHeight * pixelRatio,
+      );
 
-    if (!prefersReducedMotion) {
-      const linkDelay = (_, index) =>
-        GRAPH_REVEAL_LINK_DELAY_MS +
-        Math.min(index, 60) * Math.max(5, GRAPH_REVEAL_ITEM_STAGGER_MS - 6);
-      const nodeDelay = (nodeData) =>
-        GRAPH_REVEAL_NODE_DELAY_MS +
-        Math.min(revealOrderById.get(nodeData.id) ?? 0, 50) *
-          GRAPH_REVEAL_ITEM_STAGGER_MS;
+      const transform = transformRef.current;
+      context.setTransform(
+        pixelRatio * transform.k,
+        0,
+        0,
+        pixelRatio * transform.k,
+        pixelRatio * transform.x,
+        pixelRatio * transform.y,
+      );
 
-      linkSel
-        .interrupt()
-        .transition()
-        .delay(linkDelay)
-        .duration(GRAPH_REVEAL_LINK_DURATION_MS)
-        .ease(d3.easeCubicOut)
-        .attr("stroke-opacity", 1);
+      const props = latestPropsRef.current;
+      const activeNodeId = props.selectedNodeId || props.hoveredNodeId || props.focusedNodeId;
+      const isHoverMode = !props.selectedNodeId && Boolean(activeNodeId);
+      const shouldHideUnrelatedNodes =
+        Boolean(props.selectedNodeId) && !props.preserveUnconnectedNodes;
+      const connectedNodeIds = new Set(activeNodeId ? [activeNodeId] : []);
+      if (activeNodeId) {
+        (linkIndex.get(activeNodeId) || []).forEach((nodeId) =>
+          connectedNodeIds.add(nodeId),
+        );
+      }
 
-      nodeSel
-        .select(".bubble-glow")
-        .interrupt()
-        .transition()
-        .delay(nodeDelay)
-        .duration(GRAPH_REVEAL_NODE_DURATION_MS)
-        .ease(d3.easeCubicOut)
-        .attr("fill-opacity", graphThemeStyle.baseGlowOpacity ?? 0.08);
+      const traceNodeSet = new Set(
+        (Array.isArray(props.traceNodeIds) ? props.traceNodeIds : []).map(
+          (id) => String(id || "").trim(),
+        ),
+      );
+      const traceLinkSet = new Set(
+        (Array.isArray(props.traceLinkKeys) ? props.traceLinkKeys : []).map(
+          (key) => String(key || "").trim(),
+        ),
+      );
+      const traceNodeColorMap = new Map();
+      const traceLinkColorMap = new Map();
+      (Array.isArray(props.tracePathHighlights)
+        ? props.tracePathHighlights
+        : []
+      ).forEach((item) => {
+        const color = String(item?.color || "").trim();
+        if (!color) return;
+        (Array.isArray(item?.nodeIds) ? item.nodeIds : []).forEach((id) => {
+          const normalizedId = String(id || "").trim();
+          if (normalizedId && !traceNodeColorMap.has(normalizedId)) {
+            traceNodeColorMap.set(normalizedId, color);
+          }
+        });
+        (Array.isArray(item?.linkKeys) ? item.linkKeys : []).forEach((key) => {
+          const normalizedKey = String(key || "").trim();
+          if (normalizedKey && !traceLinkColorMap.has(normalizedKey)) {
+            traceLinkColorMap.set(normalizedKey, color);
+          }
+        });
+      });
+      const hasTrace =
+        traceNodeSet.size > 0 ||
+        traceLinkSet.size > 0 ||
+        traceNodeColorMap.size > 0 ||
+        traceLinkColorMap.size > 0;
 
-      nodeSel
-        .select(".bubble-circle")
-        .interrupt()
-        .transition()
-        .delay(nodeDelay)
-        .duration(GRAPH_REVEAL_NODE_DURATION_MS)
-        .ease(d3.easeCubicOut)
-        .attr("r", (d) => rScale(getRenderValue(d)))
-        .attr("fill-opacity", 0.72)
-        .attr("stroke-opacity", (d) => (d.isSearchRoot ? 1 : 0.85));
+      simLinks.forEach((link, index) => {
+        const sourceId = link.source.id;
+        const targetId = link.target.id;
+        const connected = sourceId === activeNodeId || targetId === activeNodeId;
+        if (shouldHideUnrelatedNodes && !connected) {
+          return;
+        }
 
-      nodeSel
-        .selectAll(".bubble-label, .bubble-pct")
-        .interrupt()
-        .transition()
-        .delay((nodeData) => nodeDelay(nodeData) + 36)
-        .duration(GRAPH_REVEAL_LABEL_DURATION_MS)
-        .ease(d3.easeCubicOut)
-        .attr("opacity", 1);
-    }
+        const linkKey = `${sourceId}->${targetId}`;
+        const traceColor = traceLinkColorMap.get(linkKey);
+        const isTraced = traceLinkSet.has(linkKey) || Boolean(traceColor);
+        const revealStart =
+          graphStartedAt +
+          GRAPH_REVEAL_LINK_DELAY_MS +
+          Math.min(index, 60) * Math.max(5, GRAPH_REVEAL_ITEM_STAGGER_MS - 6);
+        const reveal = getRevealProgress(
+          revealStart,
+          GRAPH_REVEAL_LINK_DURATION_MS,
+          performance.now(),
+        );
+        if (reveal <= 0) return;
 
-    const initialBounds = {
+        context.beginPath();
+        context.moveTo(link.source.x, link.source.y);
+        context.lineTo(link.target.x, link.target.y);
+        context.strokeStyle = traceColor
+          ? traceColor
+          : isTraced
+            ? linkActive
+            : connected
+              ? linkActive
+              : linkBase;
+        context.lineWidth = isTraced
+          ? Math.max(linkWidthActive ?? 2, 2.4)
+          : connected
+            ? (linkWidthActive ?? 2)
+            : (linkWidthBase ?? 1);
+        context.globalAlpha = reveal * (hasTrace && !isTraced ? 0.08 : 1);
+        if (isHoverMode && !connected) {
+          context.globalAlpha *= 0.2;
+        }
+        context.stroke();
+      });
+
+      simNodes.forEach((node) => {
+        const nodeId = String(node.id || "").trim();
+        const isConnected = connectedNodeIds.has(nodeId);
+        if (shouldHideUnrelatedNodes && !isConnected) return;
+
+        const radius = radiusScale(getRenderValue(node));
+        const traceColor = traceNodeColorMap.get(nodeId);
+        const isTraced = traceNodeSet.has(nodeId) || Boolean(traceColor);
+        const revealOrder = revealOrderById.get(node.id) ?? 0;
+        const nodeRevealStart =
+          graphStartedAt +
+          GRAPH_REVEAL_NODE_DELAY_MS +
+          Math.min(revealOrder, 50) * GRAPH_REVEAL_ITEM_STAGGER_MS;
+        const nodeReveal = getRevealProgress(
+          nodeRevealStart,
+          GRAPH_REVEAL_NODE_DURATION_MS,
+          performance.now(),
+        );
+        if (nodeReveal <= 0) return;
+
+        const labelReveal = getRevealProgress(
+          nodeRevealStart + 36,
+          GRAPH_REVEAL_LABEL_DURATION_MS,
+          performance.now(),
+        );
+        let nodeOpacity = 1;
+        if (hasTrace && !isTraced) nodeOpacity = 0.24;
+        if (isHoverMode && !isConnected) nodeOpacity = Math.min(nodeOpacity, 0.42);
+        if (props.selectedNodeId && props.preserveUnconnectedNodes && !isConnected) {
+          nodeOpacity = 0.42;
+        }
+        context.globalAlpha = nodeOpacity * nodeReveal;
+
+        const fillColor = holderPalette[node.type] || "#74b9ff";
+        context.beginPath();
+        context.arc(node.x, node.y, radius + 8, 0, Math.PI * 2);
+        context.fillStyle = fillColor;
+        context.globalAlpha *= defaultGlowOpacity;
+        context.fill();
+        context.globalAlpha = nodeOpacity * nodeReveal;
+
+        if (node.isSearchRoot) {
+          context.beginPath();
+          context.arc(node.x, node.y, radius + 14, 0, Math.PI * 2);
+          context.strokeStyle = "#ffe08a";
+          context.lineWidth = 2.8;
+          context.globalAlpha *= 0.95;
+          context.stroke();
+          context.globalAlpha = nodeOpacity * nodeReveal;
+        }
+
+        const active = nodeId === activeNodeId;
+        const fillOpacity = activeNodeId
+          ? active
+            ? selectedFillOpacity
+            : fadedFillOpacity
+          : 0.72;
+        const displayRadius = prefersReducedMotion
+          ? radius
+          : radius * 0.76 + (radius - radius * 0.76) * nodeReveal;
+        context.beginPath();
+        context.arc(node.x, node.y, displayRadius, 0, Math.PI * 2);
+        context.fillStyle = fillColor;
+        context.globalAlpha = nodeOpacity * nodeReveal * fillOpacity;
+        context.fill();
+
+        const strokeColor = traceColor
+          ? traceColor
+          : active && (props.hoveredNodeId || props.focusedNodeId)
+            ? (graphThemeStyle.hoverStroke ?? "rgba(255,255,255,0.55)")
+            : node.isSearchRoot
+              ? "#fff3bf"
+              : fillColor;
+        const strokeWidth = active
+          ? selectedStrokeWidth
+          : isTraced
+            ? Math.max(node.isSearchRoot ? 3.2 : 1.5, 2.8)
+            : node.isSearchRoot
+              ? 3.2
+              : defaultStrokeWidth;
+        context.beginPath();
+        context.arc(node.x, node.y, displayRadius, 0, Math.PI * 2);
+        context.strokeStyle = strokeColor;
+        context.lineWidth = strokeWidth;
+        context.globalAlpha =
+          nodeOpacity *
+          nodeReveal *
+          (prefersReducedMotion ? (node.isSearchRoot ? 1 : 0.85) : 0.85);
+        context.stroke();
+
+        const showLabel = radius > labelThreshold;
+        const showPercentage = radius > percentageThreshold;
+        if (showLabel && labelReveal > 0) {
+          context.globalAlpha = nodeOpacity * labelReveal;
+          context.fillStyle = bubbleLabelColor;
+          context.textAlign = "center";
+          context.textBaseline = "middle";
+          context.font = `600 ${Math.min(radius / 4.2, 13)}px Inter, system-ui, sans-serif`;
+          const label =
+            node.label.length > 13 ? `${node.label.slice(0, 11)}…` : node.label;
+          context.fillText(
+            label,
+            node.x,
+            node.y + (showPercentage ? -4 : 0),
+          );
+        }
+        if (showPercentage && labelReveal > 0) {
+          const parsedValue = Number(node?.value);
+          const share =
+            Number.isFinite(props.currentSupply) && props.currentSupply > 0
+              ? `${(((Number.isFinite(parsedValue) ? parsedValue : 0) / props.currentSupply) * 100).toFixed(2)}%`
+              : `${(Number.isFinite(Number(node?.pct)) ? Number(node.pct) : 0).toFixed(2)}%`;
+          context.globalAlpha = nodeOpacity * labelReveal;
+          context.fillStyle = bubblePctColor;
+          context.textAlign = "center";
+          context.textBaseline = "middle";
+          context.font = `400 ${Math.min(radius / 5.5, 11)}px Inter, system-ui, sans-serif`;
+          context.fillText(share, node.x, node.y + (showLabel ? 10 : 0));
+        }
+      });
+      context.globalAlpha = 1;
+
+      if (
+        !prefersReducedMotion &&
+        performance.now() - graphStartedAt <
+          GRAPH_REVEAL_NODE_DELAY_MS +
+            50 * GRAPH_REVEAL_ITEM_STAGGER_MS +
+            GRAPH_REVEAL_NODE_DURATION_MS
+      ) {
+        scheduleRedraw();
+      }
+    };
+    redrawRef.current = drawGraph;
+
+    const computeBounds = () => ({
       minX: d3.min(
         simNodes,
-        (d) => (d.x ?? width / 2) - (rScale(getRenderValue(d)) + 10),
+        (node) => (node.x ?? width / 2) - (radiusScale(getRenderValue(node)) + 10),
       ),
       maxX: d3.max(
         simNodes,
-        (d) => (d.x ?? width / 2) + (rScale(getRenderValue(d)) + 10),
+        (node) => (node.x ?? width / 2) + (radiusScale(getRenderValue(node)) + 10),
       ),
       minY: d3.min(
         simNodes,
-        (d) => (d.y ?? height / 2) - (rScale(getRenderValue(d)) + 10),
+        (node) => (node.y ?? height / 2) - (radiusScale(getRenderValue(node)) + 10),
       ),
       maxY: d3.max(
         simNodes,
-        (d) => (d.y ?? height / 2) + (rScale(getRenderValue(d)) + 10),
+        (node) => (node.y ?? height / 2) + (radiusScale(getRenderValue(node)) + 10),
       ),
-    };
-    boundsRef.current = initialBounds;
-    schedulePanHintUpdate(initialBounds);
+    });
+    boundsRef.current = computeBounds();
+    schedulePanHintUpdate(boundsRef.current);
+    drawGraph();
 
-    // ── Tick ──────────────────────────────────────────────────────────────
     let tickCount = 0;
     simulation.on("tick", () => {
+      scheduleRedraw();
       tickCount += 1;
-
-      linkSel
-        .attr("x1", (d) => d.source.x)
-        .attr("y1", (d) => d.source.y)
-        .attr("x2", (d) => d.target.x)
-        .attr("y2", (d) => d.target.y);
-      nodeSel.attr("transform", (d) => `translate(${d.x ?? 0},${d.y ?? 0})`);
-
       if (tickCount % BOUNDS_UPDATE_EVERY === 0) {
-        const bounds = {
-          minX: d3.min(
-            simNodes,
-            (d) => (d.x ?? width / 2) - (rScale(getRenderValue(d)) + 10),
-          ),
-          maxX: d3.max(
-            simNodes,
-            (d) => (d.x ?? width / 2) + (rScale(getRenderValue(d)) + 10),
-          ),
-          minY: d3.min(
-            simNodes,
-            (d) => (d.y ?? height / 2) - (rScale(getRenderValue(d)) + 10),
-          ),
-          maxY: d3.max(
-            simNodes,
-            (d) => (d.y ?? height / 2) + (rScale(getRenderValue(d)) + 10),
-          ),
-        };
-        boundsRef.current = bounds;
-        schedulePanHintUpdate(bounds);
+        boundsRef.current = computeBounds();
+        schedulePanHintUpdate(boundsRef.current);
       }
     });
 
-    // ── Zoom / pan ────────────────────────────────────────────────────────
     const zoom = d3
       .zoom()
       .scaleExtent([0.2, 8])
@@ -801,290 +774,311 @@ function BubbleMap({
           lastManualViewportChangeAtRef.current = Date.now();
         }
         transformRef.current = event.transform;
-        container.attr("transform", event.transform);
+        scheduleRedraw();
         schedulePanHintUpdate();
       });
-
     zoomRef.current = zoom;
-    svg.call(zoom).on("dblclick.zoom", null);
-    svg.on("click", () => {
-      // Tapping empty canvas clears hover preview and selection
-      lastTouchedIdRef.current = null;
-      onNodeClick && onNodeClick(null);
-    });
+    d3.select(canvas).call(zoom).on("dblclick.zoom", null);
+
     simulation.alpha(0.14).restart();
+    resetHover();
 
     return () => {
-      setHoveredNodeId(null);
-      if (onNodeHover) onNodeHover(null);
+      simulation.stop();
+      canvas.__simulation = null;
+      redrawRef.current = () => {};
+      if (renderFrameRef.current !== null) {
+        window.cancelAnimationFrame(renderFrameRef.current);
+        renderFrameRef.current = null;
+      }
       if (panHintFrameRef.current !== null) {
         window.cancelAnimationFrame(panHintFrameRef.current);
         panHintFrameRef.current = null;
       }
-      simulation.stop();
+      d3.select(canvas).on(".zoom", null).interrupt();
     };
-  }, [colorTheme, labelDensityMode, layoutMode, links, nodes, physicsMode]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [
+    colorTheme,
+    defaultStrokeWidth,
+    fadedFillOpacity,
+    graphThemeStyle,
+    holderPalette,
+    labelDensityMode,
+    layoutMode,
+    links,
+    linkActive,
+    linkBase,
+    linkWidthActive,
+    linkWidthBase,
+    physicsMode,
+    nodes,
+    bubbleLabelColor,
+    bubblePctColor,
+    schedulePanHintUpdate,
+    scheduleRedraw,
+    selectedFillOpacity,
+    selectedStrokeWidth,
+  ]);
 
-  // ── Focus effect (selection + hover): update visuals only ───────────────
   useEffect(() => {
-    if (!svgRef.current) return;
-    const svg = d3.select(svgRef.current);
-    const connectedNodeIds = new Set();
-    const activeNodeId = selectedNodeId || hoveredNodeId;
-    const isSelectionMode = Boolean(selectedNodeId);
-    const isHoverMode = !selectedNodeId && Boolean(hoveredNodeId);
-    const shouldHideUnrelatedNodes =
-      isSelectionMode && !preserveUnconnectedNodes;
+    scheduleRedraw();
+  }, [
+    selectedNodeId,
+    hoveredNodeId,
+    focusedNodeId,
+    preserveUnconnectedNodes,
+    traceNodeIds,
+    traceLinkKeys,
+    tracePathHighlights,
+    colorTheme,
+    currentSupply,
+    scheduleRedraw,
+  ]);
 
-    if (activeNodeId) {
-      connectedNodeIds.add(activeNodeId);
-      svg.selectAll(".bubble-link").each((d) => {
-        const srcId = d.source?.id ?? d.source;
-        const tgtId = d.target?.id ?? d.target;
-        if (srcId === activeNodeId || tgtId === activeNodeId) {
-          connectedNodeIds.add(srcId);
-          connectedNodeIds.add(tgtId);
+  function getPointerPosition(event) {
+    const canvas = canvasRef.current;
+    if (!canvas) return null;
+    const rect = canvas.getBoundingClientRect();
+    const pointer =
+      event.touches?.[0] || event.changedTouches?.[0] || event;
+    return [pointer.clientX - rect.left, pointer.clientY - rect.top];
+  }
+
+  function getNodeAtPointer(event) {
+    const point = getPointerPosition(event);
+    const transform = transformRef.current;
+    if (!point) return null;
+    const [x, y] = transform.invert(point);
+    const canvas = canvasRef.current;
+    const graphData = canvas?.__graphData;
+    if (!graphData) return null;
+    const selectedId = latestPropsRef.current?.selectedNodeId;
+    const hideUnconnected =
+      selectedId && !latestPropsRef.current?.preserveUnconnectedNodes;
+    const selectableIds = hideUnconnected
+      ? new Set([selectedId, ...(graphData.linkIndex.get(selectedId) || [])])
+      : null;
+
+    for (let index = graphData.nodes.length - 1; index >= 0; index -= 1) {
+      const node = graphData.nodes[index];
+      if (selectableIds && !selectableIds.has(node.id)) continue;
+      if (Math.hypot(x - node.x, y - node.y) <= graphData.radiusScale(node)) {
+        return node;
+      }
+    }
+    return null;
+  }
+
+  function updateHover(node) {
+    const nextId = node?.id ?? null;
+    setHoveredNodeId((currentId) => (currentId === nextId ? currentId : nextId));
+    latestPropsRef.current?.onNodeHover?.(node || null);
+    if (canvasRef.current) {
+      canvasRef.current.style.cursor = node ? "pointer" : "grab";
+    }
+    scheduleRedraw();
+  }
+
+  function handlePointerDown(event) {
+    if (event.button !== 0 && event.pointerType !== "touch") return;
+    const node = getNodeAtPointer(event);
+    if (!node) return;
+
+    event.preventDefault();
+    event.stopPropagation();
+    const canvas = canvasRef.current;
+    const point = getPointerPosition(event);
+    if (!canvas || !point) return;
+    const [x, y] = transformRef.current.invert(point);
+    activePointerRef.current = {
+      pointerId: event.pointerId,
+      node,
+      startX: x,
+      startY: y,
+      initialX: node.x,
+      initialY: node.y,
+      initialFx: node.fx,
+      initialFy: node.fy,
+      moved: false,
+      pointerType: event.pointerType,
+    };
+    canvas.setPointerCapture?.(event.pointerId);
+    if (event.pointerType !== "touch") updateHover(node);
+  }
+
+  function handlePointerMove(event) {
+    const activePointer = activePointerRef.current;
+    if (activePointer?.pointerId === event.pointerId) {
+      const point = getPointerPosition(event);
+      if (!point) return;
+      const [x, y] = transformRef.current.invert(point);
+      const distance = Math.hypot(
+        x - activePointer.startX,
+        y - activePointer.startY,
+      );
+      if (distance > 2) activePointer.moved = true;
+      if (activePointer.moved) {
+        event.preventDefault();
+        activePointer.node.fx = x;
+        activePointer.node.fy = y;
+        activePointer.node.x = x;
+        activePointer.node.y = y;
+        activePointer.node.vx = 0;
+        activePointer.node.vy = 0;
+        const simulation = canvasRef.current?.__simulation;
+        if (simulation) simulation.alphaTarget(0.18).restart();
+        scheduleRedraw();
+      }
+      return;
+    }
+    if (event.pointerType === "touch") return;
+    updateHover(getNodeAtPointer(event));
+  }
+
+  function handlePointerUp(event) {
+    const activePointer = activePointerRef.current;
+    if (!activePointer || activePointer.pointerId !== event.pointerId) return;
+    activePointerRef.current = null;
+    canvasRef.current?.releasePointerCapture?.(event.pointerId);
+
+    const simulation = canvasRef.current?.__simulation;
+    if (simulation) simulation.alphaTarget(0);
+
+    if (!activePointer.moved) {
+      const node = activePointer.node;
+      const isTouch =
+        activePointer.pointerType === "touch" ||
+        (typeof window !== "undefined" &&
+          typeof window.matchMedia === "function" &&
+          !window.matchMedia("(pointer: fine)").matches);
+      if (isTouch) {
+        if (lastTouchedIdRef.current === node.id) {
+          lastTouchedIdRef.current = null;
+          setHoveredNodeId(null);
+          latestPropsRef.current?.onNodeHover?.(null);
+          latestPropsRef.current?.onNodeClick?.(node);
+        } else {
+          lastTouchedIdRef.current = node.id;
+          updateHover(node);
         }
-      });
+      } else {
+        latestPropsRef.current?.onNodeClick?.(node);
+      }
+    } else if (layoutMode !== "path") {
+      activePointer.node.fx = null;
+      activePointer.node.fy = null;
+    } else {
+      activePointer.node.fx = activePointer.node.x;
+      activePointer.node.fy = activePointer.node.y;
+    }
+    scheduleRedraw();
+  }
+
+  function handlePointerCancel(event) {
+    const activePointer = activePointerRef.current;
+    if (!activePointer || activePointer.pointerId !== event.pointerId) return;
+    activePointerRef.current = null;
+    canvasRef.current?.releasePointerCapture?.(event.pointerId);
+    const simulation = canvasRef.current?.__simulation;
+    if (simulation) simulation.alphaTarget(0);
+    if (activePointer.moved) {
+      activePointer.node.x = activePointer.initialX;
+      activePointer.node.y = activePointer.initialY;
+      activePointer.node.fx = activePointer.initialFx ?? null;
+      activePointer.node.fy = activePointer.initialFy ?? null;
+    }
+    scheduleRedraw();
+  }
+
+  function handleMouseDownCapture(event) {
+    if (!getNodeAtPointer(event)) return;
+    event.preventDefault();
+    event.stopPropagation();
+  }
+
+  function handleTouchStartCapture(event) {
+    if (!getNodeAtPointer(event)) return;
+    event.preventDefault();
+    event.stopPropagation();
+  }
+
+  function handleCanvasClick(event) {
+    if (getNodeAtPointer(event)) return;
+    lastTouchedIdRef.current = null;
+    latestPropsRef.current?.onNodeClick?.(null);
+    setHoveredNodeId(null);
+    latestPropsRef.current?.onNodeHover?.(null);
+  }
+
+  function handleKeyDown(event) {
+    const canvas = canvasRef.current;
+    const graphData = canvas?.__graphData;
+    if (!graphData?.nodes.length) return;
+
+    if (event.key === "Escape") {
+      focusedNodeIndexRef.current = -1;
+      setFocusedNodeId(null);
+      setHoveredNodeId(null);
+      latestPropsRef.current?.onNodeHover?.(null);
+      latestPropsRef.current?.onNodeClick?.(null);
+      scheduleRedraw();
+      return;
+    }
+    if (
+      event.key !== "ArrowRight" &&
+      event.key !== "ArrowDown" &&
+      event.key !== "ArrowLeft" &&
+      event.key !== "ArrowUp" &&
+      event.key !== "Enter" &&
+      event.key !== " "
+    ) {
+      return;
     }
 
-    svg
-      .selectAll(".bubble-node")
-      .style("display", (d) =>
-        !shouldHideUnrelatedNodes || connectedNodeIds.has(d.id) ? null : "none",
-      )
-      .style("pointer-events", (d) =>
-        !shouldHideUnrelatedNodes || connectedNodeIds.has(d.id) ? null : "none",
-      )
-      .attr("opacity", (d) => {
-        if (isSelectionMode && preserveUnconnectedNodes && activeNodeId) {
-          return connectedNodeIds.has(d.id) ? 1 : 0.42;
-        }
-        if (!isHoverMode) return 1;
-        return connectedNodeIds.has(d.id) ? 1 : 0.42;
-      });
+    event.preventDefault();
+    if (event.key === "Enter" || event.key === " ") {
+      const focusedNode = graphData.nodes[focusedNodeIndexRef.current];
+      if (focusedNode) latestPropsRef.current?.onNodeClick?.(focusedNode);
+      return;
+    }
 
-    svg
-      .selectAll(".bubble-circle")
-      .attr("fill-opacity", (d) =>
-        !activeNodeId || d.id === activeNodeId
-          ? selectedFillOpacity
-          : fadedFillOpacity,
-      )
-      .attr("stroke-width", (d) =>
-        d.id === activeNodeId ? selectedStrokeWidth : defaultStrokeWidth,
-      );
-
-    svg
-      .selectAll(".bubble-link")
-      .style("display", (d) => {
-        const srcId = d.source?.id ?? d.source;
-        const tgtId = d.target?.id ?? d.target;
-        return !shouldHideUnrelatedNodes ||
-          srcId === activeNodeId ||
-          tgtId === activeNodeId
-          ? null
-          : "none";
-      })
-      .attr("stroke", (d) => {
-        const srcId = d.source?.id ?? d.source;
-        const tgtId = d.target?.id ?? d.target;
-        return srcId === activeNodeId || tgtId === activeNodeId
-          ? linkActive
-          : linkBase;
-      })
-      .attr("stroke-width", (d) => {
-        const srcId = d.source?.id ?? d.source;
-        const tgtId = d.target?.id ?? d.target;
-        return srcId === activeNodeId || tgtId === activeNodeId
-          ? (linkWidthActive ?? 2)
-          : (linkWidthBase ?? 1);
-      })
-      .attr("stroke-opacity", (d) => {
-        if (!isHoverMode) return 1;
-        const srcId = d.source?.id ?? d.source;
-        const tgtId = d.target?.id ?? d.target;
-        return srcId === activeNodeId || tgtId === activeNodeId ? 1 : 0.2;
-      });
-  }, [
-    selectedNodeId,
-    hoveredNodeId,
-    selectedFillOpacity,
-    fadedFillOpacity,
-    selectedStrokeWidth,
-    defaultStrokeWidth,
-    linkActive,
-    linkBase,
-    linkWidthActive,
-    linkWidthBase,
-    preserveUnconnectedNodes,
-  ]);
-
-  useEffect(() => {
-    if (!svgRef.current) return;
-    const svg = d3.select(svgRef.current);
-    const highlightItems = Array.isArray(tracePathHighlights)
-      ? tracePathHighlights
-      : [];
-    const traceNodeSet = new Set(
-      (Array.isArray(traceNodeIds) ? traceNodeIds : []).map((id) =>
-        String(id || "").trim(),
-      ),
-    );
-    const traceLinkSet = new Set(
-      (Array.isArray(traceLinkKeys) ? traceLinkKeys : []).map((key) =>
-        String(key || "").trim(),
-      ),
-    );
-    const traceNodeColorMap = new Map();
-    const traceLinkColorMap = new Map();
-
-    highlightItems.forEach((item) => {
-      const color = String(item?.color || "").trim();
-      if (!color) {
-        return;
-      }
-
-      const itemNodeIds = Array.isArray(item?.nodeIds) ? item.nodeIds : [];
-      itemNodeIds.forEach((nodeId) => {
-        const normalizedNodeId = String(nodeId || "").trim();
-        if (!normalizedNodeId || traceNodeColorMap.has(normalizedNodeId)) {
-          return;
-        }
-        traceNodeColorMap.set(normalizedNodeId, color);
-      });
-
-      const itemLinkKeys = Array.isArray(item?.linkKeys) ? item.linkKeys : [];
-      itemLinkKeys.forEach((linkKey) => {
-        const normalizedLinkKey = String(linkKey || "").trim();
-        if (!normalizedLinkKey || traceLinkColorMap.has(normalizedLinkKey)) {
-          return;
-        }
-        traceLinkColorMap.set(normalizedLinkKey, color);
-      });
-    });
-
-    const hasTrace =
-      traceNodeSet.size > 0 ||
-      traceLinkSet.size > 0 ||
-      traceNodeColorMap.size > 0 ||
-      traceLinkColorMap.size > 0;
-
-    svg.selectAll(".bubble-node").classed("is-trace-node", (d) => {
-      const nodeId = String(d?.id || "").trim();
-      return (
-        hasTrace && (traceNodeSet.has(nodeId) || traceNodeColorMap.has(nodeId))
-      );
-    });
-
-    svg.selectAll(".bubble-node").attr("opacity", (d) => {
-      if (!hasTrace) return null;
-      const nodeId = String(d?.id || "").trim();
-      return traceNodeSet.has(nodeId) || traceNodeColorMap.has(nodeId)
-        ? 1
-        : 0.24;
-    });
-
-    svg.selectAll(".bubble-circle").attr("stroke", (d) => {
-      const nodeId = String(d?.id || "").trim();
-      const traceColor = traceNodeColorMap.get(nodeId);
-
-      if (hasTrace && traceColor) {
-        return traceColor;
-      }
-
-      return d.isSearchRoot ? "#fff3bf" : holderPalette[d.type] || "#74b9ff";
-    });
-
-    svg.selectAll(".bubble-circle").attr("stroke-width", (d) => {
-      const nodeId = String(d?.id || "").trim();
-      const baseStrokeWidth = d.isSearchRoot ? 3.2 : 1.5;
-
-      if (
-        hasTrace &&
-        (traceNodeSet.has(nodeId) || traceNodeColorMap.has(nodeId))
-      ) {
-        return Math.max(baseStrokeWidth, 2.8);
-      }
-
-      return baseStrokeWidth;
-    });
-
-    svg.selectAll(".bubble-link").classed("is-trace-link", (d) => {
-      const source = String(d?.source?.id ?? d?.source ?? "").trim();
-      const target = String(d?.target?.id ?? d?.target ?? "").trim();
-      const linkKey = `${source}->${target}`;
-      return (
-        hasTrace &&
-        (traceLinkSet.has(linkKey) || traceLinkColorMap.has(linkKey))
-      );
-    });
-
-    svg.selectAll(".bubble-link").attr("stroke", (d) => {
-      const source = String(d?.source?.id ?? d?.source ?? "").trim();
-      const target = String(d?.target?.id ?? d?.target ?? "").trim();
-      const linkKey = `${source}->${target}`;
-      const traceColor = traceLinkColorMap.get(linkKey);
-
-      if (hasTrace && traceColor) {
-        return traceColor;
-      }
-
-      if (hasTrace && traceLinkSet.has(linkKey)) {
-        return linkActive;
-      }
-
-      return linkBase;
-    });
-
-    svg.selectAll(".bubble-link").attr("stroke-width", (d) => {
-      const source = String(d?.source?.id ?? d?.source ?? "").trim();
-      const target = String(d?.target?.id ?? d?.target ?? "").trim();
-      const linkKey = `${source}->${target}`;
-
-      if (
-        hasTrace &&
-        (traceLinkSet.has(linkKey) || traceLinkColorMap.has(linkKey))
-      ) {
-        return Math.max(linkWidthActive ?? 2, 2.4);
-      }
-
-      return linkWidthBase ?? 1;
-    });
-
-    svg.selectAll(".bubble-link").attr("stroke-opacity", (d) => {
-      if (!hasTrace) return 1;
-      const source = String(d?.source?.id ?? d?.source ?? "").trim();
-      const target = String(d?.target?.id ?? d?.target ?? "").trim();
-      const linkKey = `${source}->${target}`;
-      return traceLinkSet.has(linkKey) || traceLinkColorMap.has(linkKey)
-        ? 1
-        : 0.08;
-    });
-  }, [
-    holderPalette,
-    linkActive,
-    linkBase,
-    linkWidthActive,
-    linkWidthBase,
-    selectedNodeId,
-    hoveredNodeId,
-    traceLinkKeys,
-    traceNodeIds,
-    tracePathHighlights,
-  ]);
+    const direction =
+      event.key === "ArrowRight" || event.key === "ArrowDown" ? 1 : -1;
+    focusedNodeIndexRef.current =
+      focusedNodeIndexRef.current < 0
+        ? direction > 0
+          ? 0
+          : graphData.nodes.length - 1
+        : (focusedNodeIndexRef.current + direction + graphData.nodes.length) %
+          graphData.nodes.length;
+    const node = graphData.nodes[focusedNodeIndexRef.current];
+    setFocusedNodeId(node.id);
+    setHoveredNodeId(null);
+    latestPropsRef.current?.onNodeHover?.(node);
+    scheduleRedraw();
+  }
 
   return (
     <div className="bubble-map-shell">
-      <svg
-        ref={svgRef}
-        draggable={false}
-        style={{
-          width: "100%",
-          height: "100%",
-          display: "block",
-          background: "transparent",
+      <canvas
+        ref={canvasRef}
+        className="bubble-map-canvas"
+        role="application"
+        aria-label="Interactive wallet graph. Use arrow keys to move between wallets, Enter to select, and Escape to clear selection."
+        tabIndex={0}
+        onMouseDownCapture={handleMouseDownCapture}
+        onTouchStartCapture={handleTouchStartCapture}
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerUp}
+        onPointerCancel={handlePointerCancel}
+        onPointerLeave={(event) => {
+          if (!activePointerRef.current && event.pointerType !== "touch") {
+            updateHover(null);
+          }
         }}
+        onClick={handleCanvasClick}
+        onKeyDown={handleKeyDown}
       />
       <div
         key={graphRenderCycle}
