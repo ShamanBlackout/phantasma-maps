@@ -132,7 +132,15 @@ The application reads these environment variables at startup:
     	Base URL for transaction explorer links.
 
     REACT_APP_SOUL_PRICE_API_URL
-    	Primary CoinGecko endpoint for SOUL pricing.
+    	Direct CoinGecko endpoint for SOUL pricing, used only when the maps API
+    	/prices route is unreachable.
+
+    REACT_APP_TRACKED_TOKEN_PRICES_API_URL
+    	Direct SaturnX fallback for non-SOUL token prices (used only when the
+    	maps API /prices route is unreachable).
+
+    REACT_APP_PHANTASMA_EXPLORER_TOKEN_API_URL
+    	Direct Phantasma explorer token endpoint used as the last price fallback.
 
     REACT_APP_CMC_SOUL_QUOTES_API_URL
     	CoinMarketCap quote endpoint.

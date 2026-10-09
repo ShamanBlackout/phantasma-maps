@@ -14,6 +14,13 @@ import useTransactionState from "./hooks/useTransactionState";
 import { readUrlParams } from "./hooks/useUrlState";
 import { fetchJsonWithTimeout } from "./api/http";
 import {
+  DEFAULT_EXPLORER_TOKEN_API_URL,
+  DEFAULT_TRACKED_TOKEN_PRICE_API_BASE_URL,
+  fetchBackendTokenQuote,
+  fetchExplorerTokenQuote,
+  fetchTrackedTokenQuote,
+} from "./api/tokenPrices";
+import {
   applyCurrentSupplyToNodes,
   buildGraphDataFromApi,
   buildNeighborFocusedGraph,
@@ -110,10 +117,17 @@ const SOUL_PRICE_API_URL =
   "https://api.coingecko.com/api/v3/simple/price?ids=phantasma&vs_currencies=usd&include_24hr_change=true";
 const TRACKED_TOKEN_PRICE_API_BASE_URL =
   parseEnvString("REACT_APP_TRACKED_TOKEN_PRICES_API_URL") ||
-  "https://apiops.saturnx.cc/v1/tokens";
-const TRACKED_TOKEN_PRICE_NETWORK =
-  parseEnvString("REACT_APP_TRACKED_TOKEN_PRICE_NETWORK", "mainnet") ||
-  "mainnet";
+  DEFAULT_TRACKED_TOKEN_PRICE_API_BASE_URL;
+const PHANTASMA_EXPLORER_TOKEN_API_URL =
+  parseEnvString("REACT_APP_PHANTASMA_EXPLORER_TOKEN_API_URL") ||
+  DEFAULT_EXPLORER_TOKEN_API_URL;
+const TRACKED_TOKEN_PRICE_OPTIONS = {
+  baseUrl: TRACKED_TOKEN_PRICE_API_BASE_URL,
+  explorerUrl: PHANTASMA_EXPLORER_TOKEN_API_URL,
+  network:
+    parseEnvString("REACT_APP_TRACKED_TOKEN_PRICE_NETWORK", "mainnet") ||
+    "mainnet",
+};
 const CMC_SOUL_QUOTES_API_URL =
   parseEnvString("REACT_APP_CMC_SOUL_QUOTES_API_URL") ||
   "https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest?symbol=SOUL&convert=USD";
@@ -124,6 +138,7 @@ const SOUL_PRICE_BASE_POLL_INTERVAL_MS = parseEnvMs(
   "REACT_APP_SOUL_PRICE_BASE_POLL_INTERVAL_MS",
   5 * 60 * 1000,
 );
+const TRACKED_TOKEN_PRICE_BOOTSTRAP_RETRY_MS = 15000;
 const SOUL_PRICE_MAX_BACKOFF_MS = parseEnvMs(
   "REACT_APP_SOUL_PRICE_MAX_BACKOFF_MS",
   10 * 60 * 1000,
@@ -1207,130 +1222,6 @@ function parseCoinMarketCapQuote(payload) {
   return {
     price: usdPrice,
     priceChange24h: usdChange24h,
-  };
-}
-
-function parseTrackedTokenQuote(payload, tokenSymbol) {
-  const normalizedSymbol = String(tokenSymbol || "")
-    .trim()
-    .toUpperCase();
-  const dataToken =
-    payload?.data &&
-    !Array.isArray(payload.data) &&
-    typeof payload.data === "object" &&
-    (payload.data.symbol ||
-      payload.data.tokenSymbol ||
-      payload.data.priceUsd !== undefined ||
-      payload.data.price !== undefined)
-      ? payload.data
-      : null;
-  const directToken = dataToken
-    ? dataToken
-    : payload?.price !== undefined
-      ? payload
-      : null;
-  const tokenCollection =
-    payload?.tokens ??
-    payload?.prices ??
-    payload?.quotes ??
-    payload?.data?.tokens ??
-    payload?.data?.prices ??
-    payload?.data?.quotes ??
-    payload?.data ??
-    payload;
-  const candidates = directToken
-    ? [directToken]
-    : Array.isArray(tokenCollection)
-      ? tokenCollection
-      : Array.isArray(tokenCollection?.items)
-        ? tokenCollection.items
-        : Array.isArray(tokenCollection?.tokens)
-          ? tokenCollection.tokens
-          : tokenCollection && typeof tokenCollection === "object"
-            ? Object.entries(tokenCollection).map(([symbol, token]) => ({
-                ...(token && typeof token === "object"
-                  ? token
-                  : { price: token }),
-                symbol: token?.symbol ?? token?.tokenSymbol ?? symbol,
-              }))
-            : [];
-
-  const token = candidates.find((candidate) => {
-    const symbol = String(
-      candidate?.symbol ??
-        candidate?.tokenSymbol ??
-        candidate?.token_symbol ??
-        candidate?.token ??
-        candidate?.name ??
-        "",
-    )
-      .trim()
-      .toUpperCase();
-    return symbol === normalizedSymbol || (!symbol && candidates.length === 1);
-  });
-
-  if (!token) return null;
-
-  const usdPrice = Number(
-    token?.priceUsd ??
-      token?.price_usd ??
-      token?.currentPrice ??
-      token?.current_price ??
-      token?.usdPrice ??
-      token?.usd_price ??
-      token?.price ??
-      token?.usd,
-  );
-  if (!Number.isFinite(usdPrice)) return null;
-
-  const usdChange24h = Number(
-    token?.priceChange24h ??
-      token?.price_change_24h ??
-      token?.change?.h24 ??
-      token?.change?.h24Percent ??
-      token?.change24h ??
-      token?.change_24h ??
-      token?.changePercent24h ??
-      token?.change_percent_24h ??
-      token?.priceChange ??
-      token?.price_change ??
-      token?.priceChangePercentage24h ??
-      token?.price_change_percentage_24h ??
-      token?.change ??
-      token?.changePercent ??
-      token?.change_percent ??
-      token?.change_24h_percent ??
-      token?.percentChange24h ??
-      token?.percent_change_24h ??
-      token?.percentChange24H,
-  );
-
-  return {
-    price: usdPrice,
-    priceChange24h: Number.isFinite(usdChange24h) ? usdChange24h : null,
-  };
-}
-
-async function fetchTrackedTokenQuote(tokenSymbol) {
-  const endpoint = `${TRACKED_TOKEN_PRICE_API_BASE_URL.replace(/\/$/, "")}/${encodeURIComponent(tokenSymbol)}?network=${encodeURIComponent(TRACKED_TOKEN_PRICE_NETWORK)}`;
-  const result = await fetchJsonWithTimeout(endpoint);
-  if (!result.ok) return result;
-
-  const quote = parseTrackedTokenQuote(result.payload, tokenSymbol);
-  if (!quote) {
-    return {
-      ok: false,
-      status: result.status,
-      retryAfterMs: result.retryAfterMs,
-    };
-  }
-
-  return {
-    ok: true,
-    status: result.status,
-    retryAfterMs: result.retryAfterMs,
-    quote,
-    source: "saturnx",
   };
 }
 
@@ -3580,12 +3471,28 @@ export default function App() {
 
     async function fetchSoulPrice() {
       try {
-        const primaryResult = await fetchSoulQuoteFromCoinGecko();
+        const backendResult = await fetchBackendTokenQuote(
+          TOKEN_INFO.name,
+          MAPS_API_BASE_URL,
+        ).catch(() => ({ ok: false, status: 0 }));
+        const primaryResult = backendResult.ok
+          ? backendResult
+          : await fetchSoulQuoteFromCoinGecko();
         const fallbackResult = primaryResult.ok
           ? null
           : await fetchSoulQuoteFromCoinMarketCap();
+        const explorerResult =
+          primaryResult.ok || fallbackResult?.ok
+            ? null
+            : await fetchExplorerTokenQuote(TOKEN_INFO.name, {
+                explorerUrl: PHANTASMA_EXPLORER_TOKEN_API_URL,
+              });
 
-        const winner = primaryResult.ok ? primaryResult : fallbackResult;
+        const winner = primaryResult.ok
+          ? primaryResult
+          : fallbackResult?.ok
+            ? fallbackResult
+            : explorerResult;
 
         if (!winner?.ok || !winner.quote) {
           const retryAfterMs = Math.max(
@@ -3666,23 +3573,42 @@ export default function App() {
 
     let isActive = true;
     let timeoutId;
+    let hasSuccessfulQuote = false;
+    let retryDelayMs = TRACKED_TOKEN_PRICE_BOOTSTRAP_RETRY_MS;
 
     async function fetchTrackedTokenPrice() {
+      let delayMs = SOUL_PRICE_BASE_POLL_INTERVAL_MS;
       try {
-        const result = await fetchTrackedTokenQuote(normalizedTokenSymbol);
+        const result = await fetchTrackedTokenQuote(normalizedTokenSymbol, {
+          ...TRACKED_TOKEN_PRICE_OPTIONS,
+          apiBaseUrl: MAPS_API_BASE_URL,
+        });
         if (isActive && result.ok && result.quote) {
-          setTrackedTokenQuotes((current) => ({
-            ...current,
-            [normalizedTokenSymbol]: result.quote,
-          }));
+          setTrackedTokenQuotes((current) => {
+            const previous = current[normalizedTokenSymbol];
+            const quote =
+              result.quote.priceChange24h === null &&
+              Number.isFinite(previous?.priceChange24h)
+                ? { ...result.quote, priceChange24h: previous.priceChange24h }
+                : result.quote;
+            return { ...current, [normalizedTokenSymbol]: quote };
+          });
           setPriceLastUpdatedAt(Date.now());
-        }
-      } finally {
-        if (isActive) {
-          timeoutId = window.setTimeout(
-            fetchTrackedTokenPrice,
+          hasSuccessfulQuote = true;
+          retryDelayMs = TRACKED_TOKEN_PRICE_BOOTSTRAP_RETRY_MS;
+        } else if (!hasSuccessfulQuote) {
+          // Until a first quote lands, retry quickly instead of waiting a full poll interval.
+          delayMs = Math.max(retryDelayMs, result?.retryAfterMs || 0);
+          retryDelayMs = Math.min(
+            retryDelayMs * 2,
             SOUL_PRICE_BASE_POLL_INTERVAL_MS,
           );
+        }
+      } catch {
+        if (!hasSuccessfulQuote) delayMs = retryDelayMs;
+      } finally {
+        if (isActive) {
+          timeoutId = window.setTimeout(fetchTrackedTokenPrice, delayMs);
         }
       }
     }
