@@ -208,9 +208,16 @@ export default function Header({
     return `$${numericValue.toExponential(2)}`;
   }
 
-  const priceChange24h = Number(tokenInfo.priceChange24h) || 0;
+  const rawPriceChange24h = tokenInfo.priceChange24h;
+  const priceChange24h =
+    rawPriceChange24h === null ||
+    rawPriceChange24h === undefined ||
+    rawPriceChange24h === ""
+      ? null
+      : Number(rawPriceChange24h);
   const hasPrice = Number.isFinite(tokenInfo.price);
-  const priceUp = priceChange24h >= 0;
+  const hasPriceChange = Number.isFinite(priceChange24h);
+  const priceUp = hasPriceChange && priceChange24h >= 0;
   const tokenDisplayName = String(tokenInfo.name || "Token").trim() || "Token";
   const hasBlockSyncHeight = Number.isFinite(blockSyncHeight);
   const hasBlockSyncTargetHeight = Number.isFinite(blockSyncTargetHeight);
@@ -605,7 +612,7 @@ export default function Header({
               <strong className="header-status-chip-value">
                 {hasPrice ? formatCompactUsdPrice(tokenInfo.price) : "N/A"}
               </strong>
-              {hasPrice ? (
+              {hasPrice && hasPriceChange ? (
                 <span
                   className={`header-price-change ${priceUp ? "up" : "down"}`}
                 >
