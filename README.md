@@ -237,6 +237,27 @@ React entry point.
     src/components/StatsPanel.jsx
     	Token summary, legend controls, selected-node details, and holder list.
 
+    src/components/AppShellBar.jsx
+    	Toolbar under the header: view status, command palette, saved views, compare, diagnostics, export presets, trace, and the "Enhance graph" action.
+
+    src/components/SavedViewsPopout.jsx, ComparePopout.jsx, DiagnosticsPopout.jsx, ExportPresetsPopout.jsx
+    	Popouts opened from the shell bar.
+
+    src/components/CommandPalette.jsx
+    	Searchable command list opened with Ctrl/Cmd+K.
+
+    src/components/WelcomeDialog.jsx, TourPanel.jsx
+    	First-run skill picker and the guided tour panel.
+
+    src/components/TraceToolForm.jsx, TraceLegend.jsx
+    	Trace-path search form and the draggable legend of found paths.
+
+    src/components/MapLoadingOverlay.jsx
+    	Staged loading overlay shown while the graph loads.
+
+    src/components/MobileInspectSheet.jsx
+    	Bottom sheet with selected-wallet details on mobile viewports.
+
     src/data/mockData.js
     	Mock token datasets and helper functions used when live API data is unavailable.
 

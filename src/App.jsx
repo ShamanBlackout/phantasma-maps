@@ -4,6 +4,18 @@ import BubbleMap from "./components/BubbleMap";
 import StatsPanel from "./components/StatsPanel";
 import TransactionsModal from "./components/TransactionsModal";
 import SelectedNodeCard from "./components/SelectedNodeCard";
+import AppShellBar from "./components/AppShellBar";
+import SavedViewsPopout from "./components/SavedViewsPopout";
+import ComparePopout from "./components/ComparePopout";
+import DiagnosticsPopout from "./components/DiagnosticsPopout";
+import ExportPresetsPopout from "./components/ExportPresetsPopout";
+import CommandPalette from "./components/CommandPalette";
+import WelcomeDialog from "./components/WelcomeDialog";
+import TourPanel from "./components/TourPanel";
+import TraceLegend from "./components/TraceLegend";
+import TraceToolForm from "./components/TraceToolForm";
+import MapLoadingOverlay from "./components/MapLoadingOverlay";
+import MobileInspectSheet from "./components/MobileInspectSheet";
 import useTransactionState from "./hooks/useTransactionState";
 import useUrlState, { readUrlParams } from "./hooks/useUrlState";
 import { ONBOARDING_TUTORIAL_STEPS } from "./data/onboardingSteps";
@@ -80,7 +92,6 @@ import {
 } from "./config/appConfig";
 import {
   fetchTokenSnapshot,
-  getSnapshotWalletCount,
   mergeSnapshotIntoHistory,
   normalizeTokenSnapshot,
   normalizeTokenSnapshotHistory,
@@ -5125,535 +5136,108 @@ export default function App() {
         onReplayTutorial={handleReplayTutorial}
         tutorialHighlightTarget={activeTutorialTarget}
       />
-      <div className="app-shell-bar" aria-live="polite">
-        <div className="app-shell-bar-primary">
-          <span
-            className="app-shell-pill"
-            title="Currently selected token symbol"
-          >
-            {selectedTokenSymbol}
-          </span>
-          <span className="app-shell-kicker" title="Current graph perspective">
-            {activeViewLabel}
-          </span>
-          <span
-            className="app-shell-copy"
-            title="Latest map loading or data status"
-          >
-            {shellStatusLabel}
-          </span>
-        </div>
-        <div className="app-shell-bar-secondary">
-          <span
-            className="app-shell-metric"
-            title="How many wallets and links are currently visible in the graph"
-          >
-            <span className="app-shell-metric-label">Visible</span>
-            <strong>
-              {renderedGraphNodes.length.toLocaleString()} wallets /{" "}
-              {renderedGraphLinks.length.toLocaleString()} links
-            </strong>
-          </span>
-          <span
-            className="app-shell-metric"
-            title="Current legend filter scope used to display wallet tiers"
-          >
-            <span className="app-shell-metric-label">Legend</span>
-            <strong>{activeLegendLabel}</strong>
-          </span>
-          <button
-            type="button"
-            ref={commandButtonRef}
-            className={`app-shell-action-btn ${activeTutorialTarget === "command" ? "tutorial-highlight" : ""}`}
-            onClick={() => setIsCommandPaletteOpen(true)}
-            aria-label={
-              isMobileViewport ? "Open actions menu" : "Open command palette"
-            }
-            title={
-              isMobileViewport
-                ? "Open actions menu"
-                : "Open command palette (Ctrl+K)"
-            }
-          >
-            {commandPaletteButtonLabel}
-          </button>
-          <button
-            type="button"
-            ref={savedViewsButtonRef}
-            className={`app-shell-action-btn ${activeTutorialTarget === "views" ? "tutorial-highlight" : ""}`}
-            onClick={() => setIsSavedViewsOpen((open) => !open)}
-            aria-label="Open saved views"
-            title="Save or load a named graph view"
-          >
-            Views
-          </button>
-          <button
-            type="button"
-            ref={traceToggleButtonRef}
-            className={`app-shell-action-btn ${activeTutorialTarget === "trace" ? "tutorial-highlight" : ""}`}
-            onClick={() =>
-              setIsTraceToolOpen((open) => {
-                const willOpen = !open;
-                if (willOpen) {
-                  setSearchedRootAddress("");
-                  setIsConnectionsView(false);
-                  setConnectionsGraphContext(null);
-                  setConnectionMinAmount("");
-                }
-                return willOpen;
-              })
-            }
-            aria-expanded={isTraceToolOpen}
-            aria-controls="map-trace-tool"
-            aria-label={
-              isTraceToolOpen ? "Hide trace path tool" : "Open trace path tool"
-            }
-            title={
-              isTraceToolOpen ? "Hide trace path tool" : "Open trace path tool"
-            }
-          >
-            {isTraceToolOpen ? "Hide Trace" : "Trace Path"}
-          </button>
-          {canEnhanceTopLevelGraph ? (
-            <button
-              type="button"
-              className={`app-shell-action-btn app-shell-action-btn-secondary ${isGraphEnrichmentEnabled ? "is-active" : ""}`}
-              onClick={() => {
-                if (isGraphEnrichmentEnabled || isGraphEnrichmentLoading) {
-                  return;
-                }
-                setIsGraphEnrichmentEnabled(true);
-              }}
-              disabled={isGraphEnrichmentEnabled || isGraphEnrichmentLoading}
-              aria-label={
-                isGraphEnrichmentLoading
-                  ? "Enhancing graph with top holder network"
-                  : isGraphEnrichmentEnabled
-                    ? "Graph enrichment enabled"
-                    : "Enhance graph with top holder network"
-              }
-              title={
-                isGraphEnrichmentLoading
-                  ? "Enhancing graph with top holder network"
-                  : isGraphEnrichmentEnabled
-                    ? "Graph enrichment enabled"
-                    : "Load top holder network enrichment"
-              }
-            >
-              {isGraphEnrichmentLoading
-                ? "Enhancing..."
-                : isGraphEnrichmentEnabled
-                  ? "Enhanced"
-                  : "Enhance Graph"}
-            </button>
-          ) : null}
-          <button
-            type="button"
-            ref={compareButtonRef}
-            className={`app-shell-action-btn ${activeTutorialTarget === "compare" ? "tutorial-highlight" : ""}`}
-            onClick={() => setIsCompareModeOpen((open) => !open)}
-            aria-label="Open compare mode"
-            title="Compare this token snapshot with another token"
-          >
-            Compare
-          </button>
-          <button
-            type="button"
-            ref={exportPresetsButtonRef}
-            className="app-shell-action-btn"
-            onClick={() => setIsExportPresetsOpen((open) => !open)}
-            aria-label="Open export presets"
-            title="Export common reporting presets"
-          >
-            Exports
-          </button>
-          <button
-            type="button"
-            ref={diagnosticsButtonRef}
-            className={`app-shell-action-btn ${activeTutorialTarget === "diagnostics" ? "tutorial-highlight" : ""}`}
-            onClick={() => setIsDiagnosticsOpen((open) => !open)}
-            aria-label="Open diagnostics panel"
-            title="Show source and sync diagnostics details"
-          >
-            Diagnostics
-          </button>
-        </div>
-      </div>
+      <AppShellBar
+        activeLegendLabel={activeLegendLabel}
+        activeTutorialTarget={activeTutorialTarget}
+        activeViewLabel={activeViewLabel}
+        canEnhanceTopLevelGraph={canEnhanceTopLevelGraph}
+        commandButtonRef={commandButtonRef}
+        commandPaletteButtonLabel={commandPaletteButtonLabel}
+        compareButtonRef={compareButtonRef}
+        diagnosticsButtonRef={diagnosticsButtonRef}
+        exportPresetsButtonRef={exportPresetsButtonRef}
+        isGraphEnrichmentEnabled={isGraphEnrichmentEnabled}
+        isGraphEnrichmentLoading={isGraphEnrichmentLoading}
+        isMobileViewport={isMobileViewport}
+        isTraceToolOpen={isTraceToolOpen}
+        renderedGraphLinks={renderedGraphLinks}
+        renderedGraphNodes={renderedGraphNodes}
+        savedViewsButtonRef={savedViewsButtonRef}
+        selectedTokenSymbol={selectedTokenSymbol}
+        setConnectionMinAmount={setConnectionMinAmount}
+        setConnectionsGraphContext={setConnectionsGraphContext}
+        setIsCommandPaletteOpen={setIsCommandPaletteOpen}
+        setIsCompareModeOpen={setIsCompareModeOpen}
+        setIsConnectionsView={setIsConnectionsView}
+        setIsDiagnosticsOpen={setIsDiagnosticsOpen}
+        setIsExportPresetsOpen={setIsExportPresetsOpen}
+        setIsGraphEnrichmentEnabled={setIsGraphEnrichmentEnabled}
+        setIsSavedViewsOpen={setIsSavedViewsOpen}
+        setIsTraceToolOpen={setIsTraceToolOpen}
+        setSearchedRootAddress={setSearchedRootAddress}
+        shellStatusLabel={shellStatusLabel}
+        traceToggleButtonRef={traceToggleButtonRef}
+      />
       {isSavedViewsOpen ? (
-        <div
-          ref={savedViewsPopoutRef}
-          className="app-shell-popout app-shell-views-popout"
-          role="dialog"
-          aria-modal="false"
-          aria-labelledby="saved-views-heading"
-        >
-          <div className="app-shell-popout-head">
-            <strong id="saved-views-heading">Saved Views</strong>
-            <button
-              type="button"
-              aria-label="Close saved views"
-              onClick={() => setIsSavedViewsOpen(false)}
-            >
-              Close
-            </button>
-          </div>
-          <div className="app-shell-views-create-row">
-            <input
-              type="text"
-              value={savedViewName}
-              onChange={(event) => setSavedViewName(event.target.value)}
-              placeholder="Name this view"
-            />
-            <button type="button" onClick={saveCurrentView}>
-              Save
-            </button>
-          </div>
-          <div className="app-shell-views-list">
-            {savedViews.length ? (
-              savedViews.map((view) => (
-                <div key={view.id} className="app-shell-view-row">
-                  <button type="button" onClick={() => applySavedView(view)}>
-                    {view.name}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => removeSavedView(view.id)}
-                    className="app-shell-view-delete"
-                    aria-label="Delete saved view"
-                  >
-                    ✕
-                  </button>
-                </div>
-              ))
-            ) : (
-              <div className="app-shell-empty-copy">No saved views yet.</div>
-            )}
-          </div>
-        </div>
+        <SavedViewsPopout
+          applySavedView={applySavedView}
+          removeSavedView={removeSavedView}
+          saveCurrentView={saveCurrentView}
+          savedViewName={savedViewName}
+          savedViews={savedViews}
+          savedViewsPopoutRef={savedViewsPopoutRef}
+          setIsSavedViewsOpen={setIsSavedViewsOpen}
+          setSavedViewName={setSavedViewName}
+        />
       ) : null}
       {isCompareModeOpen ? (
-        <div
-          ref={comparePopoutRef}
-          className="app-shell-popout app-shell-compare-popout"
-          role="dialog"
-          aria-modal="false"
-          aria-labelledby="compare-heading"
-        >
-          <div className="app-shell-popout-head">
-            <strong id="compare-heading">Compare Snapshot</strong>
-            <button
-              type="button"
-              aria-label="Close compare snapshot"
-              onClick={() => setIsCompareModeOpen(false)}
-            >
-              Close
-            </button>
-          </div>
-          <label className="app-shell-compare-picker">
-            <span>Compare against</span>
-            <select
-              value={compareTokenSymbol}
-              onChange={(event) => setCompareTokenSymbol(event.target.value)}
-            >
-              <option value="">Select token</option>
-              {availableTokenSymbols
-                .filter((token) => token !== selectedTokenSymbol)
-                .map((token) => (
-                  <option key={token} value={token}>
-                    {token}
-                  </option>
-                ))}
-            </select>
-          </label>
-          <div className="app-shell-compare-grid">
-            <div>
-              <div className="app-shell-compare-kicker">Current</div>
-              <strong>
-                {currentTokenSnapshot?.token || selectedTokenSymbol}
-              </strong>
-              {currentSnapshotStatus ? <p>{currentSnapshotStatus}</p> : null}
-              <p>
-                Wallets:{" "}
-                {Number(
-                  activeTokenInfo?.globalHolderCount ??
-                    getSnapshotWalletCount(currentTokenSnapshot),
-                ).toLocaleString()}
-              </p>
-              <p>
-                Top 10: {Number(currentTokenSnapshot?.top10 || 0).toFixed(1)}%
-              </p>
-              <p>
-                Top wallet: {currentTokenSnapshot?.topWalletLabel || "N/A"} (
-                {Number(currentTokenSnapshot?.topWalletShare || 0).toFixed(2)}%)
-              </p>
-            </div>
-            <div>
-              <div className="app-shell-compare-kicker">Selected</div>
-              <strong>{compareSnapshot?.token || "N/A"}</strong>
-              {compareSnapshotStatus ? <p>{compareSnapshotStatus}</p> : null}
-              <p>
-                Wallets:{" "}
-                {getSnapshotWalletCount(compareSnapshot).toLocaleString()}
-              </p>
-              <p>Top 10: {Number(compareSnapshot?.top10 || 0).toFixed(1)}%</p>
-              <p>
-                Top wallet: {compareSnapshot?.topWalletLabel || "N/A"} (
-                {Number(compareSnapshot?.topWalletShare || 0).toFixed(2)}%)
-              </p>
-            </div>
-          </div>
-        </div>
+        <ComparePopout
+          activeTokenInfo={activeTokenInfo}
+          availableTokenSymbols={availableTokenSymbols}
+          comparePopoutRef={comparePopoutRef}
+          compareSnapshot={compareSnapshot}
+          compareSnapshotStatus={compareSnapshotStatus}
+          compareTokenSymbol={compareTokenSymbol}
+          currentSnapshotStatus={currentSnapshotStatus}
+          currentTokenSnapshot={currentTokenSnapshot}
+          selectedTokenSymbol={selectedTokenSymbol}
+          setCompareTokenSymbol={setCompareTokenSymbol}
+          setIsCompareModeOpen={setIsCompareModeOpen}
+        />
       ) : null}
       {isDiagnosticsOpen ? (
-        <div
-          ref={diagnosticsPopoutRef}
-          className="app-shell-popout app-shell-diagnostics-popout"
-          role="dialog"
-          aria-modal="false"
-          aria-labelledby="diagnostics-heading"
-        >
-          <div className="app-shell-popout-head">
-            <strong id="diagnostics-heading">Data Diagnostics</strong>
-            <button
-              type="button"
-              aria-label="Close diagnostics"
-              onClick={() => setIsDiagnosticsOpen(false)}
-            >
-              Close
-            </button>
-          </div>
-          <div className="app-shell-diagnostics-list">
-            <p>API health: {diagnosticsDetails.apiHealth}</p>
-            <p>Source: {diagnosticsDetails.source}</p>
-            <p>
-              Sync lag:{" "}
-              {Number.isFinite(diagnosticsDetails.syncLag)
-                ? `${diagnosticsDetails.syncLag} blocks`
-                : "Waiting"}
-            </p>
-            <p>Map status: {diagnosticsDetails.mapStatus}</p>
-            <p>
-              Last API error source: {diagnosticsDetails.lastApiErrorSource}
-            </p>
-            <p>Last API error code: {diagnosticsDetails.lastApiErrorCode}</p>
-            <p>
-              Last API error status: {diagnosticsDetails.lastApiErrorStatus}
-            </p>
-            <p>
-              Last API requestId: {diagnosticsDetails.lastApiErrorRequestId}
-            </p>
-            <p>
-              Last API error message: {diagnosticsDetails.lastApiErrorMessage}
-            </p>
-            <p>Last API error at: {diagnosticsDetails.lastApiErrorAt}</p>
-            <p>Indexer update: {diagnosticsDetails.indexerUpdated}</p>
-            <p>Market update: {diagnosticsDetails.marketUpdated}</p>
-          </div>
-        </div>
+        <DiagnosticsPopout
+          diagnosticsDetails={diagnosticsDetails}
+          diagnosticsPopoutRef={diagnosticsPopoutRef}
+          setIsDiagnosticsOpen={setIsDiagnosticsOpen}
+        />
       ) : null}
       {isExportPresetsOpen ? (
-        <div
-          ref={exportPresetsPopoutRef}
-          className="app-shell-popout app-shell-export-popout"
-          role="dialog"
-          aria-modal="false"
-          aria-labelledby="export-presets-heading"
-        >
-          <div className="app-shell-popout-head">
-            <strong id="export-presets-heading">Export Presets</strong>
-            <button
-              type="button"
-              aria-label="Close export presets"
-              onClick={() => setIsExportPresetsOpen(false)}
-            >
-              Close
-            </button>
-          </div>
-          <div className="app-shell-export-actions">
-            <button type="button" onClick={exportVisibleGraphPreset}>
-              Visible Graph JSON
-            </button>
-            <button type="button" onClick={exportTopHoldersPreset}>
-              Top Holders CSV
-            </button>
-            <button type="button" onClick={exportFilteredTransactionsPreset}>
-              Filtered Transactions CSV
-            </button>
-          </div>
-        </div>
+        <ExportPresetsPopout
+          exportFilteredTransactionsPreset={exportFilteredTransactionsPreset}
+          exportPresetsPopoutRef={exportPresetsPopoutRef}
+          exportTopHoldersPreset={exportTopHoldersPreset}
+          exportVisibleGraphPreset={exportVisibleGraphPreset}
+          setIsExportPresetsOpen={setIsExportPresetsOpen}
+        />
       ) : null}
       {isCommandPaletteOpen ? (
-        <div
-          className="command-palette-overlay"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="command-palette-heading"
-          onClick={() => setIsCommandPaletteOpen(false)}
-        >
-          <div
-            className="command-palette"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <h3 id="command-palette-heading" className="visually-hidden">
-              {commandPaletteHeadingLabel}
-            </h3>
-            <input
-              type="text"
-              value={commandPaletteQuery}
-              onChange={(event) => setCommandPaletteQuery(event.target.value)}
-              placeholder={
-                isMobileViewport ? "Search actions" : "Type a command"
-              }
-              aria-label={
-                isMobileViewport ? "Search actions" : "Search commands"
-              }
-              autoFocus
-            />
-            <div className="command-palette-list">
-              {filteredCommandPaletteActions.map((action) => (
-                <button
-                  key={action.id}
-                  type="button"
-                  title={
-                    !isMobileViewport && action.shortcut
-                      ? `Shortcut: ${action.shortcut}`
-                      : undefined
-                  }
-                  onClick={() => {
-                    action.run();
-                    setIsCommandPaletteOpen(false);
-                    setCommandPaletteQuery("");
-                  }}
-                >
-                  <span>{action.label}</span>
-                  {!isMobileViewport && action.shortcut ? (
-                    <span
-                      className="command-palette-shortcut"
-                      aria-hidden="true"
-                    >
-                      {action.shortcut}
-                    </span>
-                  ) : null}
-                </button>
-              ))}
-            </div>
-          </div>
-        </div>
+        <CommandPalette
+          commandPaletteHeadingLabel={commandPaletteHeadingLabel}
+          commandPaletteQuery={commandPaletteQuery}
+          filteredCommandPaletteActions={filteredCommandPaletteActions}
+          isMobileViewport={isMobileViewport}
+          setCommandPaletteQuery={setCommandPaletteQuery}
+          setIsCommandPaletteOpen={setIsCommandPaletteOpen}
+        />
       ) : null}
       {isOnboardingVisible && isOnboardingAt === "skill-selection" ? (
-        <div
-          className="onboarding-overlay"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="welcome-heading"
-        >
-          <div className="onboarding-card onboarding-card-minimal">
-            <p className="onboarding-eyebrow">Phantasma Maps</p>
-            <h3 id="welcome-heading" className="onboarding-title">
-              Welcome to the wallet graph
-            </h3>
-            <p className="onboarding-intro">
-              Explore token holders, spot concentration, and trace wallet
-              relationships in a live interactive map.
-            </p>
-            <div className="skill-selection">
-              <p className="skill-prompt">What's your experience level?</p>
-              <button
-                type="button"
-                className="skill-button beginner-btn"
-                onClick={() => {
-                  handleReplayTutorial();
-                }}
-              >
-                <span className="skill-button-icon" aria-hidden="true">
-                  ◎
-                </span>
-                <span className="skill-button-label">I'm New Here</span>
-                <span className="skill-description">Show me the basics</span>
-              </button>
-              <button
-                type="button"
-                className="skill-button poweruser-btn"
-                onClick={() => {
-                  setUserSkillLevel("power-user");
-                  setIsOnboardingVisible(false);
-                }}
-              >
-                <span className="skill-button-icon" aria-hidden="true">
-                  ↗
-                </span>
-                <span className="skill-button-label">I Know My Way Around</span>
-                <span className="skill-description">Skip to the app</span>
-              </button>
-            </div>
-          </div>
-        </div>
+        <WelcomeDialog
+          handleReplayTutorial={handleReplayTutorial}
+          setIsOnboardingVisible={setIsOnboardingVisible}
+          setUserSkillLevel={setUserSkillLevel}
+        />
       ) : null}
       {isOnboardingVisible && isOnboardingAt === "tutorial" ? (
-        <div
-          className="tour-panel"
-          role="dialog"
-          aria-modal="false"
-          aria-labelledby="tour-heading"
-        >
-          <p className="onboarding-eyebrow">
-            Guided Tour · Step {onboardingTutorialStepIndex + 1} of{" "}
-            {onboardingTutorialStepCount}
-          </p>
-          <h3 id="tour-heading" className="tour-panel-title">
-            {currentOnboardingStep?.title || "Quick Start"}
-          </h3>
-          <p className="tour-panel-detail">
-            {currentOnboardingStep?.detail || ""}
-          </p>
-          {currentOnboardingStep?.tip ? (
-            <p className="onboarding-tip">{currentOnboardingStep.tip}</p>
-          ) : null}
-          <div
-            className="onboarding-progress-bar tour-progress-bar"
-            aria-hidden="true"
-          >
-            <span
-              style={{
-                width: `${((onboardingTutorialStepIndex + 1) / onboardingTutorialStepCount) * 100}%`,
-              }}
-            />
-          </div>
-          <div className="onboarding-tutorial-actions">
-            <button
-              type="button"
-              className="onboarding-tutorial-btn"
-              onClick={() =>
-                setOnboardingTutorialStep((current) => Math.max(0, current - 1))
-              }
-              disabled={isOnboardingFirstStep}
-            >
-              Previous
-            </button>
-            <button
-              type="button"
-              className="onboarding-tutorial-btn"
-              onClick={() => setIsOnboardingVisible(false)}
-            >
-              Skip
-            </button>
-            <button
-              type="button"
-              className="onboarding-tutorial-btn is-primary"
-              onClick={() => {
-                if (isOnboardingLastStep) {
-                  setIsOnboardingVisible(false);
-                  return;
-                }
-                setOnboardingTutorialStep((current) =>
-                  Math.min(onboardingTutorialStepCount - 1, current + 1),
-                );
-              }}
-            >
-              {isOnboardingLastStep ? "Finish" : "Next"}
-            </button>
-          </div>
-        </div>
+        <TourPanel
+          currentOnboardingStep={currentOnboardingStep}
+          isOnboardingFirstStep={isOnboardingFirstStep}
+          isOnboardingLastStep={isOnboardingLastStep}
+          onboardingTutorialStepCount={onboardingTutorialStepCount}
+          onboardingTutorialStepIndex={onboardingTutorialStepIndex}
+          setIsOnboardingVisible={setIsOnboardingVisible}
+          setOnboardingTutorialStep={setOnboardingTutorialStep}
+        />
       ) : null}
       <div className="main-layout">
         <div
@@ -5741,408 +5325,66 @@ export default function App() {
             ) : null}
           </div>
           {traceRenderableDbPaths.length ? (
-            <div
-              ref={traceLegendPanelRef}
-              className={`map-trace-legend ${isTraceLegendMinimized ? "is-minimized" : ""}`}
-              aria-label="Trace path legend"
-              style={{
-                left: isTracePaletteDocked
-                  ? "12px"
-                  : `${traceLegendPosition.left}px`,
-                right: isTracePaletteDocked ? "12px" : undefined,
-                top: isTracePaletteDocked
-                  ? "108px"
-                  : `${traceLegendPosition.top}px`,
-                width: isTracePaletteDocked ? "auto" : undefined,
-                maxWidth: isTracePaletteDocked ? "none" : undefined,
-              }}
-            >
-              <div
-                className="map-trace-legend-header"
-                onPointerDown={handleTraceLegendPointerDown}
-              >
-                <strong>
-                  Trace paths ({traceRenderableDbPaths.length}
-                  {traceDbPaths.length > traceRenderableDbPaths.length
-                    ? ` of ${traceDbPaths.length}`
-                    : ""}
-                  )
-                </strong>
-                <div className="map-trace-legend-header-actions">
-                  <button
-                    type="button"
-                    className="map-trace-toggle"
-                    onClick={() =>
-                      setIsTraceLegendMinimized((collapsed) => !collapsed)
-                    }
-                    aria-label={
-                      isTraceLegendMinimized
-                        ? "Expand trace paths palette"
-                        : "Minimize trace paths palette"
-                    }
-                    title={
-                      isTraceLegendMinimized
-                        ? "Expand palette"
-                        : "Minimize palette"
-                    }
-                  >
-                    {isTraceLegendMinimized ? "+" : "–"}
-                  </button>
-                  {traceRenderableDbPaths.length > 1 ? (
-                    <button
-                      type="button"
-                      className="map-trace-submit map-trace-path-action"
-                      onClick={handleShowAllTraceDbPaths}
-                      disabled={!selectedTraceDbPathKey}
-                    >
-                      Show All
-                    </button>
-                  ) : null}
-                </div>
-              </div>
-              {!isTraceLegendMinimized ? (
-                <div className="map-trace-legend-list">
-                  {traceRenderableDbPaths.slice(0, 8).map((item, index) => {
-                    const nodePath = Array.isArray(item?.nodePath)
-                      ? item.nodePath
-                      : [];
-                    const pathKey = nodePath.join("->");
-                    const pathColor =
-                      TRACE_PATH_COLOR_PALETTE[
-                        index % TRACE_PATH_COLOR_PALETTE.length
-                      ];
-                    return (
-                      <button
-                        key={`legend-${pathKey}-${index}`}
-                        type="button"
-                        className="map-trace-legend-item"
-                        onClick={() => handleShowTraceDbPath(nodePath)}
-                      >
-                        <span
-                          className="map-trace-path-swatch"
-                          style={{ backgroundColor: pathColor }}
-                          aria-hidden="true"
-                        />
-                        <span>
-                          Path {index + 1} · {Number(item?.hopCount) || 0}{" "}
-                          hop(s)
-                        </span>
-                      </button>
-                    );
-                  })}
-                </div>
-              ) : null}
-            </div>
+            <TraceLegend
+              handleShowAllTraceDbPaths={handleShowAllTraceDbPaths}
+              handleShowTraceDbPath={handleShowTraceDbPath}
+              handleTraceLegendPointerDown={handleTraceLegendPointerDown}
+              isTraceLegendMinimized={isTraceLegendMinimized}
+              isTracePaletteDocked={isTracePaletteDocked}
+              selectedTraceDbPathKey={selectedTraceDbPathKey}
+              setIsTraceLegendMinimized={setIsTraceLegendMinimized}
+              traceDbPaths={traceDbPaths}
+              traceLegendPanelRef={traceLegendPanelRef}
+              traceLegendPosition={traceLegendPosition}
+              traceRenderableDbPaths={traceRenderableDbPaths}
+            />
           ) : null}
           <div className="map-trace-tool-wrap">
             {isTraceToolOpen ? (
-              <form
-                ref={traceToolPanelRef}
-                id="map-trace-tool"
-                className="map-trace-tool"
-                role="group"
-                aria-label="Trace path tool"
-                onSubmit={handleTraceToolSubmit}
-                style={{
-                  left: isTracePaletteDocked ? "12px" : undefined,
-                  right: isTracePaletteDocked
-                    ? "12px"
-                    : effectiveStatsCollapsed
-                      ? "80px"
-                      : "304px",
-                  top: isTracePaletteDocked ? "108px" : "268px",
-                  width: isTracePaletteDocked ? "auto" : undefined,
-                  maxWidth: isTracePaletteDocked ? "none" : undefined,
-                  maxHeight: isTracePaletteDocked
-                    ? "calc(100vh - 132px)"
-                    : undefined,
-                }}
-              >
-                <div className="map-trace-tool-header">
-                  <div className="map-trace-tool-header-title">
-                    <strong>Trace path tool</strong>
-                  </div>
-                  <div className="map-trace-tool-header-actions">
-                    <button
-                      type="button"
-                      className="map-trace-submit map-trace-path-action"
-                      onClick={() => setIsTraceToolOpen(false)}
-                    >
-                      Hide
-                    </button>
-                  </div>
-                </div>
-                <div className="map-trace-tool-body">
-                  <label>
-                    <span>From wallet</span>
-                    <input
-                      type="text"
-                      className="map-trace-search"
-                      value={traceFromQuery}
-                      onChange={(event) => {
-                        setTraceFromQuery(event.target.value);
-                        setSelectedTraceDbPathKey("");
-                        setTraceFromNodeId("");
-                      }}
-                      placeholder="Search current map or paste full address"
-                      aria-label="Search source wallet"
-                    />
-                    <select
-                      className="map-trace-select"
-                      size={isMobileViewport ? 4 : 6}
-                      value={traceFromNodeId}
-                      onChange={(event) => {
-                        setSelectedTraceDbPathKey("");
-                        setTraceFromNodeId(event.target.value);
-                      }}
-                      aria-label="Select source wallet"
-                    >
-                      <option value="">Select</option>
-                      {traceFromOptions.length ? (
-                        traceFromOptions.map((node) => (
-                          <option key={node.id} value={node.id}>
-                            {buildTraceOptionLabel(node)}
-                          </option>
-                        ))
-                      ) : (
-                        <option value="" disabled>
-                          Wallet not found in the current map
-                        </option>
-                      )}
-                    </select>
-                  </label>
-                  <label>
-                    <span>Path stop mode</span>
-                    <select
-                      className="map-trace-select map-trace-mode-select"
-                      value={traceStopMode}
-                      onChange={(event) => {
-                        setSelectedTraceDbPathKey("");
-                        setTraceStopMode(event.target.value);
-                      }}
-                      aria-label="Trace path stop mode"
-                    >
-                      <option value="terminal">
-                        Stop at hub/high inbound/high outbound
-                      </option>
-                      <option value="through">
-                        Allow passing through terminals
-                      </option>
-                    </select>
-                    <div className="map-trace-option-note">
-                      Optional: choose whether paths terminate at labeled
-                      hubs/high-flow wallets.
-                    </div>
-                  </label>
-                  <label>
-                    <span>To wallet</span>
-                    <input
-                      type="text"
-                      className="map-trace-search"
-                      value={traceToQuery}
-                      onChange={(event) => {
-                        setTraceToQuery(event.target.value);
-                        setSelectedTraceDbPathKey("");
-                        setTraceToNodeId("");
-                      }}
-                      placeholder="Search current map or paste full address"
-                      aria-label="Search destination wallet"
-                    />
-                    <select
-                      className="map-trace-select"
-                      size={isMobileViewport ? 4 : 6}
-                      value={traceToNodeId}
-                      onChange={(event) => {
-                        setSelectedTraceDbPathKey("");
-                        setTraceToNodeId(event.target.value);
-                      }}
-                      aria-label="Select destination wallet"
-                    >
-                      <option value="">Select</option>
-                      {traceToOptions.length ? (
-                        traceToOptions.map((node) => (
-                          <option key={node.id} value={node.id}>
-                            {buildTraceOptionLabel(node)}
-                          </option>
-                        ))
-                      ) : (
-                        <option value="" disabled>
-                          Wallet not found in the current map
-                        </option>
-                      )}
-                    </select>
-                  </label>
-                  <div className="map-trace-actions">
-                    {traceDbPathHighlights.length > 1 ? (
-                      <button
-                        type="button"
-                        className="map-trace-submit map-trace-path-action"
-                        onClick={handleShowAllTraceDbPaths}
-                        disabled={!selectedTraceDbPathKey}
-                      >
-                        Show All Paths
-                      </button>
-                    ) : null}
-                    <button
-                      type="submit"
-                      className="map-trace-submit"
-                      disabled={!isTraceSearchReady || isTraceDbPathsLoading}
-                    >
-                      {isTraceDbPathsLoading ? "Searching..." : "Search Paths"}
-                    </button>
-                    {traceDbPaths.length ? (
-                      <button
-                        type="button"
-                        className="map-trace-submit map-trace-path-action"
-                        onClick={() =>
-                          handleShowTraceDbPath(primaryTraceDbPathNodePath)
-                        }
-                      >
-                        {selectedTraceDbPathKey ? "Showing Path" : "Show Path"}
-                      </button>
-                    ) : null}
-                  </div>
-                  <div className="map-trace-status" aria-live="polite">
-                    {Number.isFinite(traceComputation.relevanceScore) ? (
-                      <span className="map-trace-score-badge">
-                        Relevance {traceComputation.relevanceScore}/100
-                      </span>
-                    ) : null}
-                    {isTraceDbPathsLoading ? (
-                      <span className="map-trace-score-badge">
-                        Searching DB paths...
-                      </span>
-                    ) : null}
-                    {activeTraceStatus}
-                  </div>
-                  {traceListedDbPaths.length ? (
-                    <>
-                      <div
-                        className="map-trace-path-list"
-                        aria-label="Database trace paths"
-                      >
-                        {traceListedDbPaths.map((item, index) => {
-                          const nodePath = Array.isArray(item?.nodePath)
-                            ? item.nodePath
-                            : [];
-                          const pathKey = nodePath.join("->");
-                          const pathColor =
-                            TRACE_PATH_COLOR_PALETTE[
-                              index % TRACE_PATH_COLOR_PALETTE.length
-                            ];
-                          return (
-                            <div
-                              key={`${pathKey}-${index}`}
-                              className="map-trace-path-item"
-                              style={{ borderLeft: `3px solid ${pathColor}` }}
-                            >
-                              <strong>
-                                <button
-                                  type="button"
-                                  className="map-trace-path-swatch-button"
-                                  onClick={() =>
-                                    handleShowTraceDbPath(nodePath)
-                                  }
-                                  aria-label={`Highlight path ${index + 1}`}
-                                  title={`Highlight path ${index + 1}`}
-                                >
-                                  <span
-                                    className="map-trace-path-swatch"
-                                    style={{ backgroundColor: pathColor }}
-                                    aria-hidden="true"
-                                  />
-                                </button>
-                                Path {index + 1} · {Number(item?.hopCount) || 0}{" "}
-                                hop(s)
-                              </strong>
-                              <span>{nodePath.join(" → ")}</span>
-                              <button
-                                type="button"
-                                className="map-trace-submit map-trace-path-action"
-                                onClick={() => handleShowTraceDbPath(nodePath)}
-                              >
-                                {selectedTraceDbPathKey === pathKey
-                                  ? "Showing Path"
-                                  : "Show Path"}
-                              </button>
-                            </div>
-                          );
-                        })}
-                      </div>
-                      {traceDbPaths.length > traceListedDbPaths.length ? (
-                        <div className="map-trace-option-note">
-                          Showing {traceListedDbPaths.length.toLocaleString()}{" "}
-                          of {traceDbPaths.length.toLocaleString()} paths.
-                        </div>
-                      ) : null}
-                    </>
-                  ) : null}
-                </div>
-              </form>
+              <TraceToolForm
+                activeTraceStatus={activeTraceStatus}
+                buildTraceOptionLabel={buildTraceOptionLabel}
+                effectiveStatsCollapsed={effectiveStatsCollapsed}
+                handleShowAllTraceDbPaths={handleShowAllTraceDbPaths}
+                handleShowTraceDbPath={handleShowTraceDbPath}
+                handleTraceToolSubmit={handleTraceToolSubmit}
+                isMobileViewport={isMobileViewport}
+                isTraceDbPathsLoading={isTraceDbPathsLoading}
+                isTracePaletteDocked={isTracePaletteDocked}
+                isTraceSearchReady={isTraceSearchReady}
+                primaryTraceDbPathNodePath={primaryTraceDbPathNodePath}
+                selectedTraceDbPathKey={selectedTraceDbPathKey}
+                setIsTraceToolOpen={setIsTraceToolOpen}
+                setSelectedTraceDbPathKey={setSelectedTraceDbPathKey}
+                setTraceFromNodeId={setTraceFromNodeId}
+                setTraceFromQuery={setTraceFromQuery}
+                setTraceStopMode={setTraceStopMode}
+                setTraceToNodeId={setTraceToNodeId}
+                setTraceToQuery={setTraceToQuery}
+                traceComputation={traceComputation}
+                traceDbPathHighlights={traceDbPathHighlights}
+                traceDbPaths={traceDbPaths}
+                traceFromNodeId={traceFromNodeId}
+                traceFromOptions={traceFromOptions}
+                traceFromQuery={traceFromQuery}
+                traceListedDbPaths={traceListedDbPaths}
+                traceStopMode={traceStopMode}
+                traceToNodeId={traceToNodeId}
+                traceToolPanelRef={traceToolPanelRef}
+                traceToOptions={traceToOptions}
+                traceToQuery={traceToQuery}
+              />
             ) : null}
           </div>
           {isMapLoaderVisible ? (
-            <div
-              className={`map-loading-overlay ${isMapLoaderExiting ? "is-exiting" : ""}`}
-              style={loadingThemeStyle}
-              aria-live="off"
-            >
-              <div className="visually-hidden" role="status" aria-atomic="true">
-                {mapLoadingAriaStatus}
-              </div>
-              <div className="map-loading-center">
-                <svg
-                  className="map-loading-ring"
-                  viewBox="0 0 56 56"
-                  aria-hidden="true"
-                >
-                  <circle
-                    className="map-loading-ring-track"
-                    cx="28"
-                    cy="28"
-                    r="23"
-                    fill="none"
-                    strokeWidth="2"
-                  />
-                  <circle
-                    className="map-loading-ring-fill"
-                    cx="28"
-                    cy="28"
-                    r="23"
-                    fill="none"
-                    strokeWidth="2"
-                    strokeLinecap="round"
-                    style={{
-                      strokeDashoffset: `${144.51 - (144.51 * clampedMapLoadingProgress) / 100}`,
-                    }}
-                  />
-                  <circle
-                    className="map-loading-ring-sweep"
-                    cx="28"
-                    cy="28"
-                    r="23"
-                    fill="none"
-                    strokeWidth="2"
-                    strokeLinecap="round"
-                  />
-                  <text
-                    className="map-loading-ring-pct"
-                    x="28"
-                    y="28"
-                    textAnchor="middle"
-                    dominantBaseline="central"
-                  >
-                    {clampedMapLoadingProgress}%
-                  </text>
-                </svg>
-                <div key={mapLoadingStageDetail} className="map-loading-stage">
-                  {mapLoadingStageDetail}
-                </div>
-                <div className="map-loading-evidence" aria-live="off">
-                  {mapLoadingEvidenceDetail}
-                </div>
-              </div>
-            </div>
+            <MapLoadingOverlay
+              clampedMapLoadingProgress={clampedMapLoadingProgress}
+              isMapLoaderExiting={isMapLoaderExiting}
+              loadingThemeStyle={loadingThemeStyle}
+              mapLoadingAriaStatus={mapLoadingAriaStatus}
+              mapLoadingEvidenceDetail={mapLoadingEvidenceDetail}
+              mapLoadingStageDetail={mapLoadingStageDetail}
+            />
           ) : null}
           {mapRecoveryState ? (
             <div className="map-empty-state" aria-live="polite">
@@ -6250,57 +5492,14 @@ export default function App() {
             </div>
           ) : null}
           {isMobileViewport && resolvedSelectedNode && isMobileInspectOpen ? (
-            <div
-              className="mobile-inspect-sheet"
-              role="dialog"
-              aria-modal="false"
-              aria-labelledby="mobile-inspect-heading"
-            >
-              <div className="mobile-inspect-head">
-                <strong id="mobile-inspect-heading">
-                  {resolvedSelectedNode.label}
-                </strong>
-                <button
-                  type="button"
-                  aria-label="Close mobile inspect panel"
-                  onClick={() => setIsMobileInspectOpen(false)}
-                >
-                  Close
-                </button>
-              </div>
-              <p>{resolvedSelectedNode.shortAddr}</p>
-              <p>
-                Share:{" "}
-                {fmtSharePct(
-                  resolvedSelectedNode.value,
-                  currentSupplyBase,
-                  resolvedSelectedNode.pct,
-                )}
-              </p>
-              <p>
-                Amount: {fmtTokenAmount(resolvedSelectedNode.value)}{" "}
-                {activeTokenInfo.name}
-              </p>
-              <div className="mobile-inspect-actions">
-                <button
-                  type="button"
-                  onClick={() =>
-                    handleShowNodeConnections(resolvedSelectedNode.id)
-                  }
-                >
-                  Show Connections
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setIsTransfersModalOpen(true);
-                    setIsMobileInspectOpen(false);
-                  }}
-                >
-                  Transactions
-                </button>
-              </div>
-            </div>
+            <MobileInspectSheet
+              activeTokenInfo={activeTokenInfo}
+              currentSupplyBase={currentSupplyBase}
+              handleShowNodeConnections={handleShowNodeConnections}
+              resolvedSelectedNode={resolvedSelectedNode}
+              setIsMobileInspectOpen={setIsMobileInspectOpen}
+              setIsTransfersModalOpen={setIsTransfersModalOpen}
+            />
           ) : null}
           <div className="map-hint">
             <span className="map-hint-text">
