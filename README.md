@@ -58,7 +58,7 @@ Application startup proceeds in this order:
     	 or
     	 GET /graph/address/:address?token=:symbol&depth=:depth&edgeLimit=:limit
     6. App requests backend sync progress from GET /sync-status on a polling interval.
-    7. If the selected token is SOUL, App polls CoinGecko first and CoinMarketCap second for price updates.
+    7. If the selected token is SOUL, App polls the maps API /prices route, falling back to CoinGecko and then the Phantasma explorer when the API is unreachable.
 
     Once graph data is loaded, App normalizes balances, converts API payloads into D3-friendly nodes and links, applies search and legend filters, and passes the filtered graph into BubbleMap.
 
@@ -125,73 +125,59 @@ The frontend expects the backend to expose the following routes:
 ENVIRONMENT
 The application reads these environment variables at build time. Vite exposes variables prefixed with REACT_APP_ or VITE_ to browser code and inlines their values into the bundle, so never put secrets in them. Set PUBLIC_URL to serve the app from a sub-path. Rebuild after changing any of them.
 
+    REACT_APP_MAPS_API_BASE_URL
+    	Base URL of the PhantasmaMaps API. Defaults to port 3000 on the host serving the page.
+
+    REACT_APP_MAPS_API_TOKEN_SYMBOL
+    	Initial tracked token symbol (default SOUL).
+
+    REACT_APP_MAPS_API_GRAPH_DEPTH
+    	Address graph traversal depth (default 2).
+
+    REACT_APP_MAPS_API_GRAPH_EDGE_LIMIT
+    	Maximum number of edges requested for graph loads (default 1200).
+
+    REACT_APP_MAPS_API_GRAPH_NODE_LIMIT
+    	Default node limit for graph loads (default 300).
+
+    REACT_APP_MAPS_API_GRAPH_TOP_HOLDERS_LIMIT
+    	Number of top holders requested alongside graph data (default 100).
+
+    REACT_APP_MAPS_API_REQUEST_TIMEOUT_MS
+    	Timeout for graph, metadata, token-list, and sync-status API requests (default 45000).
+
+    REACT_APP_MAPS_API_SYNC_STATUS_POLL_INTERVAL_MS
+    	Poll interval for backend sync-state refreshes (default 30000).
+
+    REACT_APP_TOKEN_METADATA_POLL_INTERVAL_MS
+    	Poll interval for token metadata refreshes (default 60000).
+
+    REACT_APP_SOUL_PRICE_BASE_POLL_INTERVAL_MS
+    	Normal SOUL price poll interval (default 300000).
+
+    REACT_APP_SOUL_PRICE_MAX_BACKOFF_MS
+    	Maximum retry interval after quote failures or rate limiting (default 600000).
+
+    REACT_APP_SOUL_PRICE_API_URL
+    	Direct CoinGecko endpoint for SOUL pricing, used only when the maps API /prices route is unreachable.
+
+    REACT_APP_TRACKED_TOKEN_PRICES_API_URL
+    	Direct SaturnX fallback for non-SOUL token prices (used only when the maps API /prices route is unreachable).
+
+    REACT_APP_TRACKED_TOKEN_PRICE_NETWORK
+    	Network query parameter for the SaturnX fallback (default mainnet).
+
+    REACT_APP_PHANTASMA_EXPLORER_TOKEN_API_URL
+    	Direct Phantasma explorer token endpoint used as the last price fallback.
+
     REACT_APP_PHANTASMA_EXPLORER_BASE
     	Base URL for wallet explorer links.
 
     REACT_APP_PHANTASMA_TX_EXPLORER_BASE
     	Base URL for transaction explorer links.
 
-    REACT_APP_SOUL_PRICE_API_URL
-    	Direct CoinGecko endpoint for SOUL pricing, used only when the maps API
-    	/prices route is unreachable.
-
-    REACT_APP_TRACKED_TOKEN_PRICES_API_URL
-    	Direct SaturnX fallback for non-SOUL token prices (used only when the
-    	maps API /prices route is unreachable).
-
-    REACT_APP_PHANTASMA_EXPLORER_TOKEN_API_URL
-    	Direct Phantasma explorer token endpoint used as the last price fallback.
-
-    REACT_APP_CMC_SOUL_QUOTES_API_URL
-    	CoinMarketCap quote endpoint.
-
-    REACT_APP_CMC_SOUL_SYMBOL
-    	Market symbol used when parsing CoinMarketCap payloads.
-
-    REACT_APP_SOUL_PRICE_BASE_POLL_INTERVAL_MS
-    	Normal SOUL price poll interval.
-
-    REACT_APP_SOUL_PRICE_MAX_BACKOFF_MS
-    	Maximum retry interval after quote failures or rate limiting.
-
-    REACT_APP_SOUL_PRICE_REQUEST_TIMEOUT_MS
-    	Timeout for market-price fetches.
-
-    REACT_APP_CMC_API_KEY
-    	Optional CoinMarketCap key.
-
-    REACT_APP_CMC_PROXY_URL
-    	Optional server-side proxy for CoinMarketCap requests.
-
-    REACT_APP_CMC_ALLOW_BROWSER_DIRECT
-    	Enables direct browser calls to CoinMarketCap if explicitly set to true.
-
-    REACT_APP_MAPS_API_BASE_URL
-    	Base URL of the PhantasmaMaps API. Defaults to http://localhost:3000.
-
-    REACT_APP_MAPS_API_TOKEN_SYMBOL
-    	Initial tracked token symbol.
-
-    REACT_APP_MAPS_API_ROOT_ADDRESS
-    	Optional default root address for focused graph mode.
-
-    REACT_APP_MAPS_API_GRAPH_DEPTH
-    	Address graph traversal depth.
-
-    REACT_APP_MAPS_API_GRAPH_EDGE_LIMIT
-    	Maximum number of edges requested for address graph loads.
-
-    REACT_APP_MAPS_API_REQUEST_TIMEOUT_MS
-    	Timeout for graph, metadata, token-list, and sync-status API requests.
-
-    REACT_APP_MAPS_API_TX_PAGE_SIZE
-    	Transaction page size for the address transaction loader.
-
-    REACT_APP_MAPS_API_TX_MAX_PAGES
-    	Hard cap on paginated transaction fetches per address.
-
-    REACT_APP_MAPS_API_SYNC_STATUS_POLL_INTERVAL_MS
-    	Poll interval for backend sync-state refreshes.
+    PUBLIC_URL
+    	Base path the app is served from (default /).
 
 COMMANDS
 Requires Node.js ^22.13 or ^24 (see engines in package.json).
@@ -320,18 +306,6 @@ Reads a positive numeric environment value in milliseconds and falls back if the
     getMockTokenData(tokenSymbol)
     	Returns a normalized mock dataset for the requested symbol.
 
-    parseCoinGeckoQuote(payload)
-    	Extracts SOUL price and 24-hour change from a CoinGecko payload.
-
-    parseCoinMarketCapQuote(payload)
-    	Extracts SOUL price and 24-hour change from a CoinMarketCap payload.
-
-    fetchSoulQuoteFromCoinGecko()
-    	Calls CoinGecko and returns a normalized quote result.
-
-    fetchSoulQuoteFromCoinMarketCap()
-    	Calls CoinMarketCap directly or through a proxy and returns a normalized quote result.
-
     fmtTokenAmount(n)
     	Formats token balances into compact human-readable values.
 
@@ -363,7 +337,7 @@ Reads a positive numeric environment value in milliseconds and falls back if the
     Schedules the next SOUL market-price refresh with retry backoff support.
 
     fetchSoulPrice()
-    Refreshes SOUL market pricing by trying CoinGecko first and CoinMarketCap second.
+    Refreshes SOUL market pricing from the maps API, falling back to CoinGecko (fetchCoinGeckoQuote in src/api/tokenPrices.js) and then the Phantasma explorer.
 
     fetchSyncStatus()
     Polls backend sync progress and updates the header block-sync pill.

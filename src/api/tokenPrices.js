@@ -4,6 +4,8 @@ export const DEFAULT_TRACKED_TOKEN_PRICE_API_BASE_URL =
   "https://apiops.saturnx.cc/v1/tokens";
 export const DEFAULT_EXPLORER_TOKEN_API_URL =
   "https://api-explorer.phantasma.info/api/v1/tokens";
+export const DEFAULT_COINGECKO_SOUL_PRICE_URL =
+  "https://api.coingecko.com/api/v3/simple/price?ids=phantasma&vs_currencies=usd&include_24hr_change=true";
 
 // SaturnX is optional (it is often unreachable or ISP-filtered), so fail fast without retries.
 const SATURNX_REQUEST_TIMEOUT_MS = 5000;
@@ -135,6 +137,44 @@ export function parseExplorerTokenQuote(payload, tokenSymbol) {
 
   // The explorer only publishes spot prices, not 24h movement.
   return { price: usdPrice, priceChange24h: null };
+}
+
+export function parseCoinGeckoQuote(payload) {
+  const coinData =
+    payload?.phantasma ||
+    payload?.soul ||
+    (payload && typeof payload === "object" ? Object.values(payload)[0] : null);
+  const usdPrice = Number(coinData?.usd);
+  const usdChange24h = Number(coinData?.usd_24h_change);
+  if (!Number.isFinite(usdPrice) || !Number.isFinite(usdChange24h)) {
+    return null;
+  }
+  return {
+    price: usdPrice,
+    priceChange24h: usdChange24h,
+  };
+}
+
+export async function fetchCoinGeckoQuote(
+  url = DEFAULT_COINGECKO_SOUL_PRICE_URL,
+) {
+  const result = await fetchJsonWithTimeout(url);
+  if (!result.ok) return result;
+  const quote = parseCoinGeckoQuote(result.payload);
+  if (!quote) {
+    return {
+      ok: false,
+      status: result.status,
+      retryAfterMs: result.retryAfterMs,
+    };
+  }
+  return {
+    ok: true,
+    status: result.status,
+    retryAfterMs: result.retryAfterMs,
+    quote,
+    source: "coingecko",
+  };
 }
 
 async function fetchSaturnxQuote(tokenSymbol, { baseUrl, network }) {

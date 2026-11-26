@@ -14,9 +14,11 @@ import useTransactionState from "./hooks/useTransactionState";
 import { readUrlParams } from "./hooks/useUrlState";
 import { fetchJsonWithTimeout } from "./api/http";
 import {
+  DEFAULT_COINGECKO_SOUL_PRICE_URL,
   DEFAULT_EXPLORER_TOKEN_API_URL,
   DEFAULT_TRACKED_TOKEN_PRICE_API_BASE_URL,
   fetchBackendTokenQuote,
+  fetchCoinGeckoQuote,
   fetchExplorerTokenQuote,
   fetchTrackedTokenQuote,
 } from "./api/tokenPrices";
@@ -111,7 +113,7 @@ const PHANTASMA_TX_EXPLORER_BASE =
   "https://explorer.phantasma.info/tx/";
 const SOUL_PRICE_API_URL =
   parseEnvString(import.meta.env.REACT_APP_SOUL_PRICE_API_URL) ||
-  "https://api.coingecko.com/api/v3/simple/price?ids=phantasma&vs_currencies=usd&include_24hr_change=true";
+  DEFAULT_COINGECKO_SOUL_PRICE_URL;
 const TRACKED_TOKEN_PRICE_API_BASE_URL =
   parseEnvString(import.meta.env.REACT_APP_TRACKED_TOKEN_PRICES_API_URL) ||
   DEFAULT_TRACKED_TOKEN_PRICE_API_BASE_URL;
@@ -125,12 +127,6 @@ const TRACKED_TOKEN_PRICE_OPTIONS = {
     parseEnvString(import.meta.env.REACT_APP_TRACKED_TOKEN_PRICE_NETWORK, "mainnet") ||
     "mainnet",
 };
-const CMC_SOUL_QUOTES_API_URL =
-  parseEnvString(import.meta.env.REACT_APP_CMC_SOUL_QUOTES_API_URL) ||
-  "https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest?symbol=SOUL&convert=USD";
-const CMC_SOUL_SYMBOL = (
-  parseEnvString(import.meta.env.REACT_APP_CMC_SOUL_SYMBOL, "SOUL") || "SOUL"
-).toUpperCase();
 const SOUL_PRICE_BASE_POLL_INTERVAL_MS = parseEnvMs(
   import.meta.env.REACT_APP_SOUL_PRICE_BASE_POLL_INTERVAL_MS,
   5 * 60 * 1000,
@@ -140,12 +136,6 @@ const SOUL_PRICE_MAX_BACKOFF_MS = parseEnvMs(
   import.meta.env.REACT_APP_SOUL_PRICE_MAX_BACKOFF_MS,
   10 * 60 * 1000,
 );
-const CMC_API_KEY = parseEnvString(import.meta.env.REACT_APP_CMC_API_KEY);
-const CMC_PROXY_URL = parseEnvString(import.meta.env.REACT_APP_CMC_PROXY_URL);
-const CMC_ALLOW_BROWSER_DIRECT =
-  String(
-    parseEnvString(import.meta.env.REACT_APP_CMC_ALLOW_BROWSER_DIRECT) || "",
-  ).toLowerCase() === "true";
 const DEFAULT_MAPS_API_BASE_URL =
   typeof window !== "undefined" && window.location
     ? `${window.location.protocol}//${window.location.hostname}:3000`
@@ -1190,105 +1180,6 @@ function getMockTokenData(tokenSymbol) {
           type: inferHolderType(holder.label, Number(holder.pct)),
         }))
       : [],
-  };
-}
-
-function parseCoinGeckoQuote(payload) {
-  const coinData =
-    payload?.phantasma ||
-    payload?.soul ||
-    (payload && typeof payload === "object" ? Object.values(payload)[0] : null);
-  const usdPrice = Number(coinData?.usd);
-  const usdChange24h = Number(coinData?.usd_24h_change);
-  if (!Number.isFinite(usdPrice) || !Number.isFinite(usdChange24h)) {
-    return null;
-  }
-  return {
-    price: usdPrice,
-    priceChange24h: usdChange24h,
-  };
-}
-
-function parseCoinMarketCapQuote(payload) {
-  const usdQuote = payload?.data?.[CMC_SOUL_SYMBOL]?.quote?.USD;
-  const usdPrice = Number(usdQuote?.price);
-  const usdChange24h = Number(usdQuote?.percent_change_24h);
-  if (!Number.isFinite(usdPrice) || !Number.isFinite(usdChange24h)) {
-    return null;
-  }
-  return {
-    price: usdPrice,
-    priceChange24h: usdChange24h,
-  };
-}
-
-async function fetchSoulQuoteFromCoinGecko() {
-  const result = await fetchJsonWithTimeout(SOUL_PRICE_API_URL);
-  if (!result.ok) return result;
-  const quote = parseCoinGeckoQuote(result.payload);
-  if (!quote) {
-    return {
-      ok: false,
-      status: result.status,
-      retryAfterMs: result.retryAfterMs,
-    };
-  }
-  return {
-    ok: true,
-    status: result.status,
-    retryAfterMs: result.retryAfterMs,
-    quote,
-    source: "coingecko",
-  };
-}
-
-async function fetchSoulQuoteFromCoinMarketCap() {
-  const hasProxy = Boolean(CMC_PROXY_URL);
-
-  // CoinMarketCap Pro typically blocks browser-origin requests (CORS).
-  // Prefer a server-side proxy unless direct browser mode is explicitly enabled.
-  if (!hasProxy && !CMC_ALLOW_BROWSER_DIRECT) {
-    return {
-      ok: false,
-      status: 0,
-      retryAfterMs: null,
-    };
-  }
-
-  const endpoint = hasProxy ? CMC_PROXY_URL : CMC_SOUL_QUOTES_API_URL;
-  const headers = {
-    Accept: "application/json",
-  };
-
-  if (CMC_API_KEY) {
-    headers["X-CMC_PRO_API_KEY"] = CMC_API_KEY;
-  }
-
-  // Direct browser mode requires a key; proxy mode can authenticate server-side.
-  if (!CMC_API_KEY && !hasProxy) {
-    return {
-      ok: false,
-      status: 401,
-      retryAfterMs: null,
-    };
-  }
-
-  const result = await fetchJsonWithTimeout(endpoint, { headers });
-  if (!result.ok) return result;
-  const quote = parseCoinMarketCapQuote(result.payload);
-  if (!quote) {
-    return {
-      ok: false,
-      status: result.status,
-      retryAfterMs: result.retryAfterMs,
-    };
-  }
-  return {
-    ok: true,
-    status: result.status,
-    retryAfterMs: result.retryAfterMs,
-    quote,
-    source: "coinmarketcap",
   };
 }
 
@@ -3474,30 +3365,18 @@ export default function App() {
         ).catch(() => ({ ok: false, status: 0 }));
         const primaryResult = backendResult.ok
           ? backendResult
-          : await fetchSoulQuoteFromCoinGecko();
-        const fallbackResult = primaryResult.ok
+          : await fetchCoinGeckoQuote(SOUL_PRICE_API_URL);
+        const explorerResult = primaryResult.ok
           ? null
-          : await fetchSoulQuoteFromCoinMarketCap();
-        const explorerResult =
-          primaryResult.ok || fallbackResult?.ok
-            ? null
-            : await fetchExplorerTokenQuote(TOKEN_INFO.name, {
-                explorerUrl: PHANTASMA_EXPLORER_TOKEN_API_URL,
-              });
+          : await fetchExplorerTokenQuote(TOKEN_INFO.name, {
+              explorerUrl: PHANTASMA_EXPLORER_TOKEN_API_URL,
+            });
 
-        const winner = primaryResult.ok
-          ? primaryResult
-          : fallbackResult?.ok
-            ? fallbackResult
-            : explorerResult;
+        const winner = primaryResult.ok ? primaryResult : explorerResult;
 
         if (!winner?.ok || !winner.quote) {
-          const retryAfterMs = Math.max(
-            primaryResult?.retryAfterMs || 0,
-            fallbackResult?.retryAfterMs || 0,
-          );
-          const hitRateLimit =
-            primaryResult?.status === 429 || fallbackResult?.status === 429;
+          const retryAfterMs = primaryResult?.retryAfterMs || 0;
+          const hitRateLimit = primaryResult?.status === 429;
 
           if (hitRateLimit) {
             nextPollDelayMs =
