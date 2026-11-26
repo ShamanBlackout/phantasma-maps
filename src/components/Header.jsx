@@ -266,7 +266,7 @@ export default function Header({
         >
           <img
             className="header-logo-icon"
-            src={`${import.meta.env.BASE_URL}phantasmaMaps.png`}
+            src={`${import.meta.env.BASE_URL}phantasmaMaps-192.png`}
             alt="PhantasmaMaps logo"
           />
           <span className="header-logo-text">
