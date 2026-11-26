@@ -1,17 +1,16 @@
-import React from "react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import BubbleMap from "./BubbleMap";
 
 const canvasContext = {
-  arc: jest.fn(),
-  beginPath: jest.fn(),
-  clearRect: jest.fn(),
-  fill: jest.fn(),
-  fillText: jest.fn(),
-  lineTo: jest.fn(),
-  moveTo: jest.fn(),
-  setTransform: jest.fn(),
-  stroke: jest.fn(),
+  arc: vi.fn(),
+  beginPath: vi.fn(),
+  clearRect: vi.fn(),
+  fill: vi.fn(),
+  fillText: vi.fn(),
+  lineTo: vi.fn(),
+  moveTo: vi.fn(),
+  setTransform: vi.fn(),
+  stroke: vi.fn(),
 };
 const originalCanvasGetContext = Object.getOwnPropertyDescriptor(
   HTMLCanvasElement.prototype,
@@ -33,7 +32,7 @@ describe("BubbleMap canvas renderer", () => {
     };
     Object.defineProperty(HTMLCanvasElement.prototype, "getContext", {
       configurable: true,
-      value: jest.fn(() => canvasContext),
+      value: vi.fn(() => canvasContext),
     });
     global.ResizeObserver = class ResizeObserverMock {
       observe() {}
@@ -65,7 +64,7 @@ describe("BubbleMap canvas renderer", () => {
   });
 
   it("draws the graph on a canvas and supports keyboard node selection", async () => {
-    const onNodeClick = jest.fn();
+    const onNodeClick = vi.fn();
     const nodes = [
       { id: "wallet-a", label: "Wallet A", value: 80, type: "dominant" },
       { id: "wallet-b", label: "Wallet B", value: 20, type: "minor" },
@@ -76,7 +75,7 @@ describe("BubbleMap canvas renderer", () => {
         nodes={nodes}
         links={links}
         onNodeClick={onNodeClick}
-        onNodeHover={jest.fn()}
+        onNodeHover={vi.fn()}
         selectedNodeId={null}
         currentSupply={100}
         colorTheme="dark"
@@ -103,7 +102,7 @@ describe("BubbleMap canvas renderer", () => {
         nodes={nodes}
         links={links}
         onNodeClick={onNodeClick}
-        onNodeHover={jest.fn()}
+        onNodeHover={vi.fn()}
         selectedNodeId={null}
         currentSupply={200}
         colorTheme="dark"

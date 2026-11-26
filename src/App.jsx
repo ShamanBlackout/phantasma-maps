@@ -1,4 +1,4 @@
-import React, {
+import {
   useCallback,
   useEffect,
   useMemo,
@@ -76,22 +76,19 @@ const ALLOWED_COLOR_THEMES = new Set([
 ]);
 const ONBOARDING_TUTORIAL_STEPS = [];
 
-function parseEnvMs(key, fallbackMs) {
-  const raw = process.env[key];
+function parseEnvMs(raw, fallbackMs) {
   const parsed = Number(raw);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallbackMs;
 }
 
-function parseEnvInt(key, fallbackValue) {
-  const raw = process.env[key];
+function parseEnvInt(raw, fallbackValue) {
   const parsed = Number(raw);
   return Number.isFinite(parsed) && parsed > 0
     ? Math.floor(parsed)
     : fallbackValue;
 }
 
-function parseEnvString(key, fallbackValue = "") {
-  const raw = process.env[key];
+function parseEnvString(raw, fallbackValue = "") {
   if (typeof raw !== "string") return fallbackValue;
   const trimmed = raw.trim();
   if (!trimmed) return fallbackValue;
@@ -107,80 +104,80 @@ function parseEnvString(key, fallbackValue = "") {
 }
 
 const PHANTASMA_EXPLORER_BASE =
-  parseEnvString("REACT_APP_PHANTASMA_EXPLORER_BASE") ||
+  parseEnvString(import.meta.env.REACT_APP_PHANTASMA_EXPLORER_BASE) ||
   "https://explorer.phantasma.info/address/";
 const PHANTASMA_TX_EXPLORER_BASE =
-  parseEnvString("REACT_APP_PHANTASMA_TX_EXPLORER_BASE") ||
+  parseEnvString(import.meta.env.REACT_APP_PHANTASMA_TX_EXPLORER_BASE) ||
   "https://explorer.phantasma.info/tx/";
 const SOUL_PRICE_API_URL =
-  parseEnvString("REACT_APP_SOUL_PRICE_API_URL") ||
+  parseEnvString(import.meta.env.REACT_APP_SOUL_PRICE_API_URL) ||
   "https://api.coingecko.com/api/v3/simple/price?ids=phantasma&vs_currencies=usd&include_24hr_change=true";
 const TRACKED_TOKEN_PRICE_API_BASE_URL =
-  parseEnvString("REACT_APP_TRACKED_TOKEN_PRICES_API_URL") ||
+  parseEnvString(import.meta.env.REACT_APP_TRACKED_TOKEN_PRICES_API_URL) ||
   DEFAULT_TRACKED_TOKEN_PRICE_API_BASE_URL;
 const PHANTASMA_EXPLORER_TOKEN_API_URL =
-  parseEnvString("REACT_APP_PHANTASMA_EXPLORER_TOKEN_API_URL") ||
+  parseEnvString(import.meta.env.REACT_APP_PHANTASMA_EXPLORER_TOKEN_API_URL) ||
   DEFAULT_EXPLORER_TOKEN_API_URL;
 const TRACKED_TOKEN_PRICE_OPTIONS = {
   baseUrl: TRACKED_TOKEN_PRICE_API_BASE_URL,
   explorerUrl: PHANTASMA_EXPLORER_TOKEN_API_URL,
   network:
-    parseEnvString("REACT_APP_TRACKED_TOKEN_PRICE_NETWORK", "mainnet") ||
+    parseEnvString(import.meta.env.REACT_APP_TRACKED_TOKEN_PRICE_NETWORK, "mainnet") ||
     "mainnet",
 };
 const CMC_SOUL_QUOTES_API_URL =
-  parseEnvString("REACT_APP_CMC_SOUL_QUOTES_API_URL") ||
+  parseEnvString(import.meta.env.REACT_APP_CMC_SOUL_QUOTES_API_URL) ||
   "https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest?symbol=SOUL&convert=USD";
 const CMC_SOUL_SYMBOL = (
-  parseEnvString("REACT_APP_CMC_SOUL_SYMBOL", "SOUL") || "SOUL"
+  parseEnvString(import.meta.env.REACT_APP_CMC_SOUL_SYMBOL, "SOUL") || "SOUL"
 ).toUpperCase();
 const SOUL_PRICE_BASE_POLL_INTERVAL_MS = parseEnvMs(
-  "REACT_APP_SOUL_PRICE_BASE_POLL_INTERVAL_MS",
+  import.meta.env.REACT_APP_SOUL_PRICE_BASE_POLL_INTERVAL_MS,
   5 * 60 * 1000,
 );
 const TRACKED_TOKEN_PRICE_BOOTSTRAP_RETRY_MS = 15000;
 const SOUL_PRICE_MAX_BACKOFF_MS = parseEnvMs(
-  "REACT_APP_SOUL_PRICE_MAX_BACKOFF_MS",
+  import.meta.env.REACT_APP_SOUL_PRICE_MAX_BACKOFF_MS,
   10 * 60 * 1000,
 );
-const CMC_API_KEY = parseEnvString("REACT_APP_CMC_API_KEY");
-const CMC_PROXY_URL = parseEnvString("REACT_APP_CMC_PROXY_URL");
+const CMC_API_KEY = parseEnvString(import.meta.env.REACT_APP_CMC_API_KEY);
+const CMC_PROXY_URL = parseEnvString(import.meta.env.REACT_APP_CMC_PROXY_URL);
 const CMC_ALLOW_BROWSER_DIRECT =
   String(
-    parseEnvString("REACT_APP_CMC_ALLOW_BROWSER_DIRECT") || "",
+    parseEnvString(import.meta.env.REACT_APP_CMC_ALLOW_BROWSER_DIRECT) || "",
   ).toLowerCase() === "true";
 const DEFAULT_MAPS_API_BASE_URL =
   typeof window !== "undefined" && window.location
     ? `${window.location.protocol}//${window.location.hostname}:3000`
     : "http://127.0.0.1:3000";
 const MAPS_API_BASE_URL =
-  parseEnvString("REACT_APP_MAPS_API_BASE_URL") || DEFAULT_MAPS_API_BASE_URL;
+  parseEnvString(import.meta.env.REACT_APP_MAPS_API_BASE_URL) || DEFAULT_MAPS_API_BASE_URL;
 const DEFAULT_MAPS_API_TOKEN_SYMBOL = (
-  parseEnvString("REACT_APP_MAPS_API_TOKEN_SYMBOL", "SOUL") || "SOUL"
+  parseEnvString(import.meta.env.REACT_APP_MAPS_API_TOKEN_SYMBOL, "SOUL") || "SOUL"
 ).toUpperCase();
-const MAPS_API_GRAPH_DEPTH = parseEnvInt("REACT_APP_MAPS_API_GRAPH_DEPTH", 2);
+const MAPS_API_GRAPH_DEPTH = parseEnvInt(import.meta.env.REACT_APP_MAPS_API_GRAPH_DEPTH, 2);
 const MAPS_API_GRAPH_EDGE_LIMIT = parseEnvInt(
-  "REACT_APP_MAPS_API_GRAPH_EDGE_LIMIT",
+  import.meta.env.REACT_APP_MAPS_API_GRAPH_EDGE_LIMIT,
   1200,
 );
 const MAPS_API_GRAPH_NODE_LIMIT = parseEnvInt(
-  "REACT_APP_MAPS_API_GRAPH_NODE_LIMIT",
+  import.meta.env.REACT_APP_MAPS_API_GRAPH_NODE_LIMIT,
   300,
 );
 const MAPS_API_GRAPH_TOP_HOLDERS_LIMIT = parseEnvInt(
-  "REACT_APP_MAPS_API_GRAPH_TOP_HOLDERS_LIMIT",
+  import.meta.env.REACT_APP_MAPS_API_GRAPH_TOP_HOLDERS_LIMIT,
   100,
 );
 const MAPS_API_REQUEST_TIMEOUT_MS = parseEnvMs(
-  "REACT_APP_MAPS_API_REQUEST_TIMEOUT_MS",
+  import.meta.env.REACT_APP_MAPS_API_REQUEST_TIMEOUT_MS,
   45000,
 );
 const MAPS_API_SYNC_STATUS_POLL_INTERVAL_MS = parseEnvMs(
-  "REACT_APP_MAPS_API_SYNC_STATUS_POLL_INTERVAL_MS",
+  import.meta.env.REACT_APP_MAPS_API_SYNC_STATUS_POLL_INTERVAL_MS,
   30000,
 );
 const TOKEN_METADATA_POLL_INTERVAL_MS = parseEnvMs(
-  "REACT_APP_TOKEN_METADATA_POLL_INTERVAL_MS",
+  import.meta.env.REACT_APP_TOKEN_METADATA_POLL_INTERVAL_MS,
   60000,
 );
 const MAP_LOADING_COMPLETE_HOLD_MS = 120;
@@ -4199,8 +4196,9 @@ export default function App() {
           `Using graph-derived transfers (transactions API unavailable).${formatApiErrorMeta(error)}`,
         );
       } finally {
-        if (!isMounted) return;
-        setIsSelectedNodeTransactionsLoading(false);
+        if (isMounted) {
+          setIsSelectedNodeTransactionsLoading(false);
+        }
       }
     }
 
@@ -4672,7 +4670,7 @@ export default function App() {
       return;
     }
 
-    let rows = [];
+    let rows;
     setIsTransactionsExporting(true);
     setTransactionsExportStatus("Exporting transactions...");
 

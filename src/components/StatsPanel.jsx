@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { HOLDER_TYPES } from "../data/mockData";
 import { getHolderPalette } from "../theme/holderPalettes";
 

@@ -1,4 +1,3 @@
-import React from "react";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import App from "./App";
@@ -30,19 +29,19 @@ function createMatchMedia(matches = false) {
     matches,
     media: query,
     onchange: null,
-    addListener: jest.fn(),
-    removeListener: jest.fn(),
-    addEventListener: jest.fn(),
-    removeEventListener: jest.fn(),
-    dispatchEvent: jest.fn(),
+    addListener: vi.fn(),
+    removeListener: vi.fn(),
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+    dispatchEvent: vi.fn(),
   });
 }
 
-jest.mock("./components/BubbleMap", () => {
-  return function MockBubbleMap() {
+vi.mock("./components/BubbleMap", () => ({
+  default: function MockBubbleMap() {
     return <div data-testid="bubble-map" />;
-  };
-});
+  },
+}));
 
 beforeAll(() => {
   Object.defineProperty(window, "matchMedia", {
@@ -77,7 +76,7 @@ beforeEach(() => {
   window.matchMedia = createMatchMedia();
   global.matchMedia = window.matchMedia;
 
-  global.fetch = jest.fn(async (input) => {
+  global.fetch = vi.fn(async (input) => {
     const url = String(input);
 
     if (url.includes("/tokens/") && url.includes("/metadata")) {
@@ -188,7 +187,7 @@ test("token graph requests include the configured edge limit to avoid GHOSTDOGS 
 
 test("retries transient fetch failures with exponential backoff", async () => {
   let attempts = 0;
-  global.fetch = jest.fn(async () => {
+  global.fetch = vi.fn(async () => {
     attempts += 1;
     if (attempts < 3) {
       throw new Error("temporary network error");
@@ -509,7 +508,7 @@ test("max graph setting renders all nodes and edges for the selected token", asy
   const user = userEvent.setup();
   const largeGraphPayload = createLargeGraphPayload();
 
-  global.fetch = jest.fn(async (input) => {
+  global.fetch = vi.fn(async (input) => {
     const url = String(input);
 
     if (url.includes("/tokens/") && url.includes("/metadata")) {

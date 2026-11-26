@@ -49,7 +49,7 @@ The app provides direct keyboard navigation for common actions:
 RUNTIME OVERVIEW
 Application startup proceeds in this order:
 
-    1. React mounts App from src/index.js.
+    1. React mounts App from src/index.jsx.
     2. App reads localStorage for the persisted theme, selected token, and stats-panel state.
     3. App requests the tracked token list from GET /tokens.
     4. App requests metadata for the selected token from GET /tokens/:symbol/metadata.
@@ -123,7 +123,7 @@ The frontend expects the backend to expose the following routes:
     	Returns backend sync state including chainHeadBlockHeight and the internal __chain__ row used by the header sync pill.
 
 ENVIRONMENT
-The application reads these environment variables at startup:
+The application reads these environment variables at build time. Vite exposes variables prefixed with REACT_APP_ or VITE_ to browser code and inlines their values into the bundle, so never put secrets in them. Set PUBLIC_URL to serve the app from a sub-path. Rebuild after changing any of them.
 
     REACT_APP_PHANTASMA_EXPLORER_BASE
     	Base URL for wallet explorer links.
@@ -194,35 +194,43 @@ The application reads these environment variables at startup:
     	Poll interval for backend sync-state refreshes.
 
 COMMANDS
+Requires Node.js ^22.13 or ^24 (see engines in package.json).
+
 npm run start:dev
-Starts the CRA development server.
+Starts the Vite development server on PORT (default 3001).
 
     npm run build
     	Produces a production build in build/.
 
+    npm run preview
+    	Serves the production build locally with Vite.
+
     npm run start:prod
-    	Runs the production-start helper in scripts/startProd.js.
+    	Runs the production-start helper in scripts/startProd.js. It builds first when build/index.html is missing or REBUILD_ON_START=true, then serves build/ with serve.
 
     npm run build:prod
     	Runs sammy.js and then builds the app.
 
     npm test
-    	Runs the CRA test runner.
+    	Runs the Vitest suite (watch mode in a terminal; use npx vitest run for a single pass).
+
+    npm run lint
+    	Runs ESLint over the project.
 
 FILES
-src/index.js
+src/index.jsx
 React entry point.
 
-    src/App.js
+    src/App.jsx
     	Application shell, state container, API integration, data normalization, filtering, export logic, and modal orchestration.
 
-    src/components/Header.js
+    src/components/Header.jsx
     	Header UI for search, theme selection, sync badge, and price display.
 
-    src/components/BubbleMap.js
+    src/components/BubbleMap.jsx
     	D3 visualization engine for nodes, links, zoom, drag, hover, and fit-to-view behavior.
 
-    src/components/StatsPanel.js
+    src/components/StatsPanel.jsx
     	Token summary, legend controls, selected-node details, and holder list.
 
     src/data/mockData.js
@@ -231,11 +239,17 @@ React entry point.
     src/theme/holderPalettes.js
     	Color palettes and graph styling presets by theme.
 
-    src/serviceWorker.js
-    	Optional CRA service-worker registration helpers.
-
-    src/App.test.js
+    src/App.test.jsx
     Targeted app-shell smoke test for the current React UI.
+
+    index.html
+    	Vite HTML entry; loads src/index.jsx.
+
+    vite.config.mjs
+    	Vite build, dev-server, and Vitest configuration.
+
+    eslint.config.mjs
+    	ESLint flat config (recommended rules plus React hooks rules).
 
     scripts/startProd.js
     	Node-based production launcher.
@@ -245,14 +259,14 @@ React entry point.
 
 FUNCTION INDEX
 
-src/App.js
-parseEnvMs(key, fallbackMs)
+src/App.jsx
+parseEnvMs(raw, fallbackMs)
 Reads a positive numeric environment value in milliseconds and falls back if the value is missing or invalid.
 
-    parseEnvInt(key, fallbackValue)
+    parseEnvInt(raw, fallbackValue)
     	Reads a positive integer environment value and clamps invalid input to the fallback.
 
-    parseEnvString(key, fallbackValue)
+    parseEnvString(raw, fallbackValue)
     	Reads and trims a string environment value, removing wrapping quotes when present.
 
     parseRetryAfterMs(response)
@@ -390,7 +404,7 @@ Reads a positive numeric environment value in milliseconds and falls back if the
     handleCopyTransactionHash(hash)
     	Copies a transaction hash and shows temporary copied state.
 
-src/components/Header.js
+src/components/Header.jsx
 Header(props)
 Renders the top application bar with branding, search, sync state, theme selector, and token price display.
 
@@ -400,7 +414,7 @@ Renders the top application bar with branding, search, sync state, theme selecto
     handleClear()
     	Clears the search box and resets the upstream search state.
 
-src/components/BubbleMap.js
+src/components/BubbleMap.jsx
 BubbleMap(props)
 Renders the interactive D3 graph and exposes fit-to-view actions back to App.
 
@@ -419,7 +433,7 @@ Renders the interactive D3 graph and exposes fit-to-view actions back to App.
     fitToView()
     	Computes a zoom transform that fits all visible nodes into the current viewport.
 
-src/components/StatsPanel.js
+src/components/StatsPanel.jsx
 fmt(n)
 Formats numeric token values for compact sidebar display.
 
@@ -451,19 +465,6 @@ Generates deterministic fake transaction hashes for mock links.
 
     buildVariantDataset(config)
     	Produces a full mock token dataset by transforming the base SOUL-style holder graph into a token-specific variant.
-
-src/serviceWorker.js
-register(config)
-Registers the service worker in production builds when enabled.
-
-    registerValidSW(swUrl, config)
-    	Installs the service worker and fires CRA update and success callbacks.
-
-    checkValidServiceWorker(swUrl, config)
-    	Verifies that the service worker script exists and reloads the page if it does not.
-
-    unregister()
-    	Removes an installed service worker.
 
 scripts/startProd.js
 run(binName, args)

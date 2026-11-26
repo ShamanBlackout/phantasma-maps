@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 export default function Header({
   onSearch,
@@ -266,7 +266,7 @@ export default function Header({
         >
           <img
             className="header-logo-icon"
-            src={`${process.env.PUBLIC_URL}/phantasmaMaps.png`}
+            src={`${import.meta.env.BASE_URL}phantasmaMaps.png`}
             alt="PhantasmaMaps logo"
           />
           <span className="header-logo-text">

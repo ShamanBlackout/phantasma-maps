@@ -33,7 +33,7 @@ test("parses explorer token quotes without inventing a 24h change", () => {
 });
 
 test("falls back to the Phantasma explorer when SaturnX is unreachable", async () => {
-  global.fetch = jest.fn(async (url) => {
+  global.fetch = vi.fn(async (url) => {
     if (String(url).includes("saturnx")) throw new TypeError("Failed to fetch");
     return jsonResponse(explorerKcalPayload);
   });
@@ -50,7 +50,7 @@ test("falls back to the Phantasma explorer when SaturnX is unreachable", async (
 });
 
 test("prefers SaturnX quotes because they include 24h change", async () => {
-  global.fetch = jest.fn(async (url) =>
+  global.fetch = vi.fn(async (url) =>
     String(url).includes("saturnx")
       ? jsonResponse({ symbol: "KCAL", price: 3e-8, priceChange24h: -4.5 })
       : jsonResponse(explorerKcalPayload),
@@ -66,7 +66,7 @@ test("prefers SaturnX quotes because they include 24h change", async () => {
 });
 
 test("reports failure when no source has a price", async () => {
-  global.fetch = jest.fn(async () => jsonResponse({ tokens: [] }));
+  global.fetch = vi.fn(async () => jsonResponse({ tokens: [] }));
 
   const result = await fetchTrackedTokenQuote("NOPE");
 
@@ -74,7 +74,7 @@ test("reports failure when no source has a price", async () => {
 });
 
 test("uses the maps API price route and skips direct sources when it answers", async () => {
-  global.fetch = jest.fn(async () =>
+  global.fetch = vi.fn(async () =>
     jsonResponse({
       data: {
         tokenSymbol: "KCAL",
@@ -99,7 +99,7 @@ test("uses the maps API price route and skips direct sources when it answers", a
 });
 
 test("does not query direct sources when the maps API has no price", async () => {
-  global.fetch = jest.fn(async () =>
+  global.fetch = vi.fn(async () =>
     jsonResponse({ data: { tokenSymbol: "CROWN", priceUsd: null, source: null } }),
   );
 
@@ -112,7 +112,7 @@ test("does not query direct sources when the maps API has no price", async () =>
 });
 
 test("falls back to direct sources when the maps API is unreachable", async () => {
-  global.fetch = jest.fn(async (url) => {
+  global.fetch = vi.fn(async (url) => {
     if (String(url).startsWith("http://api.test")) {
       throw new TypeError("Failed to fetch");
     }
