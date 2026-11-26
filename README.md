@@ -61,6 +61,7 @@ Application startup proceeds in this order:
     7. If the selected token is SOUL, App polls the maps API /prices route, falling back to CoinGecko and then the Phantasma explorer when the API is unreachable.
 
     Once graph data is loaded, App normalizes balances, converts API payloads into D3-friendly nodes and links, applies search and legend filters, and passes the filtered graph into BubbleMap.
+    Metadata and supply polling update the displayed shares without re-fetching the graph or clearing the selected wallet.
 
 DATA FLOW
 Live graph path:
@@ -89,6 +90,8 @@ Live graph path:
     2. If the transaction endpoint fails, the app synthesizes graph-derived transactions from visible links.
     3. The transaction modal supports filtering by direction, counterparty, time range, token amount, and USD value.
     4. Filtered transactions can be exported to JSON or CSV.
+    5. Shared URLs restore txdir (from/to) and txcp (counterparty) when the linked node wallet is loaded.
+    6. The modal Export button and its menu wait until transaction loading finishes, including retries and graph-derived fallback.
 
     Compare behavior:
 

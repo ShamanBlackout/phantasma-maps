@@ -1,8 +1,9 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import App from "./App";
 import { createGraphEndpoint } from "./api/mapsApi";
 import { fetchJsonWithTimeout } from "./api/http";
+import { TOKEN_METADATA_POLL_INTERVAL_MS } from "./config/appConfig";
 
 function createLargeGraphPayload(nodeCount = 305, edgeCount = 1300) {
   const nodes = Array.from({ length: nodeCount }, (_, index) => ({
@@ -718,6 +719,21 @@ test("keeps the address bar in sync with the current view", async () => {
 test("restores transaction filters from the URL with the selected wallet", async () => {
   const treasury = "P2K8mNxHvT3qAaBpFsuWcY9JeGKd4kQ7Rmj6CiDyEF";
   const whale = "P2Kd4TsHvN8wMqBbCpRsuY3K7Je5FXZ9kQ6Lmj4WXyz";
+  const transactionRequests = [];
+  const defaultFetch = global.fetch;
+  global.fetch = vi.fn(async (input) => {
+    const url = new URL(String(input));
+    if (url.pathname === "/transactions") {
+      transactionRequests.push(url.searchParams);
+      return {
+        ok: true,
+        status: 200,
+        headers: { get: () => null },
+        json: async () => ({ items: [], total: 0 }),
+      };
+    }
+    return defaultFetch(input);
+  });
   window.history.replaceState(
     null,
     "",
@@ -731,28 +747,96 @@ test("restores transaction filters from the URL with the selected wallet", async
     expect(params.get("txdir")).toBe("from");
     expect(params.get("txcp")).toBe(whale);
   });
+  await waitFor(() => {
+    expect(transactionRequests.length).toBeGreaterThan(0);
+    expect(transactionRequests.at(-1).get("address")).toBe(treasury);
+    expect(transactionRequests.at(-1).get("dir")).toBe("from");
+    expect(transactionRequests.at(-1).get("counterparty")).toBe(whale);
+  });
 });
 
-test("does not refetch the token graph when token metadata arrives", async () => {
-  render(<App />);
-
-  await waitFor(() =>
-    expect(
-      global.fetch.mock.calls.some(([input]) =>
-        String(input).includes("/metadata"),
-      ),
-    ).toBe(true),
-  );
-  await screen.findByText(/Showing 2 tracked tokens/i);
-  await new Promise((resolve) => setTimeout(resolve, 50));
-
-  // Token snapshots fetch their own graph with topHoldersLimit; count only the
-  // main map loader.
-  const graphRequests = global.fetch.mock.calls.filter(([input]) => {
-    const url = String(input);
-    return url.includes("/graph/token/") && !url.includes("topHoldersLimit");
+test("keeps the graph and selection while metadata arrives and supply is polled", async () => {
+  const treasury = "P2K8mNxHvT3qAaBpFsuWcY9JeGKd4kQ7Rmj6CiDyEF";
+  let supply = 1000;
+  let resolveMetadata;
+  const metadataReady = new Promise((resolve) => {
+    resolveMetadata = resolve;
   });
-  expect(graphRequests).toHaveLength(1);
+  const defaultFetch = global.fetch;
+  global.fetch = vi.fn(async (input) => {
+    const url = String(input);
+    const response = await defaultFetch(input);
+    if (url.includes("/metadata")) {
+      await metadataReady;
+      const payload = await response.json();
+      return {
+        ...response,
+        json: async () => ({
+          ...payload,
+          decimals: 8,
+          currentSupplyNormalized: supply,
+        }),
+      };
+    }
+    if (url.includes("/graph/token/")) {
+      const payload = await response.json();
+      return {
+        ...response,
+        json: async () => ({
+          ...payload,
+          totalSupply: payload.totalSupply * 1e8,
+          nodes: payload.nodes.map((node) => ({
+            ...node,
+            balanceNormalized: String(node.balance),
+            balance: node.balance * 1e8,
+          })),
+          edges: payload.edges.map((edge) => ({
+            ...edge,
+            amountNormalized: String(edge.amount),
+            amount: edge.amount * 1e8,
+          })),
+        }),
+      };
+    }
+    return response;
+  });
+  const timeoutSpy = vi.spyOn(window, "setTimeout");
+  window.history.replaceState(null, "", `/?token=SOUL&node=${treasury}`);
+  const { container, unmount } = render(<App />);
+
+  try {
+    await screen.findByRole("button", { name: "Close selected node card" });
+    await act(async () => resolveMetadata());
+    const selectedCard = () =>
+      within(container.querySelector(".map-selected-info"));
+    await waitFor(() =>
+      expect(selectedCard().getByText("65.00%")).toBeInTheDocument(),
+    );
+    expect(selectedCard().getByText("650.00 SOUL")).toBeInTheDocument();
+
+    const metadataPoll = timeoutSpy.mock.calls.find(
+      ([, delay]) => delay === TOKEN_METADATA_POLL_INTERVAL_MS,
+    )?.[0];
+    expect(metadataPoll).toBeTypeOf("function");
+    supply = 2000;
+    await act(async () => metadataPoll());
+    await waitFor(() =>
+      expect(selectedCard().getByText("32.50%")).toBeInTheDocument(),
+    );
+    expect(new URLSearchParams(window.location.search).get("node")).toBe(
+      treasury,
+    );
+
+    // Compare snapshots fetch a separate graph with topHoldersLimit.
+    const graphRequests = global.fetch.mock.calls.filter(([input]) => {
+      const url = String(input);
+      return url.includes("/graph/token/") && !url.includes("topHoldersLimit");
+    });
+    expect(graphRequests).toHaveLength(1);
+  } finally {
+    unmount();
+    timeoutSpy.mockRestore();
+  }
 });
 
 test("filtered transactions preset downloads a CSV", async () => {

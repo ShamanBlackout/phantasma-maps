@@ -36,3 +36,12 @@ test("export waits until the selected wallet's transactions finish loading", () 
   renderModal({ isSelectedNodeTransactionsLoading: false });
   expect(screen.getByRole("button", { name: "Export" })).toBeEnabled();
 });
+
+test("an already-open export menu cannot export while transactions reload", () => {
+  renderModal({
+    isSelectedNodeTransactionsLoading: true,
+    isExportMenuOpen: true,
+  });
+  expect(screen.getByRole("button", { name: "Export JSON" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Export Excel" })).toBeDisabled();
+});
