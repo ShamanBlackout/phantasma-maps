@@ -1,6 +1,7 @@
 {
-  "short_name": "React App",
-  "name": "Create React App Sample",
+  "short_name": "PhantasmaMaps",
+  "name": "PhantasmaMaps",
+  "description": "Interactive holder and transfer maps for Phantasma chain tokens",
   "icons": [
     {
       "src": "favicon.ico",
@@ -8,7 +9,7 @@
       "type": "image/x-icon"
     },
     {
-      "src": "phantasmaMaps.png",
+      "src": "phantasmaMaps-192.png",
       "type": "image/png",
       "sizes": "192x192"
     },
@@ -21,5 +22,5 @@
   "start_url": ".",
   "display": "standalone",
   "theme_color": "#000000",
-  "background_color": "#ffffff"
+  "background_color": "#000000"
 }

@@ -1,9 +1,9 @@
-import React from "react";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import App from "./App";
 import { createGraphEndpoint } from "./api/mapsApi";
 import { fetchJsonWithTimeout } from "./api/http";
+import { TOKEN_METADATA_POLL_INTERVAL_MS } from "./config/appConfig";
 
 function createLargeGraphPayload(nodeCount = 305, edgeCount = 1300) {
   const nodes = Array.from({ length: nodeCount }, (_, index) => ({
@@ -30,19 +30,19 @@ function createMatchMedia(matches = false) {
     matches,
     media: query,
     onchange: null,
-    addListener: jest.fn(),
-    removeListener: jest.fn(),
-    addEventListener: jest.fn(),
-    removeEventListener: jest.fn(),
-    dispatchEvent: jest.fn(),
+    addListener: vi.fn(),
+    removeListener: vi.fn(),
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+    dispatchEvent: vi.fn(),
   });
 }
 
-jest.mock("./components/BubbleMap", () => {
-  return function MockBubbleMap() {
+vi.mock("./components/BubbleMap", () => ({
+  default: function MockBubbleMap() {
     return <div data-testid="bubble-map" />;
-  };
-});
+  },
+}));
 
 beforeAll(() => {
   Object.defineProperty(window, "matchMedia", {
@@ -74,10 +74,11 @@ beforeAll(() => {
 
 beforeEach(() => {
   window.localStorage.clear();
+  window.history.replaceState(null, "", "/");
   window.matchMedia = createMatchMedia();
   global.matchMedia = window.matchMedia;
 
-  global.fetch = jest.fn(async (input) => {
+  global.fetch = vi.fn(async (input) => {
     const url = String(input);
 
     if (url.includes("/tokens/") && url.includes("/metadata")) {
@@ -188,7 +189,7 @@ test("token graph requests include the configured edge limit to avoid GHOSTDOGS 
 
 test("retries transient fetch failures with exponential backoff", async () => {
   let attempts = 0;
-  global.fetch = jest.fn(async () => {
+  global.fetch = vi.fn(async () => {
     attempts += 1;
     if (attempts < 3) {
       throw new Error("temporary network error");
@@ -509,7 +510,7 @@ test("max graph setting renders all nodes and edges for the selected token", asy
   const user = userEvent.setup();
   const largeGraphPayload = createLargeGraphPayload();
 
-  global.fetch = jest.fn(async (input) => {
+  global.fetch = vi.fn(async (input) => {
     const url = String(input);
 
     if (url.includes("/tokens/") && url.includes("/metadata")) {
@@ -682,6 +683,298 @@ test("supports onboarding dismissal and search keyboard shortcut", async () => {
       screen.queryByText(/Welcome to the wallet graph/i),
     ).not.toBeInTheDocument();
   });
+});
+
+test("guided tour walks through the tutorial steps", async () => {
+  const user = userEvent.setup();
+  render(<App />);
+
+  await user.click(
+    await screen.findByRole("button", { name: /I'm New Here/i }),
+  );
+
+  const tour = await screen.findByRole("dialog", { name: "Search Bar" });
+  expect(within(tour).getByText(/Step 1 of 12/i)).toBeInTheDocument();
+  expect(within(tour).getByRole("button", { name: "Previous" })).toBeDisabled();
+
+  await user.click(within(tour).getByRole("button", { name: "Next" }));
+  expect(
+    screen.getByRole("dialog", { name: "Graph Settings" }),
+  ).toBeInTheDocument();
+  expect(screen.getByText(/Step 2 of 12/i)).toBeInTheDocument();
+});
+
+test("keeps the address bar in sync with the current view", async () => {
+  window.history.replaceState(null, "", "/?token=KCAL&q=whale");
+  render(<App />);
+
+  await waitFor(() => {
+    const params = new URLSearchParams(window.location.search);
+    expect(params.get("token")).toBe("KCAL");
+    expect(params.get("view")).toBe("token");
+  });
+  expect(new URLSearchParams(window.location.search).get("q")).toBe("whale");
+});
+
+test("restores transaction filters from the URL with the selected wallet", async () => {
+  const treasury = "P2K8mNxHvT3qAaBpFsuWcY9JeGKd4kQ7Rmj6CiDyEF";
+  const whale = "P2Kd4TsHvN8wMqBbCpRsuY3K7Je5FXZ9kQ6Lmj4WXyz";
+  const transactionRequests = [];
+  const defaultFetch = global.fetch;
+  global.fetch = vi.fn(async (input) => {
+    const url = new URL(String(input));
+    if (url.pathname === "/transactions") {
+      transactionRequests.push(url.searchParams);
+      return {
+        ok: true,
+        status: 200,
+        headers: { get: () => null },
+        json: async () => ({ items: [], total: 0 }),
+      };
+    }
+    return defaultFetch(input);
+  });
+  window.history.replaceState(
+    null,
+    "",
+    `/?token=SOUL&node=${treasury}&txdir=from&txcp=${whale}`,
+  );
+  render(<App />);
+
+  await waitFor(() => {
+    const params = new URLSearchParams(window.location.search);
+    expect(params.get("node")).toBe(treasury);
+    expect(params.get("txdir")).toBe("from");
+    expect(params.get("txcp")).toBe(whale);
+  });
+  await waitFor(() => {
+    expect(transactionRequests.length).toBeGreaterThan(0);
+    expect(transactionRequests.at(-1).get("address")).toBe(treasury);
+    expect(transactionRequests.at(-1).get("dir")).toBe("from");
+    expect(transactionRequests.at(-1).get("counterparty")).toBe(whale);
+  });
+});
+
+test("keeps the graph and selection while metadata arrives and supply is polled", async () => {
+  const treasury = "P2K8mNxHvT3qAaBpFsuWcY9JeGKd4kQ7Rmj6CiDyEF";
+  let supply = 1000;
+  let resolveMetadata;
+  const metadataReady = new Promise((resolve) => {
+    resolveMetadata = resolve;
+  });
+  const defaultFetch = global.fetch;
+  global.fetch = vi.fn(async (input) => {
+    const url = String(input);
+    const response = await defaultFetch(input);
+    if (url.includes("/metadata")) {
+      await metadataReady;
+      const payload = await response.json();
+      return {
+        ...response,
+        json: async () => ({
+          ...payload,
+          decimals: 8,
+          currentSupplyNormalized: supply,
+        }),
+      };
+    }
+    if (url.includes("/graph/token/")) {
+      const payload = await response.json();
+      return {
+        ...response,
+        json: async () => ({
+          ...payload,
+          totalSupply: payload.totalSupply * 1e8,
+          nodes: payload.nodes.map((node) => ({
+            ...node,
+            balanceNormalized: String(node.balance),
+            balance: node.balance * 1e8,
+          })),
+          edges: payload.edges.map((edge) => ({
+            ...edge,
+            amountNormalized: String(edge.amount),
+            amount: edge.amount * 1e8,
+          })),
+        }),
+      };
+    }
+    return response;
+  });
+  const timeoutSpy = vi.spyOn(window, "setTimeout");
+  window.history.replaceState(null, "", `/?token=SOUL&node=${treasury}`);
+  const { container, unmount } = render(<App />);
+
+  try {
+    await screen.findByRole("button", { name: "Close selected node card" });
+    await act(async () => resolveMetadata());
+    const selectedCard = () =>
+      within(container.querySelector(".map-selected-info"));
+    await waitFor(() =>
+      expect(selectedCard().getByText("65.00%")).toBeInTheDocument(),
+    );
+    expect(selectedCard().getByText("650.00 SOUL")).toBeInTheDocument();
+
+    const metadataPoll = timeoutSpy.mock.calls.find(
+      ([, delay]) => delay === TOKEN_METADATA_POLL_INTERVAL_MS,
+    )?.[0];
+    expect(metadataPoll).toBeTypeOf("function");
+    supply = 2000;
+    await act(async () => metadataPoll());
+    await waitFor(() =>
+      expect(selectedCard().getByText("32.50%")).toBeInTheDocument(),
+    );
+    expect(new URLSearchParams(window.location.search).get("node")).toBe(
+      treasury,
+    );
+
+    // Compare snapshots fetch a separate graph with topHoldersLimit.
+    const graphRequests = global.fetch.mock.calls.filter(([input]) => {
+      const url = String(input);
+      return url.includes("/graph/token/") && !url.includes("topHoldersLimit");
+    });
+    expect(graphRequests).toHaveLength(1);
+  } finally {
+    unmount();
+    timeoutSpy.mockRestore();
+  }
+});
+
+test.each([{ baselineBalance: 414 }, {}])(
+  "top movers display the API or derived baseline balance rather than zero: %j",
+  async (baseline) => {
+    const defaultFetch = global.fetch;
+    global.fetch = vi.fn(async (input) => {
+      if (String(input).includes("/top-movers")) {
+        return {
+          ok: true,
+          status: 200,
+          headers: { get: () => null },
+          json: async () => ({
+            items: [{
+              address: "P2K8mNxHvT3qAaBpFsuWcY9JeGKd4kQ7Rmj6CiDyEF",
+              ...baseline,
+              latestBalance: 400,
+              deltaBalance: -14,
+              deltaPct: -3.3816425120772946,
+            }],
+          }),
+        };
+      }
+      return defaultFetch(input);
+    });
+    render(<App />);
+    expect(
+      await screen.findByTitle("Changed from 414.00 to 400.00"),
+    ).toBeInTheDocument();
+  },
+);
+
+test("top movers omit invalid pseudo-addresses from wallet actions", async () => {
+  const defaultFetch = global.fetch;
+  global.fetch = vi.fn(async (input, ...args) => {
+    if (String(input).includes("/top-movers")) {
+      return {
+        ok: true,
+        status: 200,
+        headers: { get: () => null },
+        json: async () => ({
+          items: [
+            {
+              address: "token",
+              baselineBalance: 8,
+              latestBalance: 10,
+              deltaBalance: 2,
+            },
+            {
+              address: "P2K8mNxHvT3qAaBpFsuWcY9JeGKd4kQ7Rmj6CiDyEF",
+              baselineBalance: 8,
+              latestBalance: 10,
+              deltaBalance: 2,
+            },
+          ],
+        }),
+      };
+    }
+
+    return defaultFetch(input, ...args);
+  });
+  const { container } = render(<App />);
+
+  expect(
+    await screen.findByTitle("Changed from 8.00 to 10.00"),
+  ).toBeInTheDocument();
+  expect(screen.queryByText("token", { exact: true })).not.toBeInTheDocument();
+  expect(
+    container.querySelectorAll(
+      '[title="Open connections view for this address"]',
+    ),
+  ).toHaveLength(1);
+});
+
+test("does not show a mock market quote while the live quote is loading", async () => {
+  const defaultFetch = global.fetch;
+  let resolveQuote;
+  global.fetch = vi.fn((input, ...args) => {
+    if (String(input).includes("/prices/")) {
+      return new Promise((resolve) => {
+        resolveQuote = resolve;
+      });
+    }
+
+    return defaultFetch(input, ...args);
+  });
+  const { container } = render(<App />);
+
+  await waitFor(() => expect(resolveQuote).toBeTypeOf("function"));
+  const marketPrice = container.querySelector(
+    ".header-status-chip-market .header-status-chip-value",
+  );
+  expect(marketPrice).toHaveTextContent("N/A");
+  expect(marketPrice).not.toHaveTextContent("0.423");
+
+  await act(async () => {
+    resolveQuote({
+      ok: true,
+      status: 200,
+      headers: { get: () => null },
+      json: async () => ({
+        data: { priceUsd: 0.5, priceChange24h: 1.25 },
+      }),
+    });
+  });
+
+  await waitFor(() => expect(marketPrice).toHaveTextContent("$0.5000"), {
+    timeout: 5000,
+  });
+});
+
+test("filtered transactions preset downloads a CSV", async () => {
+  const user = userEvent.setup();
+  const createObjectURL = vi.fn(() => "blob:test");
+  const clickSpy = vi
+    .spyOn(HTMLAnchorElement.prototype, "click")
+    .mockImplementation(() => {});
+  URL.createObjectURL = createObjectURL;
+  URL.revokeObjectURL = vi.fn();
+
+  try {
+    render(<App />);
+    await user.click(
+      await screen.findByRole("button", { name: /open export presets/i }),
+    );
+    await user.click(
+      screen.getByRole("button", { name: /filtered transactions csv/i }),
+    );
+
+    await waitFor(() => expect(createObjectURL).toHaveBeenCalledTimes(1));
+    const csv = await createObjectURL.mock.calls[0][0].text();
+    expect(csv).toContain('"Direction","Counterparty","Address"');
+    expect(clickSpy).toHaveBeenCalledTimes(1);
+  } finally {
+    clickSpy.mockRestore();
+    delete URL.createObjectURL;
+    delete URL.revokeObjectURL;
+  }
 });
 
 test("renders stable shell across key viewport classes", async () => {

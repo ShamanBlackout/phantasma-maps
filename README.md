@@ -49,7 +49,7 @@ The app provides direct keyboard navigation for common actions:
 RUNTIME OVERVIEW
 Application startup proceeds in this order:
 
-    1. React mounts App from src/index.js.
+    1. React mounts App from src/index.jsx.
     2. App reads localStorage for the persisted theme, selected token, and stats-panel state.
     3. App requests the tracked token list from GET /tokens.
     4. App requests metadata for the selected token from GET /tokens/:symbol/metadata.
@@ -58,9 +58,13 @@ Application startup proceeds in this order:
     	 or
     	 GET /graph/address/:address?token=:symbol&depth=:depth&edgeLimit=:limit
     6. App requests backend sync progress from GET /sync-status on a polling interval.
-    7. If the selected token is SOUL, App polls CoinGecko first and CoinMarketCap second for price updates.
+    7. If the selected token is SOUL, App polls the maps API /prices route, falling back to CoinGecko and then the Phantasma explorer when the API is unreachable.
 
     Once graph data is loaded, App normalizes balances, converts API payloads into D3-friendly nodes and links, applies search and legend filters, and passes the filtered graph into BubbleMap.
+    Metadata and supply polling update the displayed shares without re-fetching the graph or clearing the selected wallet.
+    Top-mover balance comparisons use the API's baselineBalance together with latestBalance and deltaBalance.
+    Nonzero token and USD amounts below 0.01 use scientific notation rather than rounding to zero; exports retain the numeric values.
+    Enhanced graphs show each bidirectional wallet connection once, with already-normalized volume. Connection volume never substitutes for a wallet balance; unknown counterparty balances use zero until known.
 
 DATA FLOW
 Live graph path:
@@ -89,6 +93,8 @@ Live graph path:
     2. If the transaction endpoint fails, the app synthesizes graph-derived transactions from visible links.
     3. The transaction modal supports filtering by direction, counterparty, time range, token amount, and USD value.
     4. Filtered transactions can be exported to JSON or CSV.
+    5. Shared URLs restore txdir (from/to) and txcp (counterparty) when the linked node wallet is loaded.
+    6. The modal Export button and its menu wait until transaction loading finishes, including retries and graph-derived fallback.
 
     Compare behavior:
 
@@ -123,7 +129,52 @@ The frontend expects the backend to expose the following routes:
     	Returns backend sync state including chainHeadBlockHeight and the internal __chain__ row used by the header sync pill.
 
 ENVIRONMENT
-The application reads these environment variables at startup:
+The application reads these environment variables at build time. Vite exposes variables prefixed with REACT_APP_ or VITE_ to browser code and inlines their values into the bundle, so never put secrets in them. Set PUBLIC_URL to serve the app from a sub-path. Rebuild after changing any of them.
+
+    REACT_APP_MAPS_API_BASE_URL
+    	Base URL of the PhantasmaMaps API. Defaults to port 3000 on the host serving the page.
+
+    REACT_APP_MAPS_API_TOKEN_SYMBOL
+    	Initial tracked token symbol (default SOUL).
+
+    REACT_APP_MAPS_API_GRAPH_DEPTH
+    	Address graph traversal depth (default 2).
+
+    REACT_APP_MAPS_API_GRAPH_EDGE_LIMIT
+    	Maximum number of edges requested for graph loads (default 1200).
+
+    REACT_APP_MAPS_API_GRAPH_NODE_LIMIT
+    	Default node limit for graph loads (default 300).
+
+    REACT_APP_MAPS_API_GRAPH_TOP_HOLDERS_LIMIT
+    	Number of top holders requested alongside graph data (default 100).
+
+    REACT_APP_MAPS_API_REQUEST_TIMEOUT_MS
+    	Timeout for graph, metadata, token-list, and sync-status API requests (default 45000).
+
+    REACT_APP_MAPS_API_SYNC_STATUS_POLL_INTERVAL_MS
+    	Poll interval for backend sync-state refreshes (default 30000).
+
+    REACT_APP_TOKEN_METADATA_POLL_INTERVAL_MS
+    	Poll interval for token metadata refreshes (default 60000).
+
+    REACT_APP_SOUL_PRICE_BASE_POLL_INTERVAL_MS
+    	Normal SOUL price poll interval (default 300000).
+
+    REACT_APP_SOUL_PRICE_MAX_BACKOFF_MS
+    	Maximum retry interval after quote failures or rate limiting (default 600000).
+
+    REACT_APP_SOUL_PRICE_API_URL
+    	Direct CoinGecko endpoint for SOUL pricing, used only when the maps API /prices route is unreachable.
+
+    REACT_APP_TRACKED_TOKEN_PRICES_API_URL
+    	Direct SaturnX fallback for non-SOUL token prices (used only when the maps API /prices route is unreachable).
+
+    REACT_APP_TRACKED_TOKEN_PRICE_NETWORK
+    	Network query parameter for the SaturnX fallback (default mainnet).
+
+    REACT_APP_PHANTASMA_EXPLORER_TOKEN_API_URL
+    	Direct Phantasma explorer token endpoint used as the last price fallback.
 
     REACT_APP_PHANTASMA_EXPLORER_BASE
     	Base URL for wallet explorer links.
@@ -131,111 +182,144 @@ The application reads these environment variables at startup:
     REACT_APP_PHANTASMA_TX_EXPLORER_BASE
     	Base URL for transaction explorer links.
 
-    REACT_APP_SOUL_PRICE_API_URL
-    	Direct CoinGecko endpoint for SOUL pricing, used only when the maps API
-    	/prices route is unreachable.
-
-    REACT_APP_TRACKED_TOKEN_PRICES_API_URL
-    	Direct SaturnX fallback for non-SOUL token prices (used only when the
-    	maps API /prices route is unreachable).
-
-    REACT_APP_PHANTASMA_EXPLORER_TOKEN_API_URL
-    	Direct Phantasma explorer token endpoint used as the last price fallback.
-
-    REACT_APP_CMC_SOUL_QUOTES_API_URL
-    	CoinMarketCap quote endpoint.
-
-    REACT_APP_CMC_SOUL_SYMBOL
-    	Market symbol used when parsing CoinMarketCap payloads.
-
-    REACT_APP_SOUL_PRICE_BASE_POLL_INTERVAL_MS
-    	Normal SOUL price poll interval.
-
-    REACT_APP_SOUL_PRICE_MAX_BACKOFF_MS
-    	Maximum retry interval after quote failures or rate limiting.
-
-    REACT_APP_SOUL_PRICE_REQUEST_TIMEOUT_MS
-    	Timeout for market-price fetches.
-
-    REACT_APP_CMC_API_KEY
-    	Optional CoinMarketCap key.
-
-    REACT_APP_CMC_PROXY_URL
-    	Optional server-side proxy for CoinMarketCap requests.
-
-    REACT_APP_CMC_ALLOW_BROWSER_DIRECT
-    	Enables direct browser calls to CoinMarketCap if explicitly set to true.
-
-    REACT_APP_MAPS_API_BASE_URL
-    	Base URL of the PhantasmaMaps API. Defaults to http://localhost:3000.
-
-    REACT_APP_MAPS_API_TOKEN_SYMBOL
-    	Initial tracked token symbol.
-
-    REACT_APP_MAPS_API_ROOT_ADDRESS
-    	Optional default root address for focused graph mode.
-
-    REACT_APP_MAPS_API_GRAPH_DEPTH
-    	Address graph traversal depth.
-
-    REACT_APP_MAPS_API_GRAPH_EDGE_LIMIT
-    	Maximum number of edges requested for address graph loads.
-
-    REACT_APP_MAPS_API_REQUEST_TIMEOUT_MS
-    	Timeout for graph, metadata, token-list, and sync-status API requests.
-
-    REACT_APP_MAPS_API_TX_PAGE_SIZE
-    	Transaction page size for the address transaction loader.
-
-    REACT_APP_MAPS_API_TX_MAX_PAGES
-    	Hard cap on paginated transaction fetches per address.
-
-    REACT_APP_MAPS_API_SYNC_STATUS_POLL_INTERVAL_MS
-    	Poll interval for backend sync-state refreshes.
+    PUBLIC_URL
+    	Base path the app is served from (default /).
 
 COMMANDS
+Requires Node.js ^22.13 or ^24 (see engines in package.json).
+
 npm run start:dev
-Starts the CRA development server.
+Starts the Vite development server on PORT (default 3001).
 
     npm run build
     	Produces a production build in build/.
 
+    npm run preview
+    	Serves the production build locally with Vite.
+
     npm run start:prod
-    	Runs the production-start helper in scripts/startProd.js.
+    	Runs the production-start helper in scripts/startProd.js. It builds first when build/index.html is missing or REBUILD_ON_START=true, then serves build/ with serve.
 
     npm run build:prod
     	Runs sammy.js and then builds the app.
 
     npm test
-    	Runs the CRA test runner.
+    	Runs the Vitest suite (watch mode in a terminal; use npx vitest run for a single pass).
+
+    npm run lint
+    	Runs ESLint over the project.
 
 FILES
-src/index.js
+src/index.jsx
 React entry point.
 
-    src/App.js
-    	Application shell, state container, API integration, data normalization, filtering, export logic, and modal orchestration.
+    src/App.jsx
+    	Application shell: state container, effects (API polling, graph loading, price refresh), filtering, export logic, and modal orchestration.
 
-    src/components/Header.js
+    src/config/appConfig.js
+    	Storage keys, environment parsing (VITE_/REACT_APP_ variables), API limits, map-loading thresholds, and trace-path constants.
+
+    src/api/apiErrors.js
+    	Normalizes API failures into status/error records and detects token-not-found responses.
+
+    src/graph/graphBuilders.js
+    	Builds top-holder and connection graphs, caps graphs for display, and provides mock graph data.
+
+    src/graph/tokenSnapshots.js
+    	Captures, normalizes, and stores per-token snapshots used by the compare view.
+
+    src/lib/format.js
+    	Number, percentage, UTC date, CSV, and export-filename formatting plus address/integer validation.
+
+    src/lib/color.js
+    	Deterministic hue hashing and HSL-to-RGB conversion for trace-path colors.
+
+    src/lib/walletTransactions.js
+    	Shared transaction filter building, API-transaction row mapping, and CSV export helpers for the transactions modal and export presets.
+
+    src/lib/download.js
+    	Client-side blob download helper used by all exports.
+
+    src/components/Header.jsx
     	Header UI for search, theme selection, sync badge, and price display.
 
-    src/components/BubbleMap.js
+    src/components/BubbleMap.jsx
     	D3 visualization engine for nodes, links, zoom, drag, hover, and fit-to-view behavior.
 
-    src/components/StatsPanel.js
+    src/components/StatsPanel.jsx
     	Token summary, legend controls, selected-node details, and holder list.
+
+    src/components/AppShellBar.jsx
+    	Toolbar under the header: view status, command palette, saved views, compare, diagnostics, export presets, trace, and the "Enhance graph" action.
+
+    src/components/SavedViewsPopout.jsx, ComparePopout.jsx, DiagnosticsPopout.jsx, ExportPresetsPopout.jsx
+    	Popouts opened from the shell bar.
+
+    src/components/CommandPalette.jsx
+    	Searchable command list opened with Ctrl/Cmd+K.
+
+    src/components/WelcomeDialog.jsx, TourPanel.jsx
+    	First-run skill picker and the guided tour panel.
+
+    src/components/TraceToolForm.jsx, TraceLegend.jsx
+    	Trace-path search form and the draggable legend of found paths.
+
+    src/components/MapLoadingOverlay.jsx
+    	Staged loading overlay shown while the graph loads.
+
+    src/components/MobileInspectSheet.jsx
+    	Bottom sheet with selected-wallet details on mobile viewports.
 
     src/data/mockData.js
     	Mock token datasets and helper functions used when live API data is unavailable.
 
+    src/data/onboardingSteps.js
+    	Guided tour steps (title, detail, tip, and the UI target each step highlights).
+
+    src/hooks/useUrlState.js
+    	Reads the initial view from the query string and keeps the address bar in sync with it.
+
+    src/hooks/useTokenMetadataPolling.js, useAvailableTokens.js, useTokenTopMovers.js
+    	Load token metadata (polled), the tracked-token list, and analytics top movers for the selected token.
+
+    src/hooks/useTokenGraphLoader.js
+    	Loads the token or wallet graph (with connection mode, enrichment, and mock fallback) and drives the loading overlay state.
+
+    src/hooks/useMapLoadingPhase.js
+    	Advances the loading overlay through its phases with a minimum display time per phase.
+
+    src/hooks/useSoulPricePolling.js, useTrackedTokenPrice.js, useSyncStatusPolling.js
+    	Poll SOUL pricing (with backoff), the selected token's quote, and backend sync progress.
+
+    src/hooks/useSelectedNodeTransactions.js, useSelectedNodeActivity.js
+    	Load the selected wallet's paginated transactions and its activity sparkline.
+
+    src/hooks/useTraceDbPaths.js, useCompareSnapshot.js, usePopoutDismissal.js
+    	Fetch trace paths between two wallets, load the compare-token snapshot, and close shell popouts on an outside click.
+
+    src/hooks/useActiveTokenInfo.js, useExecutiveSummary.js, useMapRecoveryState.js
+    	Derive the merged token info (API metadata, live price, supply), the StatsPanel executive summary, and the empty/error map recovery message.
+
+    src/hooks/useSelectedNodeTransfers.js, useFilteredTransactions.js
+    	Derive the selected wallet's transfer list, then apply the modal's direction, counterparty, time, amount, and USD filters and sort order.
+
+    src/hooks/useTraceComputation.js, useCommandPaletteActions.js
+    	Compute client-side trace paths between two nodes and build the command palette's action list.
+
     src/theme/holderPalettes.js
     	Color palettes and graph styling presets by theme.
 
-    src/serviceWorker.js
-    	Optional CRA service-worker registration helpers.
-
-    src/App.test.js
+    src/App.test.jsx
     Targeted app-shell smoke test for the current React UI.
+
+    index.html
+    	Vite HTML entry; loads src/index.jsx.
+
+    vite.config.mjs
+    	Vite build, dev-server, and Vitest configuration.
+
+    eslint.config.mjs
+    	ESLint flat config (recommended rules plus React hooks rules).
 
     scripts/startProd.js
     	Node-based production launcher.
@@ -245,16 +329,57 @@ React entry point.
 
 FUNCTION INDEX
 
-src/App.js
-parseEnvMs(key, fallbackMs)
+src/config/appConfig.js
+parseEnvMs(raw, fallbackMs)
 Reads a positive numeric environment value in milliseconds and falls back if the value is missing or invalid.
 
-    parseEnvInt(key, fallbackValue)
+    parseEnvInt(raw, fallbackValue)
     	Reads a positive integer environment value and clamps invalid input to the fallback.
 
-    parseEnvString(key, fallbackValue)
+    parseEnvString(raw, fallbackValue)
     	Reads and trims a string environment value, removing wrapping quotes when present.
 
+src/lib/format.js
+parseTimestampMs(rawTimestamp)
+Parses a timestamp into milliseconds, defaulting to now if parsing fails.
+
+    fmtTokenAmount(n)
+    	Formats token balances into compact human-readable values.
+
+    fmtUsdAmount(n)
+    	Formats USD values into compact human-readable values.
+
+    fmtSharePct(value, currentSupply, fallbackPct)
+    	Formats a wallet share percentage using supply when available.
+
+    toUtcDateTimeInputValue(timestamp)
+    	Converts a timestamp into the UTC value used by the datetime-local filter inputs.
+
+    makeExportFileName(selectedNode, ext)
+    	Creates a timestamped export filename for transaction downloads.
+
+src/lib/walletTransactions.js
+buildTransactionApiFilters(filters)
+Converts the transactions modal filter inputs into GET /transactions query filters.
+
+    mapApiTransaction(transaction, index, context)
+    	Maps an API transaction into the modal row shape from the selected wallet's perspective.
+
+    toTransactionExportRows(transactions)
+    	Converts modal transaction rows into export row objects.
+
+    transactionExportRowsToCsv(rows)
+    	Serializes export rows into the transaction CSV format.
+
+src/lib/download.js
+downloadBlobFile(content, mimeType, fileName)
+Triggers a client-side file download for exported content.
+
+src/graph/graphBuilders.js
+getMockTokenData(tokenSymbol)
+Returns a normalized mock dataset for the requested symbol.
+
+src/App.jsx
     parseRetryAfterMs(response)
     	Converts an HTTP Retry-After header into milliseconds when the backend or upstream rate-limits requests.
 
@@ -274,7 +399,7 @@ Reads a positive numeric environment value in milliseconds and falls back if the
     	Recomputes node percentage ownership using the latest current supply.
 
     buildGraphDataFromApi(graphPayload, decimals)
-    	Transforms the backend graph response into frontend node and link structures, normalizes decimals, aggregates node stats, and calculates supply-based percentages.
+    	Transforms the backend graph response into frontend node and link structures, aggregates node stats, and calculates supply-based percentages. Uses the API's balanceNormalized/amountNormalized when present and otherwise divides raw amounts by 10^decimals.
 
     buildNeighborFocusedGraph(graphData, rootAddress)
     	Creates a focused graph containing only the root wallet and its immediate neighbors, with visual emphasis on the root node.
@@ -300,39 +425,6 @@ Reads a positive numeric environment value in milliseconds and falls back if the
     buildConnectionsGraphFromTransactions(transactions, rootAddress, fallbackGraph, currentSupply)
     	Creates a wallet-centered graph directly from transaction history, preserving known node metadata from the graph payload when available.
 
-    parseTimestampMs(rawTimestamp)
-    	Parses a timestamp into milliseconds, defaulting to now if parsing fails.
-
-    getMockTokenData(tokenSymbol)
-    	Returns a normalized mock dataset for the requested symbol.
-
-    parseCoinGeckoQuote(payload)
-    	Extracts SOUL price and 24-hour change from a CoinGecko payload.
-
-    parseCoinMarketCapQuote(payload)
-    	Extracts SOUL price and 24-hour change from a CoinMarketCap payload.
-
-    fetchSoulQuoteFromCoinGecko()
-    	Calls CoinGecko and returns a normalized quote result.
-
-    fetchSoulQuoteFromCoinMarketCap()
-    	Calls CoinMarketCap directly or through a proxy and returns a normalized quote result.
-
-    fmtTokenAmount(n)
-    	Formats token balances into compact human-readable values.
-
-    fmtUsdAmount(n)
-    	Formats USD values into compact human-readable values.
-
-    fmtSharePct(value, currentSupply, fallbackPct)
-    	Formats a wallet share percentage using supply when available.
-
-    toDateTimeLocalValue(timestamp)
-    	Converts a timestamp into the HTML datetime-local control format.
-
-    makeExportFileName(selectedNode, ext)
-    	Creates a timestamped export filename for transaction downloads.
-
     App()
     	The main application component. It owns global state, handles API polling, transforms graph data, coordinates selection and filtering, manages the transfers modal, and renders Header, BubbleMap, and StatsPanel.
 
@@ -349,7 +441,7 @@ Reads a positive numeric environment value in milliseconds and falls back if the
     Schedules the next SOUL market-price refresh with retry backoff support.
 
     fetchSoulPrice()
-    Refreshes SOUL market pricing by trying CoinGecko first and CoinMarketCap second.
+    Refreshes SOUL market pricing from the maps API, falling back to CoinGecko (fetchCoinGeckoQuote in src/api/tokenPrices.js) and then the Phantasma explorer.
 
     fetchSyncStatus()
     Polls backend sync progress and updates the header block-sync pill.
@@ -373,10 +465,7 @@ Reads a positive numeric environment value in milliseconds and falls back if the
     	Clears all modal-side transaction filters.
 
     buildExportRows()
-    	Converts filtered transaction objects into exportable row objects.
-
-    downloadBlobFile(content, mimeType, fileName)
-    	Triggers a client-side file download for exported content.
+    	Builds export rows from the filtered transactions, fetching every API page when the transactions come from the API.
 
     exportTransactions(format)
     	Exports filtered transactions as JSON or CSV.
@@ -390,7 +479,7 @@ Reads a positive numeric environment value in milliseconds and falls back if the
     handleCopyTransactionHash(hash)
     	Copies a transaction hash and shows temporary copied state.
 
-src/components/Header.js
+src/components/Header.jsx
 Header(props)
 Renders the top application bar with branding, search, sync state, theme selector, and token price display.
 
@@ -400,7 +489,7 @@ Renders the top application bar with branding, search, sync state, theme selecto
     handleClear()
     	Clears the search box and resets the upstream search state.
 
-src/components/BubbleMap.js
+src/components/BubbleMap.jsx
 BubbleMap(props)
 Renders the interactive D3 graph and exposes fit-to-view actions back to App.
 
@@ -419,7 +508,7 @@ Renders the interactive D3 graph and exposes fit-to-view actions back to App.
     fitToView()
     	Computes a zoom transform that fits all visible nodes into the current viewport.
 
-src/components/StatsPanel.js
+src/components/StatsPanel.jsx
 fmt(n)
 Formats numeric token values for compact sidebar display.
 
@@ -452,19 +541,6 @@ Generates deterministic fake transaction hashes for mock links.
     buildVariantDataset(config)
     	Produces a full mock token dataset by transforming the base SOUL-style holder graph into a token-specific variant.
 
-src/serviceWorker.js
-register(config)
-Registers the service worker in production builds when enabled.
-
-    registerValidSW(swUrl, config)
-    	Installs the service worker and fires CRA update and success callbacks.
-
-    checkValidServiceWorker(swUrl, config)
-    	Verifies that the service worker script exists and reloads the page if it does not.
-
-    unregister()
-    	Removes an installed service worker.
-
 scripts/startProd.js
 run(binName, args)
 Executes a local project binary from node_modules/.bin.
@@ -487,6 +563,9 @@ The app supports dark, light, ghost-blue, and kcal-red visual themes. Theme stat
 
     Connection focus
     	Connection mode is wallet-centric and can be built from paginated transactions even when the address graph payload is insufficiently detailed by itself.
+
+    Shareable URLs
+    	The query string tracks the current view (token, node, address, view, q, legend, density, txdir, txcp, tfrom, tto, tstop, tpath) via history.replaceState, so copying the address bar reproduces it.
 
     Mobile behavior
     	On mobile, the layout stacks vertically, pan hints remain available, and the stats panel becomes full width below the graph.

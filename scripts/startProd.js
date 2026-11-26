@@ -51,7 +51,7 @@ const shouldBuildOnStart =
 
 if (shouldBuildOnStart) {
   runNodeScript("sammy.js");
-  run("react-scripts", ["build"]);
+  run("vite", ["build"]);
 }
 
 run("serve", ["-s", "build", "-l", `tcp://0.0.0.0:${port}`, "-n"]);
