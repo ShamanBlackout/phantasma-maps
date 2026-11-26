@@ -267,6 +267,24 @@ React entry point.
     src/hooks/useUrlState.js
     	Reads the initial view from the query string and keeps the address bar in sync with it.
 
+    src/hooks/useTokenMetadataPolling.js, useAvailableTokens.js, useTokenTopMovers.js
+    	Load token metadata (polled), the tracked-token list, and analytics top movers for the selected token.
+
+    src/hooks/useTokenGraphLoader.js
+    	Loads the token or wallet graph (with connection mode, enrichment, and mock fallback) and drives the loading overlay state.
+
+    src/hooks/useMapLoadingPhase.js
+    	Advances the loading overlay through its phases with a minimum display time per phase.
+
+    src/hooks/useSoulPricePolling.js, useTrackedTokenPrice.js, useSyncStatusPolling.js
+    	Poll SOUL pricing (with backoff), the selected token's quote, and backend sync progress.
+
+    src/hooks/useSelectedNodeTransactions.js, useSelectedNodeActivity.js
+    	Load the selected wallet's paginated transactions and its activity sparkline.
+
+    src/hooks/useTraceDbPaths.js, useCompareSnapshot.js, usePopoutDismissal.js
+    	Fetch trace paths between two wallets, load the compare-token snapshot, and close shell popouts on an outside click.
+
     src/theme/holderPalettes.js
     	Color palettes and graph styling presets by theme.
 

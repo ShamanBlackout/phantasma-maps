@@ -18,33 +18,28 @@ import MapLoadingOverlay from "./components/MapLoadingOverlay";
 import MobileInspectSheet from "./components/MobileInspectSheet";
 import useTransactionState from "./hooks/useTransactionState";
 import useUrlState, { readUrlParams } from "./hooks/useUrlState";
+import useTokenMetadataPolling from "./hooks/useTokenMetadataPolling";
+import useTokenTopMovers from "./hooks/useTokenTopMovers";
+import useAvailableTokens from "./hooks/useAvailableTokens";
+import useMapLoadingPhase from "./hooks/useMapLoadingPhase";
+import useTokenGraphLoader from "./hooks/useTokenGraphLoader";
+import useSoulPricePolling from "./hooks/useSoulPricePolling";
+import useTrackedTokenPrice from "./hooks/useTrackedTokenPrice";
+import useSyncStatusPolling from "./hooks/useSyncStatusPolling";
+import useSelectedNodeTransactions from "./hooks/useSelectedNodeTransactions";
+import useSelectedNodeActivity from "./hooks/useSelectedNodeActivity";
+import useTraceDbPaths from "./hooks/useTraceDbPaths";
+import useCompareSnapshot from "./hooks/useCompareSnapshot";
+import usePopoutDismissal from "./hooks/usePopoutDismissal";
 import { ONBOARDING_TUTORIAL_STEPS } from "./data/onboardingSteps";
-import { fetchJsonWithTimeout } from "./api/http";
-import {
-  fetchBackendTokenQuote,
-  fetchCoinGeckoQuote,
-  fetchExplorerTokenQuote,
-  fetchTrackedTokenQuote,
-} from "./api/tokenPrices";
 import {
   applyCurrentSupplyToNodes,
-  buildGraphDataFromApi,
-  buildNeighborFocusedGraph,
   buildTracePathGraph,
   getLinkKey,
   normalizeAmount,
   shortenAddress,
 } from "./graph/graphData";
 import {
-  createActivityEndpoint as buildActivityEndpoint,
-  fetchTokenAnalyticsTopMovers,
-  createGraphEndpoint as buildGraphEndpoint,
-  createSyncStatusEndpoint as buildSyncStatusEndpoint,
-  createTokenInfoEndpoint as buildTokenInfoEndpoint,
-  createTokensEndpoint as buildTokensEndpoint,
-  fetchConnectionsForAddress as fetchConnectionsForAddressFromApi,
-  fetchTracePaths as fetchTracePathsFromApi,
-  fetchTopHolders as fetchTopHoldersFromApi,
   fetchTransactionsPageForAddress as fetchTransactionsPageForAddressFromApi,
 } from "./api/mapsApi";
 import { HOLDER_TYPES, MOCK_TOKEN_SYMBOLS, TOKEN_INFO } from "./data/mockData";
@@ -59,24 +54,17 @@ import {
   MAP_LOADING_EXIT_MS,
   MAP_LOADING_SLOW_THRESHOLD_MS,
   MAPS_API_BASE_URL,
-  MAPS_API_GRAPH_DEPTH,
   MAPS_API_GRAPH_EDGE_LIMIT,
   MAPS_API_GRAPH_NODE_LIMIT,
   MAPS_API_GRAPH_TOP_HOLDERS_LIMIT,
   MAPS_API_REQUEST_TIMEOUT_MS,
-  MAPS_API_SYNC_STATUS_POLL_INTERVAL_MS,
   MOBILE_MEDIA_QUERY,
   ONBOARDING_DISMISSED_STORAGE_KEY,
   PHANTASMA_EXPLORER_BASE,
-  PHANTASMA_EXPLORER_TOKEN_API_URL,
   PHANTASMA_TX_EXPLORER_BASE,
   resolveMapLoadingProfile,
   SAVED_VIEWS_STORAGE_KEY,
-  SOUL_PRICE_API_URL,
-  SOUL_PRICE_BASE_POLL_INTERVAL_MS,
-  SOUL_PRICE_MAX_BACKOFF_MS,
   STATS_PANEL_STORAGE_KEY,
-  TOKEN_METADATA_POLL_INTERVAL_MS,
   TOKEN_SNAPSHOT_HISTORY_STORAGE_KEY,
   TOKEN_SNAPSHOTS_STORAGE_KEY,
   TOKEN_SYMBOL_STORAGE_KEY,
@@ -86,8 +74,6 @@ import {
   TRACE_PATH_LIST_LIMIT,
   TRACE_PATH_RENDER_LIMIT,
   TRACE_TOOL_UI_STORAGE_KEY,
-  TRACKED_TOKEN_PRICE_BOOTSTRAP_RETRY_MS,
-  TRACKED_TOKEN_PRICE_OPTIONS,
   USER_SKILL_LEVEL_KEY,
 } from "./config/appConfig";
 import {
@@ -112,17 +98,13 @@ import {
 import {
   buildApiErrorRecord,
   buildTokenNotFoundStatus,
-  formatApiErrorMeta,
   isTokenNotFoundError,
 } from "./api/apiErrors";
 import {
   buildConnectionsGraphFromConnections,
-  buildTopHoldersConnectionsGraph,
-  buildTopHoldersGraph,
   getLinkEndpointId,
   getMockTokenData,
   limitGraphForDisplay,
-  mergeSummaryNodesWithTopHolders,
 } from "./graph/graphBuilders";
 import { hashToHue, hslToRgbString } from "./lib/color";
 import "./App.css";
@@ -880,214 +862,19 @@ export default function App() {
     resetTransactionState();
   }, [resetTransactionState, selectedTokenSymbol, triggerMotionCue]);
 
-  useEffect(() => {
-    let isMounted = true;
-    let timeoutId = null;
+  useTokenMetadataPolling({
+    selectedTokenSymbol,
+    setApiTokenInfo,
+    setLastApiError,
+    setPriceLastUpdatedAt,
+  });
 
-    async function fetchTokenInfo() {
-      const result = await fetchJsonWithTimeout(
-        buildTokenInfoEndpoint(MAPS_API_BASE_URL, selectedTokenSymbol),
-        {},
-        MAPS_API_REQUEST_TIMEOUT_MS,
-      );
-
-      if (!isMounted) return;
-
-      if (!result.ok) {
-        if (isTokenNotFoundError(result)) {
-          setLastApiError(
-            buildApiErrorRecord(
-              result,
-              "token-metadata",
-              "Requested token metadata is not available in the database",
-            ),
-          );
-        }
-        setApiTokenInfo(null);
-        return;
-      }
-
-      const payload = result.payload;
-      const metadataMaxSupplyRaw =
-        payload?.maxSupplyNormalized ?? payload?.max_supply_normalized;
-      const hasMetadataMaxSupply =
-        metadataMaxSupplyRaw !== undefined && metadataMaxSupplyRaw !== null;
-      const parsedMetadataMaxSupply = Number(metadataMaxSupplyRaw);
-      const parsedCurrentSupply = Number(
-        payload?.currentSupplyNormalized ?? payload?.current_supply_normalized,
-      );
-      const parsedMetadataPrice = Number(
-        payload?.priceUsd ?? payload?.price_usd ?? payload?.price,
-      );
-      const parsedHolderCount = Number(
-        payload?.holderCount ?? payload?.holder_count,
-      );
-      const parsedMetadataPriceChange24h = Number(
-        payload?.priceChange24h ??
-          payload?.price_change_24h ??
-          payload?.percentChange24h,
-      );
-
-      setApiTokenInfo({
-        fullName: String(payload?.name || "").trim(),
-        totalSupply: Number.isFinite(parsedCurrentSupply)
-          ? parsedCurrentSupply
-          : null,
-        currentSupply: Number.isFinite(parsedCurrentSupply)
-          ? parsedCurrentSupply
-          : 0,
-        maxSupply: Number.isFinite(parsedMetadataMaxSupply)
-          ? parsedMetadataMaxSupply
-          : null,
-        hasMetadataMaxSupply,
-        decimals: Number(payload?.decimals ?? 0) || 0,
-        chain: String(payload?.chain || TOKEN_INFO.chain || "").trim(),
-        globalHolderCount: Number.isFinite(parsedHolderCount)
-          ? Math.max(0, Math.floor(parsedHolderCount))
-          : null,
-        price: Number.isFinite(parsedMetadataPrice)
-          ? parsedMetadataPrice
-          : null,
-        priceChange24h: Number.isFinite(parsedMetadataPriceChange24h)
-          ? parsedMetadataPriceChange24h
-          : null,
-      });
-
-      if (Number.isFinite(parsedMetadataPrice)) {
-        setPriceLastUpdatedAt(Date.now());
-      }
-
-      timeoutId = window.setTimeout(
-        fetchTokenInfo,
-        TOKEN_METADATA_POLL_INTERVAL_MS,
-      );
-    }
-
-    fetchTokenInfo().catch(() => {
-      if (!isMounted) return;
-      setApiTokenInfo(null);
-      timeoutId = window.setTimeout(
-        fetchTokenInfo,
-        TOKEN_METADATA_POLL_INTERVAL_MS,
-      );
-    });
-
-    return () => {
-      isMounted = false;
-      if (timeoutId) {
-        window.clearTimeout(timeoutId);
-      }
-    };
-  }, [selectedTokenSymbol]);
-
-  useEffect(() => {
-    let isMounted = true;
-
-    async function loadTokenAnalyticsTopMovers() {
-      const tokenKey = String(selectedTokenSymbol || "").trim();
-      if (!tokenKey) {
-        setTokenAnalyticsTopMoversStatus("");
-        setIsTokenTopMoversLoading(false);
-        return;
-      }
-
-      setIsTokenTopMoversLoading(true);
-      setTokenAnalyticsTopMoversStatus(`Loading ${tokenKey} top movers...`);
-
-      try {
-        const horizons = ["24h", "7d", "30d"];
-        const results = await Promise.all(
-          horizons.map((horizon) => {
-            const daysMap = { "24h": 1, "7d": 7, "30d": 30 };
-            return fetchTokenAnalyticsTopMovers(
-              MAPS_API_BASE_URL,
-              MAPS_API_REQUEST_TIMEOUT_MS,
-              tokenKey,
-              daysMap[horizon] || 7,
-              10,
-              false,
-            );
-          }),
-        );
-
-        if (!isMounted) return;
-
-        const normalizedByHorizon = {};
-        horizons.forEach((horizon, horizonIndex) => {
-          const result = results[horizonIndex] || { items: [] };
-          const normalizedItems = (
-            Array.isArray(result.items) ? result.items : []
-          )
-            .map((item) => {
-              const parsedLatestBalance = Number(
-                item?.latestBalance ?? item?.latest_balance ?? 0,
-              );
-              const parsedPreviousBalance = Number(
-                item?.previousBalance ?? item?.previous_balance ?? 0,
-              );
-              const parsedDeltaBalance = Number(
-                item?.deltaBalance ?? item?.delta_balance ?? 0,
-              );
-              const parsedDeltaPct = Number(
-                item?.deltaPct ?? item?.delta_pct ?? 0,
-              );
-              const latestBalance = Number.isFinite(parsedLatestBalance)
-                ? parsedLatestBalance
-                : 0;
-              const previousBalance = Number.isFinite(parsedPreviousBalance)
-                ? parsedPreviousBalance
-                : latestBalance - parsedDeltaBalance;
-              const deltaBalance = Number.isFinite(parsedDeltaBalance)
-                ? parsedDeltaBalance
-                : 0;
-              const deltaPct = Number.isFinite(parsedDeltaPct)
-                ? parsedDeltaPct
-                : null;
-
-              return {
-                address: String(item?.address || "").trim(),
-                deltaBalance,
-                deltaPct,
-                latestBalance,
-                previousBalance,
-                label: String(item?.label || item?.name || "").trim(),
-              };
-            })
-            .filter((item) => item.address);
-
-          normalizedByHorizon[horizon] = normalizedItems;
-        });
-
-        setTokenAnalyticsTopMovers((current) => ({
-          ...current,
-          [tokenKey]: normalizedByHorizon,
-        }));
-        setTokenAnalyticsTopMoversStatus("");
-      } catch (error) {
-        if (!isMounted) return;
-        if (isTokenNotFoundError(error)) {
-          setTokenAnalyticsTopMoversStatus(
-            buildTokenNotFoundStatus(tokenKey, error),
-          );
-          return;
-        }
-
-        setTokenAnalyticsTopMoversStatus(
-          `Top movers API unavailable for this token.${formatApiErrorMeta(error)}`,
-        );
-      } finally {
-        if (isMounted) {
-          setIsTokenTopMoversLoading(false);
-        }
-      }
-    }
-
-    loadTokenAnalyticsTopMovers();
-
-    return () => {
-      isMounted = false;
-    };
-  }, [selectedTokenSymbol]);
+  useTokenTopMovers({
+    selectedTokenSymbol,
+    setIsTokenTopMoversLoading,
+    setTokenAnalyticsTopMovers,
+    setTokenAnalyticsTopMoversStatus,
+  });
 
   const currentTokenTopMovers = useMemo(() => {
     const currentKey = String(selectedTokenSymbol || "").trim();
@@ -1226,78 +1013,13 @@ export default function App() {
     selectedTokenSymbol,
   ]);
 
-  useEffect(() => {
-    let isMounted = true;
-
-    async function fetchAvailableTokens() {
-      const result = await fetchJsonWithTimeout(
-        buildTokensEndpoint(MAPS_API_BASE_URL),
-        {},
-        MAPS_API_REQUEST_TIMEOUT_MS,
-      );
-
-      if (!isMounted) return;
-
-      if (!result.ok) {
-        setLastApiError(
-          buildApiErrorRecord(
-            result,
-            "token-list",
-            "API token list request failed",
-          ),
-        );
-        setTokenSelectorStatus(
-          result.status === 0
-            ? `API token list unavailable${formatApiErrorMeta(result)}`
-            : `API token list request failed (${result.status})${formatApiErrorMeta(result)}`,
-        );
-        setApiTokenSymbols([]);
-        return;
-      }
-
-      const apiItems = Array.isArray(result.payload?.items)
-        ? result.payload.items
-        : [];
-      const nextTokens = [
-        ...new Set(
-          apiItems
-            .map((token) =>
-              String(token || "")
-                .trim()
-                .toUpperCase(),
-            )
-            .filter(Boolean),
-        ),
-      ];
-
-      if (!nextTokens.length) {
-        setApiTokenSymbols([]);
-        setTokenSelectorStatus("No API tokens available");
-        return;
-      }
-
-      setApiTokenSymbols(nextTokens);
-
-      if (!nextTokens.includes(selectedTokenSymbol)) {
-        setSelectedTokenSymbol(nextTokens[0]);
-      }
-
-      setTokenSelectorStatus(`Showing ${nextTokens.length} tracked tokens`);
-    }
-
-    fetchAvailableTokens().catch((error) => {
-      if (!isMounted) return;
-      setLastApiError(
-        buildApiErrorRecord(error, "token-list", "API token list unavailable"),
-      );
-      setApiTokenSymbols([]);
-      setTokenSelectorStatus("API token list unavailable");
-    });
-
-    return () => {
-      isMounted = false;
-    };
-  }, [selectedTokenSymbol]);
+  useAvailableTokens({
+    selectedTokenSymbol,
+    setApiTokenSymbols,
+    setLastApiError,
+    setSelectedTokenSymbol,
+    setTokenSelectorStatus,
+  });
 
   const selectedMockTokenData = useMemo(
     () => getMockTokenData(selectedTokenSymbol),
@@ -1466,59 +1188,14 @@ export default function App() {
     mapLoadingProfile.showAddressPhase,
     mapLoadingProgress,
   ]);
-  useEffect(() => {
-    if (!isMapLoaderVisible) {
-      mapLoadingPhaseShownAtRef.current = 0;
-      setMapLoadingDisplayedPhase("balances");
-      return undefined;
-    }
-
-    const phaseOrder = ["balances", "addresses", "topology", "ready"];
-    const currentIndex = phaseOrder.indexOf(mapLoadingDisplayedPhase);
-    const targetIndex = phaseOrder.indexOf(mapLoadingPhaseTarget);
-
-    if (targetIndex === -1 || currentIndex === -1) {
-      setMapLoadingDisplayedPhase(mapLoadingPhaseTarget);
-      mapLoadingPhaseShownAtRef.current = Date.now();
-      return undefined;
-    }
-
-    if (targetIndex <= currentIndex) {
-      if (targetIndex < currentIndex) {
-        setMapLoadingDisplayedPhase(mapLoadingPhaseTarget);
-        mapLoadingPhaseShownAtRef.current = Date.now();
-      }
-      return undefined;
-    }
-
-    const now = Date.now();
-    const shownAt = mapLoadingPhaseShownAtRef.current || now;
-    if (!mapLoadingPhaseShownAtRef.current) {
-      mapLoadingPhaseShownAtRef.current = now;
-    }
-    const elapsedMs = now - shownAt;
-    const waitMs = Math.max(0, mapLoadingProfile.phaseMinVisibleMs - elapsedMs);
-
-    if (waitMs === 0) {
-      setMapLoadingDisplayedPhase(mapLoadingPhaseTarget);
-      mapLoadingPhaseShownAtRef.current = Date.now();
-      return undefined;
-    }
-
-    const timeoutId = window.setTimeout(() => {
-      setMapLoadingDisplayedPhase(mapLoadingPhaseTarget);
-      mapLoadingPhaseShownAtRef.current = Date.now();
-    }, waitMs);
-
-    return () => {
-      window.clearTimeout(timeoutId);
-    };
-  }, [
+  useMapLoadingPhase({
     isMapLoaderVisible,
     mapLoadingDisplayedPhase,
+    mapLoadingPhaseShownAtRef,
     mapLoadingPhaseTarget,
-    mapLoadingProfile.phaseMinVisibleMs,
-  ]);
+    mapLoadingProfile,
+    setMapLoadingDisplayedPhase,
+  });
 
   useEffect(() => {
     let delayTimeoutId;
@@ -1566,933 +1243,58 @@ export default function App() {
     };
   }, [isMapLoaderVisible, isMapLoading, mapLoadingProfile.minVisibleMs]);
 
-  useEffect(() => {
-    let isMounted = true;
-
-    async function fetchMapGraph() {
-      function applyTokenNotFoundGraphState(errorLike, source = "graph") {
-        setLastApiError(
-          buildApiErrorRecord(
-            errorLike,
-            source,
-            "Requested token is not available in the database",
-          ),
-        );
-        setIsUsingMockApiFallback(false);
-        setTrackedTokenSupply(0);
-        setMapNodes([]);
-        setSummaryNodes([]);
-        setMapLinks([]);
-        setMapLoadingEvidence({ wallets: 0, links: 0 });
-        setMapDataStatus(
-          buildTokenNotFoundStatus(selectedTokenSymbol, errorLike),
-        );
-        setIsMapLoading(false);
-      }
-
-      const defaultLoadingProfile = resolveMapLoadingProfile(200, 300);
-      setIsMapLoading(true);
-      setIsMapLoadingReadyState(false);
-      setMapLoadingProgress(8);
-      setMapLoadingProfile(defaultLoadingProfile);
-      setMapLoadingEvidence({ wallets: null, links: null });
-      setMapLoadingDisplayedPhase("balances");
-      setSelectedNode(null);
-      setHoveredNode(null);
-      setMapDataStatus(
-        activeGraphRootAddress
-          ? `Generating maps for ${selectedTokenSymbol} around ${shortenAddress(activeGraphRootAddress)}...`
-          : `Generating maps for ${selectedTokenSymbol}...`,
-      );
-
-      const effectiveGraphEdgeLimit = graphEdgeLimit;
-      const isTopLevelTokenRequest =
-        !isConnectionsView &&
-        !String(searchedRootAddress || "").trim() &&
-        !String(activeGraphRootAddress || "").trim();
-      const shouldUseMaxEndpoint =
-        isTopLevelTokenRequest && isGraphMaxModeEnabled;
-
-      const graphEndpoint = buildGraphEndpoint(
-        MAPS_API_BASE_URL,
-        selectedTokenSymbol,
-        {
-          rootAddress: activeGraphRootAddress || "",
-          depth: MAPS_API_GRAPH_DEPTH,
-          edgeLimit: effectiveGraphEdgeLimit,
-          defaultEdgeLimit: MAPS_API_GRAPH_EDGE_LIMIT,
-          useMaxEndpoint: shouldUseMaxEndpoint,
-          topHoldersLimit: shouldUseMaxEndpoint
-            ? MAPS_API_GRAPH_TOP_HOLDERS_LIMIT
-            : 0,
-        },
-      );
-      let result = await fetchJsonWithTimeout(
-        graphEndpoint,
-        {},
-        MAPS_API_REQUEST_TIMEOUT_MS,
-      );
-
-      if (!result.ok && shouldUseMaxEndpoint) {
-        const standardGraphFallbackEndpoint = buildGraphEndpoint(
-          MAPS_API_BASE_URL,
-          selectedTokenSymbol,
-          {
-            rootAddress: "",
-            depth: MAPS_API_GRAPH_DEPTH,
-            edgeLimit: effectiveGraphEdgeLimit,
-            defaultEdgeLimit: MAPS_API_GRAPH_EDGE_LIMIT,
-            useMaxEndpoint: false,
-            topHoldersLimit: MAPS_API_GRAPH_TOP_HOLDERS_LIMIT,
-          },
-        );
-
-        const standardGraphFallbackResult = await fetchJsonWithTimeout(
-          standardGraphFallbackEndpoint,
-          {},
-          MAPS_API_REQUEST_TIMEOUT_MS,
-        );
-
-        if (standardGraphFallbackResult.ok) {
-          result = standardGraphFallbackResult;
-          setMapDataStatus(
-            `Max graph view is temporarily unavailable. Showing the standard ${selectedTokenSymbol} live map instead.`,
-          );
-        }
-      }
-
-      setMapLoadingProgress(42);
-
-      if (!isMounted) return;
-
-      if (!result.ok) {
-        setLastApiError(
-          buildApiErrorRecord(result, "graph", "Graph request failed"),
-        );
-
-        if (isTokenNotFoundError(result)) {
-          applyTokenNotFoundGraphState(result, "graph");
-          return;
-        }
-
-        if (isConnectionsView && activeGraphRootAddress) {
-          try {
-            const connectionsResult = await fetchConnectionsForAddressFromApi(
-              MAPS_API_BASE_URL,
-              MAPS_API_REQUEST_TIMEOUT_MS,
-              activeGraphRootAddress,
-              selectedTokenSymbol,
-            );
-
-            let balanceFallbackGraph = null;
-            const tokenGraphFallbackEndpoint = buildGraphEndpoint(
-              MAPS_API_BASE_URL,
-              selectedTokenSymbol,
-              {
-                rootAddress: "",
-                depth: MAPS_API_GRAPH_DEPTH,
-                edgeLimit: effectiveGraphEdgeLimit,
-                defaultEdgeLimit: MAPS_API_GRAPH_EDGE_LIMIT,
-                topHoldersLimit: MAPS_API_GRAPH_TOP_HOLDERS_LIMIT,
-              },
-            );
-            const tokenGraphFallbackResult = await fetchJsonWithTimeout(
-              tokenGraphFallbackEndpoint,
-              {},
-              MAPS_API_REQUEST_TIMEOUT_MS,
-            );
-
-            if (isTokenNotFoundError(tokenGraphFallbackResult)) {
-              applyTokenNotFoundGraphState(tokenGraphFallbackResult, "graph");
-              return;
-            }
-
-            if (tokenGraphFallbackResult.ok) {
-              const graphDecimals = apiTokenInfo?.decimals ?? 0;
-              balanceFallbackGraph = buildGraphDataFromApi(
-                tokenGraphFallbackResult.payload,
-                graphDecimals,
-              );
-            }
-
-            if (!isMounted) return;
-
-            setConnectionsGraphContext({
-              items: Array.isArray(connectionsResult.items)
-                ? connectionsResult.items
-                : [],
-              rootAddress: activeGraphRootAddress,
-              fallbackGraph: balanceFallbackGraph,
-              currentSupply:
-                Number(balanceFallbackGraph?.totalSupply) ||
-                Number(activeTokenInfo?.currentSupply) ||
-                Number(activeTokenInfo?.totalSupply) ||
-                0,
-            });
-
-            const tableFocusedGraph = buildConnectionsGraphFromConnections(
-              connectionsResult.items,
-              activeGraphRootAddress,
-              balanceFallbackGraph,
-              Number(balanceFallbackGraph?.totalSupply) ||
-                Number(activeTokenInfo?.currentSupply) ||
-                Number(activeTokenInfo?.totalSupply) ||
-                0,
-            );
-
-            if (
-              tableFocusedGraph &&
-              Array.isArray(tableFocusedGraph.nodes) &&
-              tableFocusedGraph.nodes.length
-            ) {
-              setMapLoadingEvidence({
-                wallets: tableFocusedGraph.nodes.length,
-                links: Array.isArray(tableFocusedGraph.links)
-                  ? tableFocusedGraph.links.length
-                  : 0,
-              });
-              setIsUsingMockApiFallback(false);
-              setMapNodes(tableFocusedGraph.nodes);
-              setSummaryNodes(tableFocusedGraph.nodes);
-              setMapLinks(tableFocusedGraph.links);
-              setTrackedTokenSupply(tableFocusedGraph.totalValue || 0);
-
-              if (tableFocusedGraph.rootNodeId) {
-                const focusedRootNode = tableFocusedGraph.nodes.find(
-                  (node) => node.id === tableFocusedGraph.rootNodeId,
-                );
-                setSelectedNode(focusedRootNode || null);
-              }
-
-              setMapDataStatus(
-                `Live graph loaded for ${shortenAddress(activeGraphRootAddress)} [connections-phase:table-only]`,
-              );
-              setMapLoadingProgress(100);
-              setIsMapLoading(false);
-              return;
-            }
-          } catch (error) {
-            if (!isMounted) return;
-            if (isTokenNotFoundError(error)) {
-              applyTokenNotFoundGraphState(error, "connections");
-              return;
-            }
-            // Fall through to status handling below.
-          }
-        }
-
-        if (activeGraphRootAddress && !isConnectionsView) {
-          try {
-            const tokenGraphFallbackEndpoint = buildGraphEndpoint(
-              MAPS_API_BASE_URL,
-              selectedTokenSymbol,
-              {
-                rootAddress: "",
-                depth: MAPS_API_GRAPH_DEPTH,
-                edgeLimit: effectiveGraphEdgeLimit,
-                defaultEdgeLimit: MAPS_API_GRAPH_EDGE_LIMIT,
-                topHoldersLimit: MAPS_API_GRAPH_TOP_HOLDERS_LIMIT,
-              },
-            );
-            const tokenGraphFallbackResult = await fetchJsonWithTimeout(
-              tokenGraphFallbackEndpoint,
-              {},
-              MAPS_API_REQUEST_TIMEOUT_MS,
-            );
-
-            if (isTokenNotFoundError(tokenGraphFallbackResult)) {
-              applyTokenNotFoundGraphState(tokenGraphFallbackResult, "graph");
-              return;
-            }
-
-            if (tokenGraphFallbackResult.ok) {
-              const graphDecimals = apiTokenInfo?.decimals ?? 0;
-              const fallbackGraph = buildGraphDataFromApi(
-                tokenGraphFallbackResult.payload,
-                graphDecimals,
-              );
-              const focusedFallbackGraph = buildNeighborFocusedGraph(
-                fallbackGraph,
-                activeGraphRootAddress,
-              );
-
-              if (
-                focusedFallbackGraph &&
-                Array.isArray(focusedFallbackGraph.nodes) &&
-                focusedFallbackGraph.nodes.length
-              ) {
-                if (!isMounted) return;
-
-                setIsUsingMockApiFallback(false);
-                setTrackedTokenSupply(
-                  Number(fallbackGraph?.totalSupply) ||
-                    Number(focusedFallbackGraph.totalValue) ||
-                    0,
-                );
-                setMapNodes(focusedFallbackGraph.nodes);
-                setSummaryNodes(focusedFallbackGraph.nodes);
-                setMapLinks(focusedFallbackGraph.links || []);
-                setMapLoadingEvidence({
-                  wallets: focusedFallbackGraph.nodes.length,
-                  links: Array.isArray(focusedFallbackGraph.links)
-                    ? focusedFallbackGraph.links.length
-                    : 0,
-                });
-
-                if (focusedFallbackGraph.rootNodeId) {
-                  const focusedRootNode = focusedFallbackGraph.nodes.find(
-                    (node) => node.id === focusedFallbackGraph.rootNodeId,
-                  );
-                  setSelectedNode(focusedRootNode || null);
-                }
-
-                setMapDataStatus(
-                  `This wallet's detailed graph is temporarily unavailable. Showing related wallets from the ${selectedTokenSymbol} token network around ${shortenAddress(activeGraphRootAddress)} instead.`,
-                );
-                setMapLoadingProgress(100);
-                setIsMapLoading(false);
-                return;
-              }
-            }
-          } catch (error) {
-            if (!isMounted) return;
-            if (isTokenNotFoundError(error)) {
-              applyTokenNotFoundGraphState(error, "graph");
-              return;
-            }
-            // Fall through to status handling below.
-          }
-        }
-
-        if (result.status === 0) {
-          if (isConnectionsView) {
-            setIsUsingMockApiFallback(false);
-            setMapDataStatus(
-              `Unable to load wallet connections right now. Please check your network and try again.${formatApiErrorMeta(result)}`,
-            );
-            setMapLoadingEvidence({ wallets: null, links: null });
-          } else {
-            const fallbackNodes = selectedMockTokenData?.holders || [];
-            const fallbackLinks = selectedMockTokenData?.links || [];
-            const hasMockFallback = fallbackNodes.length > 0;
-
-            setIsUsingMockApiFallback(hasMockFallback);
-            if (hasMockFallback) {
-              setTrackedTokenSupply(
-                selectedMockTokenData?.tokenInfo?.totalSupply || 0,
-              );
-              setMapNodes(fallbackNodes);
-              setSummaryNodes(fallbackNodes);
-              setMapLinks(fallbackLinks);
-              setMapLoadingEvidence({
-                wallets: fallbackNodes.length,
-                links: fallbackLinks.length,
-              });
-              setTokenSelectorStatus("API unavailable; showing mock tokens");
-              setMapDataStatus(
-                `Using cached data while the network service recovers...${formatApiErrorMeta(result)}`,
-              );
-            } else {
-              setTrackedTokenSupply(0);
-              setMapNodes([]);
-              setSummaryNodes([]);
-              setMapLinks([]);
-              setMapLoadingEvidence({ wallets: 0, links: 0 });
-              setMapDataStatus(
-                `Unable to load ${selectedTokenSymbol} from the live API. The token selector remains available; retry when the API recovers.${formatApiErrorMeta(result)}`,
-              );
-            }
-          }
-        } else {
-          if (isConnectionsView) {
-            setIsUsingMockApiFallback(false);
-            setMapDataStatus(
-              `Couldn't load wallet connections (error ${result.status}). Try again or explore the token map.${formatApiErrorMeta(result)}`,
-            );
-          } else {
-            setIsUsingMockApiFallback(false);
-            setTrackedTokenSupply(0);
-            setMapNodes([]);
-            setSummaryNodes([]);
-            setMapLinks([]);
-            setMapDataStatus(
-              `Network service temporarily unavailable (error ${result.status}). Retrying...${formatApiErrorMeta(result)}`,
-            );
-          }
-        }
-        setIsMapLoading(false);
-        return;
-      }
-
-      setIsUsingMockApiFallback(false);
-      setMapLoadingProgress(62);
-
-      const graphDecimals = apiTokenInfo?.decimals ?? 0;
-      const mappedGraph = buildGraphDataFromApi(result.payload, graphDecimals);
-      const shouldTrackOverallMaxStats =
-        !isConnectionsView && !String(activeGraphRootAddress || "").trim();
-      const applyResolvedGraphState = ({
-        focusedGraph,
-        summaryNodes,
-        mapLinks,
-        baseGraph,
-        usedConnectionsTable = false,
-      }) => {
-        if (shouldTrackOverallMaxStats) {
-          const mappedLinkCount = Array.isArray(mappedGraph?.links)
-            ? mappedGraph.links.length
-            : 0;
-          const baseLinkCount = Array.isArray(baseGraph?.links)
-            ? baseGraph.links.length
-            : 0;
-
-          setOverallMaxGraphStats({
-            wallets: Array.isArray(summaryNodes) ? summaryNodes.length : 0,
-            connections: Math.max(mappedLinkCount, baseLinkCount),
-          });
-        }
-
-        setMapNodes(focusedGraph.nodes);
-        setSummaryNodes(summaryNodes);
-        setMapLinks(mapLinks);
-        setMapLoadingEvidence({
-          wallets: Array.isArray(summaryNodes) ? summaryNodes.length : 0,
-          links: Array.isArray(mapLinks) ? mapLinks.length : 0,
-        });
-        setMapLoadingProgress(94);
-        setTrackedTokenSupply(
-          mappedGraph?.totalSupply > 0
-            ? mappedGraph.totalSupply
-            : focusedGraph.totalValue || 0,
-        );
-        if (focusedGraph.rootNodeId) {
-          const focusedRootNode = focusedGraph.nodes.find(
-            (node) => node.id === focusedGraph.rootNodeId,
-          );
-          setSelectedNode(focusedRootNode || null);
-        }
-        setMapDataStatus(
-          activeGraphRootAddress
-            ? isConnectionsView
-              ? usedConnectionsTable
-                ? `Live graph loaded for ${shortenAddress(activeGraphRootAddress)} [connections-phase:table]`
-                : `Live graph loaded for ${shortenAddress(activeGraphRootAddress)} [connections-phase:base]`
-              : `Live graph loaded for ${shortenAddress(activeGraphRootAddress)}`
-            : `Live graph loaded from ${graphEndpoint}`,
-        );
-        setMapLoadingProgress(100);
-        setIsMapLoading(false);
-      };
-      setMapLoadingProfile(
-        resolveMapLoadingProfile(
-          Array.isArray(mappedGraph?.nodes) ? mappedGraph.nodes.length : 0,
-          Array.isArray(mappedGraph?.links) ? mappedGraph.links.length : 0,
-        ),
-      );
-      setMapLoadingEvidence({
-        wallets: Array.isArray(mappedGraph?.nodes)
-          ? mappedGraph.nodes.length
-          : 0,
-        links: Array.isArray(mappedGraph?.links) ? mappedGraph.links.length : 0,
-      });
-
-      const isTopLevelTokenGraph = isTopLevelTokenRequest;
-
-      const shouldFetchTopHolders =
-        isTopLevelTokenGraph &&
-        !isGraphMaxModeEnabled &&
-        MAPS_API_GRAPH_TOP_HOLDERS_LIMIT > 0 &&
-        isGraphEnrichmentEnabled;
-
-      const shouldApplyTopHoldersSeed = shouldFetchTopHolders;
-
-      let seededGraph = null;
-      let topHoldersForSummary = [];
-
-      if (!shouldFetchTopHolders) {
-        setIsGraphEnrichmentLoading(false);
-      }
-
-      if (shouldFetchTopHolders && Array.isArray(mappedGraph?.nodes)) {
-        applyResolvedGraphState({
-          focusedGraph: mappedGraph,
-          summaryNodes: mappedGraph.nodes,
-          mapLinks: Array.isArray(mappedGraph?.links) ? mappedGraph.links : [],
-          baseGraph: mappedGraph,
-        });
-      }
-
-      if (shouldFetchTopHolders) {
-        setIsGraphEnrichmentLoading(true);
-        try {
-          const topHoldersResult = await fetchTopHoldersFromApi(
-            MAPS_API_BASE_URL,
-            MAPS_API_REQUEST_TIMEOUT_MS,
-            selectedTokenSymbol,
-            MAPS_API_GRAPH_TOP_HOLDERS_LIMIT,
-          );
-          topHoldersForSummary = Array.isArray(topHoldersResult.items)
-            ? topHoldersResult.items
-            : [];
-
-          if (shouldApplyTopHoldersSeed) {
-            const topHolderAddresses = topHoldersResult.items
-              .map((item) => String(item?.address || "").trim())
-              .filter(Boolean);
-
-            const connectionPayloads = await Promise.all(
-              topHolderAddresses.map(async (address) => {
-                try {
-                  const result = await fetchConnectionsForAddressFromApi(
-                    MAPS_API_BASE_URL,
-                    MAPS_API_REQUEST_TIMEOUT_MS,
-                    address,
-                    selectedTokenSymbol,
-                  );
-
-                  return {
-                    address,
-                    items: result.items,
-                  };
-                } catch (error) {
-                  if (isTokenNotFoundError(error)) {
-                    throw error;
-                  }
-                  return {
-                    address,
-                    items: [],
-                  };
-                }
-              }),
-            );
-
-            const topHolderConnectionsGraph = buildTopHoldersConnectionsGraph({
-              topHolders: topHoldersResult.items,
-              connectionsByAddress: connectionPayloads,
-              fallbackGraph: mappedGraph,
-              currentSupply: mappedGraph?.totalSupply || 0,
-              decimals: graphDecimals,
-            });
-
-            if (shouldApplyTopHoldersSeed) {
-              seededGraph = topHolderConnectionsGraph;
-            }
-          }
-        } catch (error) {
-          if (!isMounted) return;
-          if (isTokenNotFoundError(error)) {
-            applyTokenNotFoundGraphState(error, "top-holders");
-            return;
-          }
-          setIsGraphEnrichmentEnabled(false);
-          seededGraph = null;
-        } finally {
-          if (isMounted) {
-            setIsGraphEnrichmentLoading(false);
-          }
-        }
-
-        if (!seededGraph && shouldApplyTopHoldersSeed) {
-          seededGraph = buildTopHoldersGraph(
-            mappedGraph,
-            MAPS_API_GRAPH_TOP_HOLDERS_LIMIT,
-          );
-        }
-      }
-
-      const baseGraph = seededGraph || mappedGraph;
-      const baseFocusedGraph = isConnectionsView
-        ? baseGraph
-        : searchedRootAddress
-          ? buildNeighborFocusedGraph(baseGraph, activeGraphRootAddress)
-          : baseGraph;
-      let focusedGraph = baseFocusedGraph;
-      let usedConnectionsTable = false;
-
-      if (isConnectionsView && activeGraphRootAddress) {
-        try {
-          setMapLoadingProgress(74);
-          const connectionsResult = await fetchConnectionsForAddressFromApi(
-            MAPS_API_BASE_URL,
-            MAPS_API_REQUEST_TIMEOUT_MS,
-            activeGraphRootAddress,
-            selectedTokenSymbol,
-          );
-
-          setMapLoadingProgress(84);
-
-          if (!isMounted) return;
-
-          setConnectionsGraphContext({
-            items: Array.isArray(connectionsResult.items)
-              ? connectionsResult.items
-              : [],
-            rootAddress: activeGraphRootAddress,
-            fallbackGraph: mappedGraph,
-            currentSupply: mappedGraph?.totalSupply || 0,
-          });
-
-          const tableFocusedGraph = buildConnectionsGraphFromConnections(
-            connectionsResult.items,
-            activeGraphRootAddress,
-            mappedGraph,
-            mappedGraph?.totalSupply || 0,
-          );
-
-          if (
-            tableFocusedGraph &&
-            Array.isArray(tableFocusedGraph.nodes) &&
-            tableFocusedGraph.nodes.length
-          ) {
-            focusedGraph = tableFocusedGraph;
-            usedConnectionsTable = true;
-          }
-        } catch (error) {
-          if (!isMounted) return;
-          if (isTokenNotFoundError(error)) {
-            applyTokenNotFoundGraphState(error, "connections");
-            return;
-          }
-          // Fall back to the base graph if precomputed connections are unavailable.
-        }
-      }
-
-      if (!focusedGraph) {
-        if (!mappedGraph || !mappedGraph.nodes.length) {
-          if (isConnectionsView) {
-            setMapDataStatus(
-              "No transaction history found for this wallet in the current time range.",
-            );
-          } else {
-            setTrackedTokenSupply(0);
-            setMapNodes([]);
-            setSummaryNodes([]);
-            setMapLinks([]);
-            setMapDataStatus(
-              "No holder data available for this token. It may be newly added.",
-            );
-          }
-          setIsMapLoading(false);
-          return;
-        }
-
-        focusedGraph = baseFocusedGraph;
-      }
-
-      if (!focusedGraph || !focusedGraph.nodes.length) {
-        if (isConnectionsView) {
-          setMapDataStatus(
-            "This wallet address wasn't found in the current token holder list.",
-          );
-        } else {
-          setTrackedTokenSupply(0);
-          setMapNodes([]);
-          setSummaryNodes([]);
-          setMapLinks([]);
-          setMapDataStatus(
-            "This wallet address wasn't found in the current token holder list.",
-          );
-        }
-        setIsMapLoading(false);
-        return;
-      }
-
-      const summaryBaseNodes =
-        isTopLevelTokenGraph && Array.isArray(mappedGraph?.nodes)
-          ? shouldApplyTopHoldersSeed
-            ? [
-                ...mappedGraph.nodes,
-                ...(Array.isArray(baseGraph?.nodes) ? baseGraph.nodes : []),
-              ]
-            : mappedGraph.nodes
-          : focusedGraph.nodes;
-
-      const mergedSummaryNodes =
-        shouldFetchTopHolders && Array.isArray(mappedGraph?.nodes)
-          ? mergeSummaryNodesWithTopHolders(
-              summaryBaseNodes,
-              topHoldersForSummary,
-              graphDecimals,
-            )
-          : summaryBaseNodes;
-
-      const resolvedMapLinks =
-        isTopLevelTokenGraph &&
-        isGraphMaxModeEnabled &&
-        Array.isArray(mappedGraph?.links)
-          ? mappedGraph.links
-          : focusedGraph.links;
-
-      applyResolvedGraphState({
-        focusedGraph,
-        summaryNodes: mergedSummaryNodes,
-        mapLinks: resolvedMapLinks,
-        baseGraph,
-        usedConnectionsTable,
-      });
-    }
-
-    fetchMapGraph().catch(() => {
-      if (!isMounted) return;
-      if (isConnectionsView) {
-        setIsUsingMockApiFallback(false);
-        setMapDataStatus(
-          "Couldn't process the wallet connections. Try selecting a different wallet.",
-        );
-      } else {
-        setIsUsingMockApiFallback(false);
-        setTrackedTokenSupply(0);
-        setMapNodes([]);
-        setSummaryNodes([]);
-        setMapLinks([]);
-        setMapDataStatus(
-          "Couldn't load the token holder map. Please refresh or try another token.",
-        );
-      }
-      setIsMapLoading(false);
-    });
-
-    return () => {
-      isMounted = false;
-    };
-  }, [
+  useTokenGraphLoader({
     activeGraphRootAddress,
-    activeTokenInfo?.currentSupply,
-    activeTokenInfo?.totalSupply,
-    apiTokenInfo?.decimals,
+    activeTokenInfo,
+    apiTokenInfo,
     graphEdgeLimit,
     graphNodeLimit,
+    isConnectionsView,
     isGraphEnrichmentEnabled,
     isGraphMaxModeEnabled,
-    isConnectionsView,
+    mapRefreshNonce,
     searchedRootAddress,
     selectedMockTokenData,
     selectedTokenSymbol,
-    mapRefreshNonce,
-  ]);
+    setConnectionsGraphContext,
+    setHoveredNode,
+    setIsGraphEnrichmentEnabled,
+    setIsGraphEnrichmentLoading,
+    setIsMapLoading,
+    setIsMapLoadingReadyState,
+    setIsUsingMockApiFallback,
+    setLastApiError,
+    setMapDataStatus,
+    setMapLinks,
+    setMapLoadingDisplayedPhase,
+    setMapLoadingEvidence,
+    setMapLoadingProfile,
+    setMapLoadingProgress,
+    setMapNodes,
+    setOverallMaxGraphStats,
+    setSelectedNode,
+    setSummaryNodes,
+    setTokenSelectorStatus,
+    setTrackedTokenSupply,
+  });
 
-  useEffect(() => {
-    let isActive = true;
-    let timeoutId;
-    let hasSuccessfulQuote = false;
-    let nextPollDelayMs = 5000;
+  useSoulPricePolling({
+    setLiveTokenInfo,
+    setPriceLastUpdatedAt,
+  });
 
-    function scheduleNextPoll(delayMs) {
-      if (!isActive) return;
-      const jitterMs = Math.floor(Math.random() * 3000);
-      timeoutId = window.setTimeout(fetchSoulPrice, delayMs + jitterMs);
-    }
+  useTrackedTokenPrice({
+    selectedTokenSymbol,
+    setPriceLastUpdatedAt,
+    setTrackedTokenQuotes,
+  });
 
-    async function fetchSoulPrice() {
-      try {
-        const backendResult = await fetchBackendTokenQuote(
-          TOKEN_INFO.name,
-          MAPS_API_BASE_URL,
-        ).catch(() => ({ ok: false, status: 0 }));
-        const primaryResult = backendResult.ok
-          ? backendResult
-          : await fetchCoinGeckoQuote(SOUL_PRICE_API_URL);
-        const explorerResult = primaryResult.ok
-          ? null
-          : await fetchExplorerTokenQuote(TOKEN_INFO.name, {
-              explorerUrl: PHANTASMA_EXPLORER_TOKEN_API_URL,
-            });
-
-        const winner = primaryResult.ok ? primaryResult : explorerResult;
-
-        if (!winner?.ok || !winner.quote) {
-          const retryAfterMs = primaryResult?.retryAfterMs || 0;
-          const hitRateLimit = primaryResult?.status === 429;
-
-          if (hitRateLimit) {
-            nextPollDelayMs =
-              retryAfterMs ||
-              Math.min(nextPollDelayMs * 2, SOUL_PRICE_MAX_BACKOFF_MS);
-          } else {
-            const bootstrapRetryFloorMs = 30000;
-            const retryFloorMs = hasSuccessfulQuote
-              ? SOUL_PRICE_BASE_POLL_INTERVAL_MS
-              : bootstrapRetryFloorMs;
-            nextPollDelayMs = Math.min(
-              Math.max(nextPollDelayMs * 2, retryFloorMs),
-              SOUL_PRICE_MAX_BACKOFF_MS,
-            );
-          }
-
-          scheduleNextPoll(nextPollDelayMs);
-          return;
-        }
-
-        if (!isActive) {
-          nextPollDelayMs = Math.max(
-            SOUL_PRICE_BASE_POLL_INTERVAL_MS,
-            nextPollDelayMs,
-          );
-          scheduleNextPoll(nextPollDelayMs);
-          return;
-        }
-
-        setLiveTokenInfo((current) => ({
-          ...current,
-          price: winner.quote.price,
-          priceChange24h: winner.quote.priceChange24h,
-        }));
-        hasSuccessfulQuote = true;
-        setPriceLastUpdatedAt(Date.now());
-        nextPollDelayMs = SOUL_PRICE_BASE_POLL_INTERVAL_MS;
-        scheduleNextPoll(nextPollDelayMs);
-      } catch {
-        // Keep last successful price if the API is unreachable.
-        const bootstrapRetryFloorMs = 30000;
-        const retryFloorMs = hasSuccessfulQuote
-          ? SOUL_PRICE_BASE_POLL_INTERVAL_MS
-          : bootstrapRetryFloorMs;
-        nextPollDelayMs = Math.min(
-          Math.max(nextPollDelayMs * 2, retryFloorMs),
-          SOUL_PRICE_MAX_BACKOFF_MS,
-        );
-        scheduleNextPoll(nextPollDelayMs);
-      }
-    }
-
-    fetchSoulPrice();
-
-    return () => {
-      isActive = false;
-      if (timeoutId) {
-        window.clearTimeout(timeoutId);
-      }
-    };
-  }, []);
-
-  useEffect(() => {
-    const normalizedTokenSymbol = String(selectedTokenSymbol || "")
-      .trim()
-      .toUpperCase();
-    if (!normalizedTokenSymbol || normalizedTokenSymbol === TOKEN_INFO.name) {
-      return undefined;
-    }
-
-    let isActive = true;
-    let timeoutId;
-    let hasSuccessfulQuote = false;
-    let retryDelayMs = TRACKED_TOKEN_PRICE_BOOTSTRAP_RETRY_MS;
-
-    async function fetchTrackedTokenPrice() {
-      let delayMs = SOUL_PRICE_BASE_POLL_INTERVAL_MS;
-      try {
-        const result = await fetchTrackedTokenQuote(normalizedTokenSymbol, {
-          ...TRACKED_TOKEN_PRICE_OPTIONS,
-          apiBaseUrl: MAPS_API_BASE_URL,
-        });
-        if (isActive && result.ok && result.quote) {
-          setTrackedTokenQuotes((current) => {
-            const previous = current[normalizedTokenSymbol];
-            const quote =
-              result.quote.priceChange24h === null &&
-              Number.isFinite(previous?.priceChange24h)
-                ? { ...result.quote, priceChange24h: previous.priceChange24h }
-                : result.quote;
-            return { ...current, [normalizedTokenSymbol]: quote };
-          });
-          setPriceLastUpdatedAt(Date.now());
-          hasSuccessfulQuote = true;
-          retryDelayMs = TRACKED_TOKEN_PRICE_BOOTSTRAP_RETRY_MS;
-        } else if (!hasSuccessfulQuote) {
-          // Until a first quote lands, retry quickly instead of waiting a full poll interval.
-          delayMs = Math.max(retryDelayMs, result?.retryAfterMs || 0);
-          retryDelayMs = Math.min(
-            retryDelayMs * 2,
-            SOUL_PRICE_BASE_POLL_INTERVAL_MS,
-          );
-        }
-      } catch {
-        if (!hasSuccessfulQuote) delayMs = retryDelayMs;
-      } finally {
-        if (isActive) {
-          timeoutId = window.setTimeout(fetchTrackedTokenPrice, delayMs);
-        }
-      }
-    }
-
-    fetchTrackedTokenPrice();
-
-    return () => {
-      isActive = false;
-      if (timeoutId) window.clearTimeout(timeoutId);
-    };
-  }, [selectedTokenSymbol]);
-
-  useEffect(() => {
-    let isActive = true;
-    let timeoutId = null;
-
-    async function fetchSyncStatus() {
-      const result = await fetchJsonWithTimeout(
-        buildSyncStatusEndpoint(MAPS_API_BASE_URL),
-        {},
-        MAPS_API_REQUEST_TIMEOUT_MS,
-      );
-
-      if (!isActive) return;
-
-      if (result.ok) {
-        const items = Array.isArray(result.payload?.items)
-          ? result.payload.items
-          : [];
-        const chainState = items.find(
-          (item) => String(item?.tokenSymbol || "") === "__chain__",
-        );
-        const nextHeight = Number(chainState?.lastBlockHeight);
-        const nextTargetHeight = Number(result.payload?.chainHeadBlockHeight);
-        const nextUpdatedAt = chainState?.updatedAt
-          ? new Date(chainState.updatedAt).getTime()
-          : null;
-
-        setBlockSyncHeight(Number.isFinite(nextHeight) ? nextHeight : null);
-        setBlockSyncTargetHeight(
-          Number.isFinite(nextTargetHeight) ? nextTargetHeight : null,
-        );
-        setBlockSyncUpdatedAt(
-          Number.isFinite(nextUpdatedAt) ? nextUpdatedAt : null,
-        );
-      } else {
-        setLastApiError(
-          buildApiErrorRecord(
-            result,
-            "sync-status",
-            "Sync status request failed",
-          ),
-        );
-      }
-
-      timeoutId = window.setTimeout(
-        fetchSyncStatus,
-        MAPS_API_SYNC_STATUS_POLL_INTERVAL_MS,
-      );
-    }
-
-    fetchSyncStatus().catch((error) => {
-      if (!isActive) return;
-      setLastApiError(
-        buildApiErrorRecord(error, "sync-status", "Sync status request failed"),
-      );
-      setBlockSyncHeight(null);
-      setBlockSyncTargetHeight(null);
-      setBlockSyncUpdatedAt(null);
-      timeoutId = window.setTimeout(
-        fetchSyncStatus,
-        MAPS_API_SYNC_STATUS_POLL_INTERVAL_MS,
-      );
-    });
-
-    return () => {
-      isActive = false;
-      if (timeoutId) {
-        window.clearTimeout(timeoutId);
-      }
-    };
-  }, []);
+  useSyncStatusPolling({
+    setBlockSyncHeight,
+    setBlockSyncTargetHeight,
+    setBlockSyncUpdatedAt,
+    setLastApiError,
+  });
 
   useEffect(() => {
     if (!isConnectionsView || !connectionsGraphContext) return;
@@ -2918,116 +1720,27 @@ export default function App() {
     isMobileViewport,
   ]);
 
-  useEffect(() => {
-    if (!selectedNode?.id) {
-      setSelectedNodeApiTransactions([]);
-      setSelectedNodeApiTransactionsTotal(0);
-      setSelectedNodeApiTransactionsError("");
-      setIsSelectedNodeTransactionsLoading(false);
-      return;
-    }
-
-    let isMounted = true;
-
-    async function fetchSelectedNodeTransactions() {
-      setIsSelectedNodeTransactionsLoading(true);
-      setSelectedNodeApiTransactionsError("");
-
-      const startTs = parseUtcDateTimeInput(transactionStartTime);
-      const endTs = parseUtcDateTimeInput(transactionEndTime);
-      const minAmount =
-        transactionMinAmount === "" ? null : Number(transactionMinAmount);
-      const maxAmount =
-        transactionMaxAmount === "" ? null : Number(transactionMaxAmount);
-      const minUsd =
-        transactionMinUsd === "" ? null : Number(transactionMinUsd);
-      const maxUsd =
-        transactionMaxUsd === "" ? null : Number(transactionMaxUsd);
-
-      const apiFilters = {
-        direction: transactionDirFilter,
-        counterparty: transactionCounterpartyFilter,
-        startTime: startTs === null ? "" : new Date(startTs).toISOString(),
-        endTime: endTs === null ? "" : new Date(endTs).toISOString(),
-        minAmount: Number.isFinite(minAmount) ? minAmount : null,
-        maxAmount: Number.isFinite(maxAmount) ? maxAmount : null,
-        minUsd: Number.isFinite(minUsd) ? minUsd : null,
-        maxUsd: Number.isFinite(maxUsd) ? maxUsd : null,
-        usdRateNow: Number.isFinite(Number(activeTokenInfo.price))
-          ? Number(activeTokenInfo.price)
-          : null,
-        sortBy:
-          transactionSortBy === "amount" || transactionSortBy === "time"
-            ? transactionSortBy
-            : null,
-        sortDir: transactionSortDirection,
-      };
-
-      try {
-        const pageData = await fetchTransactionsPageForAddressFromApi(
-          MAPS_API_BASE_URL,
-          MAPS_API_REQUEST_TIMEOUT_MS,
-          selectedNode.id,
-          selectedTokenSymbol,
-          {
-            page: transactionPage + 1,
-            pageSize: 100,
-            filters: apiFilters,
-          },
-        );
-
-        if (!isMounted) return;
-        setSelectedNodeApiTransactions(pageData.items);
-        setSelectedNodeApiTransactionsTotal(pageData.total);
-        setSelectedNodeApiTransactionsError("");
-      } catch (error) {
-        if (!isMounted) return;
-        setLastApiError(
-          buildApiErrorRecord(
-            error,
-            "transactions",
-            "Transactions API unavailable",
-          ),
-        );
-        setSelectedNodeApiTransactions([]);
-        setSelectedNodeApiTransactionsTotal(0);
-        if (isTokenNotFoundError(error)) {
-          setSelectedNodeApiTransactionsError(
-            buildTokenNotFoundStatus(selectedTokenSymbol, error),
-          );
-          return;
-        }
-        setSelectedNodeApiTransactionsError(
-          `Using graph-derived transfers (transactions API unavailable).${formatApiErrorMeta(error)}`,
-        );
-      } finally {
-        if (isMounted) {
-          setIsSelectedNodeTransactionsLoading(false);
-        }
-      }
-    }
-
-    fetchSelectedNodeTransactions();
-
-    return () => {
-      isMounted = false;
-    };
-  }, [
+  useSelectedNodeTransactions({
+    activeTokenInfo,
     selectedNode,
     selectedTokenSymbol,
-    transactionPage,
-    transactionDirFilter,
+    setIsSelectedNodeTransactionsLoading,
+    setLastApiError,
+    setSelectedNodeApiTransactions,
+    setSelectedNodeApiTransactionsError,
+    setSelectedNodeApiTransactionsTotal,
     transactionCounterpartyFilter,
-    transactionStartTime,
+    transactionDirFilter,
     transactionEndTime,
-    transactionMinAmount,
     transactionMaxAmount,
-    transactionMinUsd,
     transactionMaxUsd,
+    transactionMinAmount,
+    transactionMinUsd,
+    transactionPage,
     transactionSortBy,
     transactionSortDirection,
-    activeTokenInfo.price,
-  ]);
+    transactionStartTime,
+  });
 
   useEffect(() => {
     setTransactionPage(0);
@@ -3629,76 +2342,14 @@ export default function App() {
     };
   }, []);
 
-  useEffect(() => {
-    if (!selectedNode?.id || !selectedTokenSymbol) {
-      setSelectedNodeSparkline([]);
-      setIsSelectedNodeActivityLoading(false);
-      return;
-    }
-
-    let isMounted = true;
-    const cacheKey = `${selectedTokenSymbol}:${selectedNode.id}:30`;
-    const cachedEntry = selectedNodeActivityCacheRef.current.get(cacheKey);
-    const now = Date.now();
-    const cacheTtlMs = 2 * 60 * 1000;
-
-    if (cachedEntry?.items?.length) {
-      setSelectedNodeSparkline(cachedEntry.items);
-      const isFresh = now - Number(cachedEntry.fetchedAt || 0) < cacheTtlMs;
-      if (isFresh) {
-        setIsSelectedNodeActivityLoading(false);
-        return () => {
-          isMounted = false;
-        };
-      }
-    } else {
-      setSelectedNodeSparkline([]);
-    }
-
-    setIsSelectedNodeActivityLoading(true);
-    const endpoint = buildActivityEndpoint(
-      MAPS_API_BASE_URL,
-      selectedNode.id,
-      selectedTokenSymbol,
-      30,
-    );
-
-    fetchJsonWithTimeout(endpoint, {}, MAPS_API_REQUEST_TIMEOUT_MS)
-      .then((result) => {
-        if (!isMounted) return;
-        if (result.ok && Array.isArray(result.payload?.items)) {
-          const items = result.payload.items;
-          setSelectedNodeSparkline(items);
-          selectedNodeActivityCacheRef.current.set(cacheKey, {
-            items,
-            fetchedAt: Date.now(),
-          });
-        } else {
-          if (isTokenNotFoundError(result)) {
-            setLastApiError(
-              buildApiErrorRecord(
-                result,
-                "activity",
-                "Token activity is not available in the database",
-              ),
-            );
-          }
-          setSelectedNodeSparkline([]);
-        }
-      })
-      .catch(() => {
-        if (!isMounted) return;
-        setSelectedNodeSparkline([]);
-      })
-      .finally(() => {
-        if (!isMounted) return;
-        setIsSelectedNodeActivityLoading(false);
-      });
-
-    return () => {
-      isMounted = false;
-    };
-  }, [selectedNode?.id, selectedTokenSymbol]);
+  useSelectedNodeActivity({
+    selectedNode,
+    selectedNodeActivityCacheRef,
+    selectedTokenSymbol,
+    setIsSelectedNodeActivityLoading,
+    setLastApiError,
+    setSelectedNodeSparkline,
+  });
 
   const clearActiveContext = useCallback(() => {
     if (isCommandPaletteOpen) {
@@ -4435,98 +3086,18 @@ export default function App() {
     trustStatus.apiHealthy,
   ]);
 
-  useEffect(() => {
-    if (!isTraceToolOpen) {
-      setIsTraceDbPathsLoading(false);
-      return undefined;
-    }
-
-    if (
-      !traceFromAddress ||
-      !traceToAddress ||
-      traceFromAddress === traceToAddress
-    ) {
-      setTraceDbPaths([]);
-      setIsTraceDbPathsLoading(false);
-      setSelectedTraceDbPathKey("");
-      return;
-    }
-
-    let isMounted = true;
-    setIsTraceDbPathsLoading(true);
-
-    (async () => {
-      try {
-        const result = await fetchTracePathsFromApi(
-          MAPS_API_BASE_URL,
-          MAPS_API_REQUEST_TIMEOUT_MS,
-          selectedTokenSymbol,
-          traceFromAddress,
-          traceToAddress,
-          {
-            maxHops: 8,
-            limit: 500,
-            stopAtTerminals: traceStopMode === "terminal",
-          },
-        );
-
-        if (!isMounted) return;
-        const items = Array.isArray(result?.items) ? result.items : [];
-        setTraceDbPaths(items);
-        setSelectedTraceDbPathKey((current) => {
-          if (!current) {
-            return "";
-          }
-          return items.some(
-            (item) => (item?.nodePath || []).join("->") === current,
-          )
-            ? current
-            : "";
-        });
-
-        if (items.length) {
-          const shortestHops = Math.min(
-            ...items.map((item) => Number(item?.hopCount) || 0),
-          );
-          setTraceStatusMessage(
-            traceStopMode === "terminal"
-              ? `Database found ${items.length.toLocaleString()} path(s). Shortest path is ${shortestHops} hop(s). Paths end at the destination or at hub/high inbound/high outbound wallets.`
-              : `Database found ${items.length.toLocaleString()} path(s). Shortest path is ${shortestHops} hop(s). Terminal hubs/high inbound/high outbound can be traversed in this mode.`,
-          );
-        } else {
-          setTraceStatusMessage(
-            traceStopMode === "terminal"
-              ? "Database search found no paths under destination-or-terminal stop rules."
-              : "Database search found no paths under pass-through mode.",
-          );
-        }
-      } catch (error) {
-        if (!isMounted) return;
-        setTraceDbPaths([]);
-        setSelectedTraceDbPathKey("");
-        setTraceStatusMessage(
-          error instanceof Error
-            ? `Database path search failed: ${error.message}`
-            : "Database path search failed.",
-        );
-      } finally {
-        if (isMounted) {
-          setIsTraceDbPathsLoading(false);
-        }
-      }
-    })();
-
-    return () => {
-      isMounted = false;
-    };
-  }, [
+  useTraceDbPaths({
     isTraceToolOpen,
     selectedTokenSymbol,
+    setIsTraceDbPathsLoading,
+    setSelectedTraceDbPathKey,
+    setTraceDbPaths,
+    setTraceStatusMessage,
+    traceFromAddress,
     traceSearchNonce,
     traceStopMode,
-    traceFromAddress,
     traceToAddress,
-  ]);
+  });
 
   useEffect(() => {
     let isMounted = true;
@@ -4590,69 +3161,13 @@ export default function App() {
     return tokenSnapshots[compareKey] || null;
   }, [compareTokenSymbol, tokenSnapshots]);
 
-  useEffect(() => {
-    let isMounted = true;
-
-    async function ensureCompareSnapshot() {
-      const compareKey = String(compareTokenSymbol || "").trim();
-      if (!compareKey) {
-        setCompareSnapshotStatus("");
-        return;
-      }
-
-      setCompareSnapshotStatus(`Loading ${compareKey} snapshot...`);
-
-      const result = await fetchTokenSnapshot(
-        MAPS_API_BASE_URL,
-        MAPS_API_REQUEST_TIMEOUT_MS,
-        compareKey,
-      );
-
-      if (!isMounted) return;
-
-      if (result.snapshot) {
-        setTokenSnapshots((current) => ({
-          ...current,
-          [compareKey]:
-            normalizeTokenSnapshot(result.snapshot) || result.snapshot,
-        }));
-        setTokenSnapshotHistory((current) =>
-          mergeSnapshotIntoHistory(current, compareKey, result.snapshot),
-        );
-        setCompareSnapshotStatus(
-          result.fallbackUsed ? "Using fallback snapshot data." : "",
-        );
-        return;
-      }
-
-      if (result.isTokenNotFound) {
-        setLastApiError(
-          buildApiErrorRecord(
-            result.error,
-            "snapshot",
-            "Token snapshot is not available in the database",
-          ),
-        );
-        setCompareSnapshotStatus(
-          buildTokenNotFoundStatus(compareKey, result.error),
-        );
-        return;
-      }
-
-      setCompareSnapshotStatus(`Unable to load ${compareKey} snapshot.`);
-    }
-
-    ensureCompareSnapshot().catch(() => {
-      if (!isMounted) return;
-      const compareKey = String(compareTokenSymbol || "").trim();
-      if (!compareKey) return;
-      setCompareSnapshotStatus(`Unable to load ${compareKey} snapshot.`);
-    });
-
-    return () => {
-      isMounted = false;
-    };
-  }, [compareTokenSymbol]);
+  useCompareSnapshot({
+    compareTokenSymbol,
+    setCompareSnapshotStatus,
+    setLastApiError,
+    setTokenSnapshotHistory,
+    setTokenSnapshots,
+  });
 
   const saveCurrentView = useCallback(() => {
     const label = String(savedViewName || "").trim();
@@ -4790,65 +3305,24 @@ export default function App() {
     setIsExportPresetsOpen(false);
   }
 
-  useEffect(() => {
-    if (
-      !isSavedViewsOpen &&
-      !isCompareModeOpen &&
-      !isDiagnosticsOpen &&
-      !isExportPresetsOpen
-    ) {
-      return undefined;
-    }
-
-    function handlePointerDown(event) {
-      const target = event.target;
-      const popoutConfigs = [
-        {
-          isOpen: isSavedViewsOpen,
-          popoutRef: savedViewsPopoutRef,
-          triggerRef: savedViewsButtonRef,
-          close: () => setIsSavedViewsOpen(false),
-        },
-        {
-          isOpen: isCompareModeOpen,
-          popoutRef: comparePopoutRef,
-          triggerRef: compareButtonRef,
-          close: () => setIsCompareModeOpen(false),
-        },
-        {
-          isOpen: isDiagnosticsOpen,
-          popoutRef: diagnosticsPopoutRef,
-          triggerRef: diagnosticsButtonRef,
-          close: () => setIsDiagnosticsOpen(false),
-        },
-        {
-          isOpen: isExportPresetsOpen,
-          popoutRef: exportPresetsPopoutRef,
-          triggerRef: exportPresetsButtonRef,
-          close: () => setIsExportPresetsOpen(false),
-        },
-      ];
-
-      popoutConfigs.forEach((config) => {
-        if (!config.isOpen) return;
-
-        const isInsidePopout = config.popoutRef.current?.contains(target);
-        const isOnTrigger = config.triggerRef.current?.contains(target);
-        if (isInsidePopout || isOnTrigger) return;
-
-        config.close();
-      });
-    }
-
-    document.addEventListener("pointerdown", handlePointerDown, true);
-    return () =>
-      document.removeEventListener("pointerdown", handlePointerDown, true);
-  }, [
+  usePopoutDismissal({
+    compareButtonRef,
+    comparePopoutRef,
+    diagnosticsButtonRef,
+    diagnosticsPopoutRef,
+    exportPresetsButtonRef,
+    exportPresetsPopoutRef,
     isCompareModeOpen,
     isDiagnosticsOpen,
     isExportPresetsOpen,
     isSavedViewsOpen,
-  ]);
+    savedViewsButtonRef,
+    savedViewsPopoutRef,
+    setIsCompareModeOpen,
+    setIsDiagnosticsOpen,
+    setIsExportPresetsOpen,
+    setIsSavedViewsOpen,
+  });
 
   useEffect(() => {
     if (!isTraceToolOpen) return undefined;
