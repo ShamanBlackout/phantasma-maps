@@ -839,6 +839,113 @@ test("keeps the graph and selection while metadata arrives and supply is polled"
   }
 });
 
+test.each([{ baselineBalance: 414 }, {}])(
+  "top movers display the API or derived baseline balance rather than zero: %j",
+  async (baseline) => {
+    const defaultFetch = global.fetch;
+    global.fetch = vi.fn(async (input) => {
+      if (String(input).includes("/top-movers")) {
+        return {
+          ok: true,
+          status: 200,
+          headers: { get: () => null },
+          json: async () => ({
+            items: [{
+              address: "P2K8mNxHvT3qAaBpFsuWcY9JeGKd4kQ7Rmj6CiDyEF",
+              ...baseline,
+              latestBalance: 400,
+              deltaBalance: -14,
+              deltaPct: -3.3816425120772946,
+            }],
+          }),
+        };
+      }
+      return defaultFetch(input);
+    });
+    render(<App />);
+    expect(
+      await screen.findByTitle("Changed from 414.00 to 400.00"),
+    ).toBeInTheDocument();
+  },
+);
+
+test("top movers omit invalid pseudo-addresses from wallet actions", async () => {
+  const defaultFetch = global.fetch;
+  global.fetch = vi.fn(async (input, ...args) => {
+    if (String(input).includes("/top-movers")) {
+      return {
+        ok: true,
+        status: 200,
+        headers: { get: () => null },
+        json: async () => ({
+          items: [
+            {
+              address: "token",
+              baselineBalance: 8,
+              latestBalance: 10,
+              deltaBalance: 2,
+            },
+            {
+              address: "P2K8mNxHvT3qAaBpFsuWcY9JeGKd4kQ7Rmj6CiDyEF",
+              baselineBalance: 8,
+              latestBalance: 10,
+              deltaBalance: 2,
+            },
+          ],
+        }),
+      };
+    }
+
+    return defaultFetch(input, ...args);
+  });
+  const { container } = render(<App />);
+
+  expect(
+    await screen.findByTitle("Changed from 8.00 to 10.00"),
+  ).toBeInTheDocument();
+  expect(screen.queryByText("token", { exact: true })).not.toBeInTheDocument();
+  expect(
+    container.querySelectorAll(
+      '[title="Open connections view for this address"]',
+    ),
+  ).toHaveLength(1);
+});
+
+test("does not show a mock market quote while the live quote is loading", async () => {
+  const defaultFetch = global.fetch;
+  let resolveQuote;
+  global.fetch = vi.fn((input, ...args) => {
+    if (String(input).includes("/prices/")) {
+      return new Promise((resolve) => {
+        resolveQuote = resolve;
+      });
+    }
+
+    return defaultFetch(input, ...args);
+  });
+  const { container } = render(<App />);
+
+  await waitFor(() => expect(resolveQuote).toBeTypeOf("function"));
+  const marketPrice = container.querySelector(
+    ".header-status-chip-market .header-status-chip-value",
+  );
+  expect(marketPrice).toHaveTextContent("N/A");
+  expect(marketPrice).not.toHaveTextContent("0.423");
+
+  await act(async () => {
+    resolveQuote({
+      ok: true,
+      status: 200,
+      headers: { get: () => null },
+      json: async () => ({
+        data: { priceUsd: 0.5, priceChange24h: 1.25 },
+      }),
+    });
+  });
+
+  await waitFor(() => expect(marketPrice).toHaveTextContent("$0.5000"));
+});
+
 test("filtered transactions preset downloads a CSV", async () => {
   const user = userEvent.setup();
   const createObjectURL = vi.fn(() => "blob:test");

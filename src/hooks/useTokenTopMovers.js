@@ -10,6 +10,8 @@ import {
   isTokenNotFoundError,
 } from "../api/apiErrors";
 
+const PHANTASMA_ADDRESS_PATTERN = /^[PS][a-zA-Z0-9]{20,}$/;
+
 export default function useTokenTopMovers({
   selectedTokenSymbol,
   setIsTokenTopMoversLoading,
@@ -59,7 +61,10 @@ export default function useTokenTopMovers({
                 item?.latestBalance ?? item?.latest_balance ?? 0,
               );
               const parsedPreviousBalance = Number(
-                item?.previousBalance ?? item?.previous_balance ?? 0,
+                item?.baselineBalance ??
+                  item?.baseline_balance ??
+                  item?.previousBalance ??
+                  item?.previous_balance,
               );
               const parsedDeltaBalance = Number(
                 item?.deltaBalance ?? item?.delta_balance ?? 0,
@@ -89,7 +94,7 @@ export default function useTokenTopMovers({
                 label: String(item?.label || item?.name || "").trim(),
               };
             })
-            .filter((item) => item.address);
+            .filter((item) => PHANTASMA_ADDRESS_PATTERN.test(item.address));
 
           normalizedByHorizon[horizon] = normalizedItems;
         });

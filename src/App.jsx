@@ -184,7 +184,11 @@ export default function App() {
     setTransactionPage,
     resetTransactionState,
   } = useTransactionState();
-  const [liveTokenInfo, setLiveTokenInfo] = useState(TOKEN_INFO);
+  const [liveTokenInfo, setLiveTokenInfo] = useState(() => ({
+    ...TOKEN_INFO,
+    price: null,
+    priceChange24h: null,
+  }));
   const [trackedTokenQuotes, setTrackedTokenQuotes] = useState({});
   const [selectedTokenSymbol, setSelectedTokenSymbol] = useState(() => {
     const urlToken = initialUrlParams.tokenSymbol;

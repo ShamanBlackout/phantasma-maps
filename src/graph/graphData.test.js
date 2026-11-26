@@ -4,6 +4,48 @@ import {
   buildNeighborFocusedGraph,
   buildTracePathGraph,
 } from "./graphData";
+import { buildTopHoldersConnectionsGraph } from "./graphBuilders";
+
+test("holder enrichment counts normalized bidirectional connections once", () => {
+  const graph = buildTopHoldersConnectionsGraph({
+    topHolders: [
+      { address: "PA", netBalance: "600000000" },
+      { address: "PB", netBalance: "400000000" },
+    ],
+    connectionsByAddress: [
+      { address: "PA", items: [{ counterparty: "PB", totalVolume: 1.25, transactionCount: 2 }] },
+      { address: "PB", items: [{ counterparty: "PA", totalVolume: 1.25, transactionCount: 2 }] },
+    ],
+    currentSupply: 10,
+    decimals: 8,
+  });
+  expect(graph.links).toHaveLength(1);
+  expect(graph.links[0]).toMatchObject({
+    transactionVolume: 1.25,
+    bidirectional: true,
+  });
+  expect(graph.nodes.map(({ value, transactionCount }) => [value, transactionCount]))
+    .toEqual([[6, 2], [4, 2]]);
+});
+
+test("holder enrichment never substitutes transfer volume for wallet balance", () => {
+  const graph = buildTopHoldersConnectionsGraph({
+    topHolders: [{ address: "PA", netBalance: "600000000" }],
+    connectionsByAddress: [{
+      address: "PA",
+      items: [
+        { counterparty: "PB", totalVolume: 1000, transactionCount: 2 },
+        { counterparty: "PC", totalVolume: 10, transactionCount: 1 },
+      ],
+    }],
+    fallbackGraph: { nodes: [{ id: "PB", value: 2 }] },
+    currentSupply: 10,
+    decimals: 8,
+  });
+  expect(graph.nodes.map(({ id, value }) => [id, value]))
+    .toEqual([["PA", 6], ["PB", 2], ["PC", 0]]);
+  expect(graph.totalValue).toBe(8);
+});
 
 test("normalizes API balances and combines parallel directed edges", () => {
   const graph = buildGraphDataFromApi(

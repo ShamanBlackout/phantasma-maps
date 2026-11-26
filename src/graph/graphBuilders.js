@@ -87,7 +87,7 @@ export function buildTopHoldersConnectionsGraph({
   const fallbackNodeById = new Map(
     fallbackNodes.map((node) => [String(node?.id || "").trim(), node]),
   );
-  const nodeVolumeMap = new Map();
+  const nodeBalanceMap = new Map();
   const nodeStatsMap = new Map();
   const nodeTransactionCountMap = new Map();
   const linkMap = new Map();
@@ -101,12 +101,6 @@ export function buildTopHoldersConnectionsGraph({
       });
     }
     return nodeStatsMap.get(nodeId);
-  }
-
-  function addVolume(nodeId, value) {
-    const safeValue = Number(value) || 0;
-    if (safeValue <= 0) return;
-    nodeVolumeMap.set(nodeId, (nodeVolumeMap.get(nodeId) || 0) + safeValue);
   }
 
   function addTransactionCount(nodeId, count) {
@@ -129,7 +123,7 @@ export function buildTopHoldersConnectionsGraph({
     if (!holderId) return;
 
     const holderValue = normalizeAmount(item?.netBalance) / divisor;
-    addVolume(holderId, holderValue);
+    nodeBalanceMap.set(holderId, holderValue);
     ensureStats(holderId);
   });
 
@@ -142,18 +136,20 @@ export function buildTopHoldersConnectionsGraph({
       const counterpartyId = String(entry?.counterparty || "").trim();
       if (!counterpartyId || counterpartyId === holderId) return;
 
-      const rawVolume = normalizeAmount(entry?.totalVolume);
-      const normalizedVolume = rawVolume / divisor;
+      // Connection summaries are already normalized and include both directions.
+      const normalizedVolume = normalizeAmount(entry?.totalVolume);
       const txCount = Math.max(
         1,
         Math.floor(Number(entry?.transactionCount) || 0),
       );
-      const linkKey = `${holderId}->${counterpartyId}`;
+      const linkKey = [holderId, counterpartyId].sort().join("->");
+      if (linkMap.has(linkKey)) return;
 
-      // Keep holder amount balance-based; connection volume should not inflate it.
-      // Skip counterparties that are already top holders — their balance is tracked from holderItems.
       if (!holderAddressSet.has(counterpartyId)) {
-        addVolume(counterpartyId, normalizedVolume);
+        nodeBalanceMap.set(
+          counterpartyId,
+          normalizeAmount(fallbackNodeById.get(counterpartyId)?.value),
+        );
       }
 
       const holderStats = ensureStats(holderId);
@@ -166,35 +162,25 @@ export function buildTopHoldersConnectionsGraph({
       counterpartyStats.receivedTransactions += txCount;
       addTransactionCount(counterpartyId, txCount);
 
-      const existingLink = linkMap.get(linkKey);
-      if (existingLink) {
-        existingLink.transactionVolume += normalizedVolume;
-        existingLink.sentTransactions += txCount;
-        existingLink.receivedTransactions += txCount;
-      } else {
-        linkMap.set(linkKey, {
-          source: holderId,
-          target: counterpartyId,
-          transactionVolume: normalizedVolume,
-          sentTransactions: txCount,
-          receivedTransactions: txCount,
-          transactionHash: "",
-        });
-      }
+      linkMap.set(linkKey, {
+        source: holderId,
+        target: counterpartyId,
+        bidirectional: true,
+        transactionVolume: normalizedVolume,
+        sentTransactions: txCount,
+        receivedTransactions: txCount,
+        transactionHash: "",
+      });
     });
   });
 
-  if (!nodeVolumeMap.size) {
+  if (!nodeBalanceMap.size) {
     return null;
   }
 
-  const nodes = [...nodeVolumeMap.entries()]
-    .map(([nodeId, fallbackValue]) => {
+  const nodes = [...nodeBalanceMap.entries()]
+    .map(([nodeId, value]) => {
       const fallbackNode = fallbackNodeById.get(nodeId);
-      const value = Math.max(
-        Number(fallbackNode?.value || 0),
-        Number(fallbackValue || 0),
-      );
       const pct = totalSupply > 0 ? (value / totalSupply) * 100 : 0;
       const stats = ensureStats(nodeId);
 

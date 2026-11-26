@@ -62,6 +62,9 @@ Application startup proceeds in this order:
 
     Once graph data is loaded, App normalizes balances, converts API payloads into D3-friendly nodes and links, applies search and legend filters, and passes the filtered graph into BubbleMap.
     Metadata and supply polling update the displayed shares without re-fetching the graph or clearing the selected wallet.
+    Top-mover balance comparisons use the API's baselineBalance together with latestBalance and deltaBalance.
+    Nonzero token and USD amounts below 0.01 use scientific notation rather than rounding to zero; exports retain the numeric values.
+    Enhanced graphs show each bidirectional wallet connection once, with already-normalized volume. Connection volume never substitutes for a wallet balance; unknown counterparty balances use zero until known.
 
 DATA FLOW
 Live graph path:

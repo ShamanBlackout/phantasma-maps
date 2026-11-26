@@ -28,6 +28,7 @@ export function parseTimestampMs(rawTimestamp) {
 
 export function fmtTokenAmount(n) {
   if (!Number.isFinite(n)) return "0";
+  if (n !== 0 && Math.abs(n) < 0.01) return n.toExponential(2);
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`;
   if (n >= 1_000) return `${(n / 1_000).toFixed(2)}K`;
   return n.toFixed(2);
@@ -35,6 +36,7 @@ export function fmtTokenAmount(n) {
 
 export function fmtUsdAmount(n) {
   if (!Number.isFinite(n)) return "$0.00";
+  if (n !== 0 && Math.abs(n) < 0.01) return `$${n.toExponential(2)}`;
   if (n >= 1_000_000) return `$${(n / 1_000_000).toFixed(2)}M`;
   if (n >= 1_000) return `$${(n / 1_000).toFixed(2)}K`;
   return `$${n.toFixed(2)}`;
