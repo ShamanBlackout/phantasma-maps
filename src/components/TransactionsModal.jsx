@@ -92,6 +92,8 @@ function TransactionsModal({
 
   if (!isOpen || !selectedNode) return null;
 
+  const isExportDisabled =
+    isTransactionsExporting || isSelectedNodeTransactionsLoading;
   const activeFilterChips = [];
   if (hasDirFilter) {
     activeFilterChips.push({
@@ -185,7 +187,12 @@ function TransactionsModal({
                   type="button"
                   className="transactions-export-btn"
                   onClick={() => setIsExportMenuOpen((open) => !open)}
-                  disabled={isTransactionsExporting}
+                  disabled={isExportDisabled}
+                  title={
+                    isSelectedNodeTransactionsLoading
+                      ? "Available once transactions finish loading"
+                      : undefined
+                  }
                 >
                   {isTransactionsExporting ? "Exporting..." : "Export"}
                 </button>
@@ -195,7 +202,7 @@ function TransactionsModal({
                       type="button"
                       className="transactions-export-item"
                       onClick={() => exportTransactions("json")}
-                      disabled={isTransactionsExporting}
+                      disabled={isExportDisabled}
                     >
                       Export JSON
                     </button>
@@ -203,7 +210,7 @@ function TransactionsModal({
                       type="button"
                       className="transactions-export-item"
                       onClick={() => exportTransactions("excel")}
-                      disabled={isTransactionsExporting}
+                      disabled={isExportDisabled}
                     >
                       Export Excel
                     </button>
