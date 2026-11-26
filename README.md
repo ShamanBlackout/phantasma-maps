@@ -208,7 +208,25 @@ src/index.jsx
 React entry point.
 
     src/App.jsx
-    	Application shell, state container, API integration, data normalization, filtering, export logic, and modal orchestration.
+    	Application shell: state container, effects (API polling, graph loading, price refresh), filtering, export logic, and modal orchestration.
+
+    src/config/appConfig.js
+    	Storage keys, environment parsing (VITE_/REACT_APP_ variables), API limits, map-loading thresholds, and trace-path constants.
+
+    src/api/apiErrors.js
+    	Normalizes API failures into status/error records and detects token-not-found responses.
+
+    src/graph/graphBuilders.js
+    	Builds top-holder and connection graphs, caps graphs for display, and provides mock graph data.
+
+    src/graph/tokenSnapshots.js
+    	Captures, normalizes, and stores per-token snapshots used by the compare view.
+
+    src/lib/format.js
+    	Number, percentage, UTC date, CSV, and export-filename formatting plus address/integer validation.
+
+    src/lib/color.js
+    	Deterministic hue hashing and HSL-to-RGB conversion for trace-path colors.
 
     src/components/Header.jsx
     	Header UI for search, theme selection, sync badge, and price display.
@@ -251,7 +269,7 @@ React entry point.
 
 FUNCTION INDEX
 
-src/App.jsx
+src/config/appConfig.js
 parseEnvMs(raw, fallbackMs)
 Reads a positive numeric environment value in milliseconds and falls back if the value is missing or invalid.
 
@@ -261,6 +279,30 @@ Reads a positive numeric environment value in milliseconds and falls back if the
     parseEnvString(raw, fallbackValue)
     	Reads and trims a string environment value, removing wrapping quotes when present.
 
+src/lib/format.js
+parseTimestampMs(rawTimestamp)
+Parses a timestamp into milliseconds, defaulting to now if parsing fails.
+
+    fmtTokenAmount(n)
+    	Formats token balances into compact human-readable values.
+
+    fmtUsdAmount(n)
+    	Formats USD values into compact human-readable values.
+
+    fmtSharePct(value, currentSupply, fallbackPct)
+    	Formats a wallet share percentage using supply when available.
+
+    toUtcDateTimeInputValue(timestamp)
+    	Converts a timestamp into the UTC value used by the datetime-local filter inputs.
+
+    makeExportFileName(selectedNode, ext)
+    	Creates a timestamped export filename for transaction downloads.
+
+src/graph/graphBuilders.js
+getMockTokenData(tokenSymbol)
+Returns a normalized mock dataset for the requested symbol.
+
+src/App.jsx
     parseRetryAfterMs(response)
     	Converts an HTTP Retry-After header into milliseconds when the backend or upstream rate-limits requests.
 
@@ -305,27 +347,6 @@ Reads a positive numeric environment value in milliseconds and falls back if the
 
     buildConnectionsGraphFromTransactions(transactions, rootAddress, fallbackGraph, currentSupply)
     	Creates a wallet-centered graph directly from transaction history, preserving known node metadata from the graph payload when available.
-
-    parseTimestampMs(rawTimestamp)
-    	Parses a timestamp into milliseconds, defaulting to now if parsing fails.
-
-    getMockTokenData(tokenSymbol)
-    	Returns a normalized mock dataset for the requested symbol.
-
-    fmtTokenAmount(n)
-    	Formats token balances into compact human-readable values.
-
-    fmtUsdAmount(n)
-    	Formats USD values into compact human-readable values.
-
-    fmtSharePct(value, currentSupply, fallbackPct)
-    	Formats a wallet share percentage using supply when available.
-
-    toDateTimeLocalValue(timestamp)
-    	Converts a timestamp into the HTML datetime-local control format.
-
-    makeExportFileName(selectedNode, ext)
-    	Creates a timestamped export filename for transaction downloads.
 
     App()
     	The main application component. It owns global state, handles API polling, transforms graph data, coordinates selection and filtering, manages the transfers modal, and renders Header, BubbleMap, and StatsPanel.
