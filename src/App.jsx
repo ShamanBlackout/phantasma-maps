@@ -12,6 +12,7 @@ import TransactionsModal from "./components/TransactionsModal";
 import SelectedNodeCard from "./components/SelectedNodeCard";
 import useTransactionState from "./hooks/useTransactionState";
 import { readUrlParams } from "./hooks/useUrlState";
+import { ONBOARDING_TUTORIAL_STEPS } from "./data/onboardingSteps";
 import { fetchJsonWithTimeout } from "./api/http";
 import {
   DEFAULT_COINGECKO_SOUL_PRICE_URL,
@@ -76,7 +77,6 @@ const ALLOWED_COLOR_THEMES = new Set([
   "ghost-blue",
   "kcal-red",
 ]);
-const ONBOARDING_TUTORIAL_STEPS = [];
 
 function parseEnvMs(raw, fallbackMs) {
   const parsed = Number(raw);

@@ -683,6 +683,25 @@ test("supports onboarding dismissal and search keyboard shortcut", async () => {
   });
 });
 
+test("guided tour walks through the tutorial steps", async () => {
+  const user = userEvent.setup();
+  render(<App />);
+
+  await user.click(
+    await screen.findByRole("button", { name: /I'm New Here/i }),
+  );
+
+  const tour = await screen.findByRole("dialog", { name: "Search Bar" });
+  expect(within(tour).getByText(/Step 1 of 12/i)).toBeInTheDocument();
+  expect(within(tour).getByRole("button", { name: "Previous" })).toBeDisabled();
+
+  await user.click(within(tour).getByRole("button", { name: "Next" }));
+  expect(
+    screen.getByRole("dialog", { name: "Graph Settings" }),
+  ).toBeInTheDocument();
+  expect(screen.getByText(/Step 2 of 12/i)).toBeInTheDocument();
+});
+
 test("renders stable shell across key viewport classes", async () => {
   const viewportCases = [
     { name: "desktop", matchesMobile: false },
