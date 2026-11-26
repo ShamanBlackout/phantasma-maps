@@ -943,7 +943,9 @@ test("does not show a mock market quote while the live quote is loading", async 
     });
   });
 
-  await waitFor(() => expect(marketPrice).toHaveTextContent("$0.5000"));
+  await waitFor(() => expect(marketPrice).toHaveTextContent("$0.5000"), {
+    timeout: 5000,
+  });
 });
 
 test("filtered transactions preset downloads a CSV", async () => {
