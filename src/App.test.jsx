@@ -73,6 +73,7 @@ beforeAll(() => {
 
 beforeEach(() => {
   window.localStorage.clear();
+  window.history.replaceState(null, "", "/");
   window.matchMedia = createMatchMedia();
   global.matchMedia = window.matchMedia;
 
@@ -700,6 +701,18 @@ test("guided tour walks through the tutorial steps", async () => {
     screen.getByRole("dialog", { name: "Graph Settings" }),
   ).toBeInTheDocument();
   expect(screen.getByText(/Step 2 of 12/i)).toBeInTheDocument();
+});
+
+test("keeps the address bar in sync with the current view", async () => {
+  window.history.replaceState(null, "", "/?token=KCAL&q=whale");
+  render(<App />);
+
+  await waitFor(() => {
+    const params = new URLSearchParams(window.location.search);
+    expect(params.get("token")).toBe("KCAL");
+    expect(params.get("view")).toBe("token");
+  });
+  expect(new URLSearchParams(window.location.search).get("q")).toBe("whale");
 });
 
 test("renders stable shell across key viewport classes", async () => {

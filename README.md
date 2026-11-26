@@ -222,6 +222,12 @@ React entry point.
     src/data/mockData.js
     	Mock token datasets and helper functions used when live API data is unavailable.
 
+    src/data/onboardingSteps.js
+    	Guided tour steps (title, detail, tip, and the UI target each step highlights).
+
+    src/hooks/useUrlState.js
+    	Reads the initial view from the query string and keeps the address bar in sync with it.
+
     src/theme/holderPalettes.js
     	Color palettes and graph styling presets by theme.
 
@@ -462,6 +468,9 @@ The app supports dark, light, ghost-blue, and kcal-red visual themes. Theme stat
 
     Connection focus
     	Connection mode is wallet-centric and can be built from paginated transactions even when the address graph payload is insufficiently detailed by itself.
+
+    Shareable URLs
+    	The query string tracks the current view (token, node, address, view, q, legend, density, txdir, txcp, tfrom, tto, tstop, tpath) via history.replaceState, so copying the address bar reproduces it.
 
     Mobile behavior
     	On mobile, the layout stacks vertically, pan hints remain available, and the stats panel becomes full width below the graph.

@@ -11,7 +11,7 @@ import StatsPanel from "./components/StatsPanel";
 import TransactionsModal from "./components/TransactionsModal";
 import SelectedNodeCard from "./components/SelectedNodeCard";
 import useTransactionState from "./hooks/useTransactionState";
-import { readUrlParams } from "./hooks/useUrlState";
+import useUrlState, { readUrlParams } from "./hooks/useUrlState";
 import { ONBOARDING_TUTORIAL_STEPS } from "./data/onboardingSteps";
 import { fetchJsonWithTimeout } from "./api/http";
 import {
@@ -1935,6 +1935,49 @@ export default function App() {
       setActiveMotionCue("");
     }, 420);
   }, []);
+
+  const urlStateOptions = useMemo(
+    () => ({
+      isConnectionsView,
+      searchQuery,
+      activeLegendFilter: activeHolderTypeFilter,
+      densityMode,
+      transactionDirFilter,
+      transactionCounterpartyFilter,
+      traceFromAddress: isLikelyWalletAddress(
+        String(traceFromQuery || "").trim(),
+      )
+        ? String(traceFromQuery || "").trim()
+        : String(traceFromNodeId || "").trim(),
+      traceToAddress: isLikelyWalletAddress(String(traceToQuery || "").trim())
+        ? String(traceToQuery || "").trim()
+        : String(traceToNodeId || "").trim(),
+      traceStopMode,
+      selectedTraceDbPathKey,
+    }),
+    [
+      activeHolderTypeFilter,
+      densityMode,
+      isConnectionsView,
+      selectedTraceDbPathKey,
+      searchQuery,
+      traceFromNodeId,
+      traceFromQuery,
+      traceStopMode,
+      traceToNodeId,
+      traceToQuery,
+      transactionCounterpartyFilter,
+      transactionDirFilter,
+    ],
+  );
+
+  useUrlState(
+    selectedTokenSymbol,
+    selectedNode,
+    searchedRootAddress,
+    urlStateOptions,
+  );
+
   useEffect(() => {
     if (previousSelectedTokenSymbolRef.current === selectedTokenSymbol) {
       return;
