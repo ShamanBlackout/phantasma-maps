@@ -37,6 +37,47 @@ test("normalizes API balances and combines parallel directed edges", () => {
   ]);
 });
 
+test("prefers API-normalized amounts when token decimals are unknown", () => {
+  const graph = buildGraphDataFromApi(
+    {
+      nodes: [
+        {
+          address: "PA",
+          balance: "123456789012500000",
+          balanceNormalized: "1234567890.125",
+        },
+        { address: "PB", balance: "250000000", balanceNormalized: "2.5" },
+        { address: "PC", balance: "500", balanceNormalized: null },
+      ],
+      edges: [
+        {
+          fromAddress: "PA",
+          toAddress: "PB",
+          amount: "150000000",
+          amountNormalized: "1.5",
+        },
+        { fromAddress: "PB", toAddress: "PC", amount: "700" },
+      ],
+    },
+    0,
+  );
+
+  expect(graph.nodes.map(({ id, value }) => [id, value])).toEqual([
+    ["PA", 1234567890.125],
+    ["PB", 2.5],
+    ["PC", 500],
+  ]);
+  expect(
+    graph.links.map(({ source, transactionVolume }) => [
+      source,
+      transactionVolume,
+    ]),
+  ).toEqual([
+    ["PA", 1.5],
+    ["PB", 700],
+  ]);
+});
+
 test("focuses a graph on root connections and emphasizes the root", () => {
   const graph = {
     nodes: [

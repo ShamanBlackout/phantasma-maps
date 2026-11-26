@@ -17,6 +17,18 @@ export function normalizeAmount(rawAmount) {
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
 }
 
+// The maps API sends exact decimal strings (balanceNormalized,
+// amountNormalized) next to raw base units. Prefer them so values stay
+// correct even when token metadata (and thus decimals) is missing or stale.
+function readTokenAmount(normalizedAmount, rawAmount, divisor) {
+  const normalizedText = String(normalizedAmount ?? "").trim();
+  const parsed = Number(normalizedText);
+  if (normalizedText && Number.isFinite(parsed) && parsed >= 0) {
+    return parsed;
+  }
+  return normalizeAmount(rawAmount) / divisor;
+}
+
 export function getLinkKey(source, target) {
   return `${String(source || "").trim()}->${String(target || "").trim()}`;
 }
@@ -72,7 +84,8 @@ export function buildGraphDataFromApi(graphPayload, decimals = 0) {
   }
 
   const discoveredTotal = apiNodes.reduce(
-    (sum, node) => sum + normalizeAmount(node?.balance) / divisor,
+    (sum, node) =>
+      sum + readTokenAmount(node?.balanceNormalized, node?.balance, divisor),
     0,
   );
   const shareBase =
@@ -83,7 +96,11 @@ export function buildGraphDataFromApi(graphPayload, decimals = 0) {
       const id = String(node?.address || "").trim();
       if (!id) return null;
 
-      const value = normalizeAmount(node?.balance) / divisor;
+      const value = readTokenAmount(
+        node?.balanceNormalized,
+        node?.balance,
+        divisor,
+      );
       const pct = (value / shareBase) * 100;
       const label = String(node?.label || "").trim() || shortenAddress(id);
       const type = inferHolderType(label, pct);
@@ -117,12 +134,17 @@ export function buildGraphDataFromApi(graphPayload, decimals = 0) {
 
     const key = getLinkKey(source, target);
     const prev = edgeMap.get(key);
+    const amount = readTokenAmount(
+      edge?.amountNormalized,
+      edge?.amount,
+      divisor,
+    );
 
     if (!prev) {
       edgeMap.set(key, {
         source,
         target,
-        transactionVolume: normalizeAmount(edge?.amount) / divisor,
+        transactionVolume: amount,
         sentTransactions: 1,
         receivedTransactions: 1,
         transactionHash: String(edge?.txHash || ""),
@@ -130,7 +152,7 @@ export function buildGraphDataFromApi(graphPayload, decimals = 0) {
       continue;
     }
 
-    prev.transactionVolume += normalizeAmount(edge?.amount) / divisor;
+    prev.transactionVolume += amount;
     prev.sentTransactions += 1;
     prev.receivedTransactions += 1;
   }

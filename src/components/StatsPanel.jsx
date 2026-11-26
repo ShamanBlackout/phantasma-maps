@@ -207,10 +207,11 @@ export default function StatsPanel({
       return;
     }
 
-    window.requestAnimationFrame(() => {
+    const frameId = window.requestAnimationFrame(() => {
       tokenSearchInputRef.current?.focus();
       tokenSearchInputRef.current?.select();
     });
+    return () => window.cancelAnimationFrame(frameId);
   }, [isTokenMenuOpen]);
 
   function handleTokenPick(tokenSymbol) {

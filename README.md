@@ -280,7 +280,7 @@ Reads a positive numeric environment value in milliseconds and falls back if the
     	Recomputes node percentage ownership using the latest current supply.
 
     buildGraphDataFromApi(graphPayload, decimals)
-    	Transforms the backend graph response into frontend node and link structures, normalizes decimals, aggregates node stats, and calculates supply-based percentages.
+    	Transforms the backend graph response into frontend node and link structures, aggregates node stats, and calculates supply-based percentages. Uses the API's balanceNormalized/amountNormalized when present and otherwise divides raw amounts by 10^decimals.
 
     buildNeighborFocusedGraph(graphData, rootAddress)
     	Creates a focused graph containing only the root wallet and its immediate neighbors, with visual emphasis on the root node.
