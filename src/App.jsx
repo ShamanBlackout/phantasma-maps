@@ -97,8 +97,6 @@ import {
   isLikelyWalletAddress,
   makeExportFileName,
   normalizePositiveInteger,
-  parseTimestampMs,
-  parseUtcDateTimeInput,
   rowsToCsv,
   toUtcDateTimeInputValue,
 } from "./lib/format";
@@ -113,6 +111,13 @@ import {
   getMockTokenData,
   limitGraphForDisplay,
 } from "./graph/graphBuilders";
+import {
+  buildTransactionApiFilters,
+  mapApiTransaction,
+  toTransactionExportRows,
+  transactionExportRowsToCsv,
+} from "./lib/walletTransactions";
+import { downloadBlobFile } from "./lib/download";
 import { hashToHue, hslToRgbString } from "./lib/color";
 import "./App.css";
 import "./styles/feature-polish.css";
@@ -1861,55 +1866,28 @@ export default function App() {
     });
   }
 
-  function mapTransactionsToExportRows(transactions) {
-    return transactions.map((tx) => ({
-      direction: tx.direction,
-      counterparty: tx.counterpartLabel,
-      address: tx.counterpartAddress || tx.counterpartAddr,
-      time: tx.timeUtc,
-      token: tx.token,
-      amount: tx.amount,
-      usdNow: tx.usd,
-      transactionHash: tx.transactionHash,
-    }));
-  }
-
   async function buildExportRows() {
     if (
       !isUsingApiTransactions ||
       selectedNodeApiTransactionsError ||
       !selectedNode?.id
     ) {
-      return mapTransactionsToExportRows(filteredTransactions);
+      return toTransactionExportRows(filteredTransactions);
     }
 
-    const startTs = parseUtcDateTimeInput(transactionStartTime);
-    const endTs = parseUtcDateTimeInput(transactionEndTime);
-    const minAmount =
-      transactionMinAmount === "" ? null : Number(transactionMinAmount);
-    const maxAmount =
-      transactionMaxAmount === "" ? null : Number(transactionMaxAmount);
-    const minUsd = transactionMinUsd === "" ? null : Number(transactionMinUsd);
-    const maxUsd = transactionMaxUsd === "" ? null : Number(transactionMaxUsd);
-
-    const apiFilters = {
+    const apiFilters = buildTransactionApiFilters({
       direction: transactionDirFilter,
       counterparty: transactionCounterpartyFilter,
-      startTime: startTs === null ? "" : new Date(startTs).toISOString(),
-      endTime: endTs === null ? "" : new Date(endTs).toISOString(),
-      minAmount: Number.isFinite(minAmount) ? minAmount : null,
-      maxAmount: Number.isFinite(maxAmount) ? maxAmount : null,
-      minUsd: Number.isFinite(minUsd) ? minUsd : null,
-      maxUsd: Number.isFinite(maxUsd) ? maxUsd : null,
-      usdRateNow: Number.isFinite(Number(activeTokenInfo.price))
-        ? Number(activeTokenInfo.price)
-        : null,
-      sortBy:
-        transactionSortBy === "amount" || transactionSortBy === "time"
-          ? transactionSortBy
-          : null,
-      sortDir: transactionSortDirection,
-    };
+      startTime: transactionStartTime,
+      endTime: transactionEndTime,
+      minAmount: transactionMinAmount,
+      maxAmount: transactionMaxAmount,
+      minUsd: transactionMinUsd,
+      maxUsd: transactionMaxUsd,
+      usdPrice: activeTokenInfo.price,
+      sortBy: transactionSortBy,
+      sortDirection: transactionSortDirection,
+    });
 
     const pageSize = 100;
     const firstPage = await fetchTransactionsPageForAddressFromApi(
@@ -1946,70 +1924,25 @@ export default function App() {
       }
     }
 
-    const exportTransactions = allItems.map((transaction, index) => {
-      const fromAddress = String(
-        transaction.from_address ?? transaction.fromAddress ?? "",
-      );
-      const toAddress = String(
-        transaction.to_address ?? transaction.toAddress ?? "",
-      );
-      const txHash = String(transaction.tx_hash ?? transaction.txHash ?? "");
-      const token = String(
-        transaction.token_symbol ??
-          transaction.tokenSymbol ??
-          activeTokenInfo.name,
-      );
-      const amount = normalizeAmount(
-        transaction.amountNormalized ??
-          transaction.amount_normalized ??
-          transaction.amount,
-      );
-      const timestamp = parseTimestampMs(transaction.timestamp);
-      const isOutgoing = fromAddress === selectedNode.id;
-      const counterpartId = isOutgoing ? toAddress : fromAddress;
-      const counterpartNode = nodeById.get(counterpartId);
+    const exportedTransactions = allItems.map((transaction, index) =>
+      mapApiTransaction(transaction, index, {
+        walletId: selectedNode.id,
+        nodeById,
+        tokenName: activeTokenInfo.name,
+        tokenPrice: activeTokenInfo.price,
+      }),
+    );
 
-      return {
-        id: String(
-          transaction.id ||
-            `${txHash}-${transaction.event_index ?? transaction.eventIndex ?? index}`,
-        ),
-        direction: isOutgoing ? "To" : "From",
-        counterpartLabel:
-          counterpartNode?.label ||
-          counterpartNode?.shortAddr ||
-          shortenAddress(counterpartId),
-        counterpartAddress: counterpartId,
-        counterpartAddr:
-          counterpartNode?.shortAddr || shortenAddress(counterpartId),
-        token,
-        amount,
-        usd: amount * Number(activeTokenInfo.price),
-        sentTransactions: isOutgoing ? 1 : 0,
-        receivedTransactions: isOutgoing ? 0 : 1,
-        transactionHash: txHash || "N/A",
-        timestamp,
-        timeUtc: formatUtcDateTime(timestamp),
-        timeInputValue: toUtcDateTimeInputValue(timestamp),
-      };
-    });
-
-    return mapTransactionsToExportRows(exportTransactions);
+    return toTransactionExportRows(exportedTransactions);
   }
 
-  function downloadBlobFile(content, mimeType, fileName) {
-    const blob =
-      content instanceof Blob
-        ? content
-        : new Blob([content], { type: mimeType });
-    const url = URL.createObjectURL(blob);
-    const anchor = document.createElement("a");
-    anchor.href = url;
-    anchor.download = fileName;
-    document.body.appendChild(anchor);
-    anchor.click();
-    document.body.removeChild(anchor);
-    URL.revokeObjectURL(url);
+  function scheduleExportStatusClear(delayMs) {
+    if (exportStatusTimeoutRef.current) {
+      window.clearTimeout(exportStatusTimeoutRef.current);
+    }
+    exportStatusTimeoutRef.current = window.setTimeout(() => {
+      setTransactionsExportStatus("");
+    }, delayMs);
   }
 
   async function exportTransactions(format) {
@@ -2034,93 +1967,40 @@ export default function App() {
       );
       setIsExportMenuOpen(false);
       setIsTransactionsExporting(false);
-      if (exportStatusTimeoutRef.current) {
-        window.clearTimeout(exportStatusTimeoutRef.current);
-      }
-      exportStatusTimeoutRef.current = window.setTimeout(() => {
-        setTransactionsExportStatus("");
-      }, 3000);
+      scheduleExportStatusClear(3000);
       return;
     }
 
     try {
       if (format === "json") {
-        const json = JSON.stringify(rows, null, 2);
         downloadBlobFile(
-          json,
+          JSON.stringify(rows, null, 2),
           "application/json;charset=utf-8",
           makeExportFileName(selectedNode, "json"),
         );
-        setTransactionsExportStatus(
-          `Export complete (${Number(rows.length || 0).toLocaleString()} rows).`,
-        );
-        setIsExportMenuOpen(false);
-        if (exportStatusTimeoutRef.current) {
-          window.clearTimeout(exportStatusTimeoutRef.current);
-        }
-        exportStatusTimeoutRef.current = window.setTimeout(() => {
-          setTransactionsExportStatus("");
-        }, 2200);
-        return;
-      }
-
-      if (format === "csv" || format === "excel") {
-        const headers = [
-          "Direction",
-          "Counterparty",
-          "Address",
-          "Time",
-          "Token",
-          "Amount",
-          "USD (Now)",
-          "Transaction Hash",
-        ];
-        const csvRows = rows.map((row) => [
-          row.direction,
-          row.counterparty,
-          row.address,
-          row.time,
-          row.token,
-          row.amount,
-          row.usdNow,
-          row.transactionHash,
-        ]);
-        const escapeCsv = (value) =>
-          `"${String(value ?? "").replace(/"/g, '""')}"`;
-        const csv = [headers, ...csvRows]
-          .map((line) => line.map(escapeCsv).join(","))
-          .join("\n");
+      } else if (format === "csv" || format === "excel") {
         downloadBlobFile(
-          `\uFEFF${csv}`,
+          transactionExportRowsToCsv(rows),
           "text/csv;charset=utf-8",
           makeExportFileName(selectedNode, "csv"),
         );
-        setTransactionsExportStatus(
-          `Export complete (${Number(rows.length || 0).toLocaleString()} rows).`,
-        );
-        setIsExportMenuOpen(false);
-        if (exportStatusTimeoutRef.current) {
-          window.clearTimeout(exportStatusTimeoutRef.current);
-        }
-        exportStatusTimeoutRef.current = window.setTimeout(() => {
-          setTransactionsExportStatus("");
-        }, 2200);
+      } else {
+        setTransactionsExportStatus("");
         return;
       }
 
-      setTransactionsExportStatus("");
+      setTransactionsExportStatus(
+        `Export complete (${Number(rows.length || 0).toLocaleString()} rows).`,
+      );
+      setIsExportMenuOpen(false);
+      scheduleExportStatusClear(2200);
     } catch (error) {
       setLastApiError(
         buildApiErrorRecord(error, "transactions", "Transaction export failed"),
       );
       setTransactionsExportStatus("Export failed. Please try again.");
       setIsExportMenuOpen(false);
-      if (exportStatusTimeoutRef.current) {
-        window.clearTimeout(exportStatusTimeoutRef.current);
-      }
-      exportStatusTimeoutRef.current = window.setTimeout(() => {
-        setTransactionsExportStatus("");
-      }, 3000);
+      scheduleExportStatusClear(3000);
     } finally {
       setIsTransactionsExporting(false);
     }
@@ -2856,34 +2736,21 @@ export default function App() {
     setIsExportPresetsOpen(false);
   }
 
-  function exportFilteredTransactionsPreset() {
-    const rows = buildExportRows();
-    const headers = [
-      "Direction",
-      "Counterparty",
-      "Address",
-      "Time",
-      "Token",
-      "Amount",
-      "USD (Now)",
-      "Transaction Hash",
-    ];
-    const csvRows = rows.map((row) => [
-      row.direction,
-      row.counterparty,
-      row.address,
-      row.time,
-      row.token,
-      row.amount,
-      row.usdNow,
-      row.transactionHash,
-    ]);
-    downloadBlobFile(
-      rowsToCsv(headers, csvRows),
-      "text/csv;charset=utf-8",
-      `phantasma-filtered-transactions-${selectedTokenSymbol.toLowerCase()}.csv`,
-    );
-    setIsExportPresetsOpen(false);
+  async function exportFilteredTransactionsPreset() {
+    try {
+      const rows = await buildExportRows();
+      downloadBlobFile(
+        transactionExportRowsToCsv(rows),
+        "text/csv;charset=utf-8",
+        `phantasma-filtered-transactions-${selectedTokenSymbol.toLowerCase()}.csv`,
+      );
+    } catch (error) {
+      setLastApiError(
+        buildApiErrorRecord(error, "transactions", "Transaction export failed"),
+      );
+    } finally {
+      setIsExportPresetsOpen(false);
+    }
   }
 
   usePopoutDismissal({

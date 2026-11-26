@@ -715,6 +715,35 @@ test("keeps the address bar in sync with the current view", async () => {
   expect(new URLSearchParams(window.location.search).get("q")).toBe("whale");
 });
 
+test("filtered transactions preset downloads a CSV", async () => {
+  const user = userEvent.setup();
+  const createObjectURL = vi.fn(() => "blob:test");
+  const clickSpy = vi
+    .spyOn(HTMLAnchorElement.prototype, "click")
+    .mockImplementation(() => {});
+  URL.createObjectURL = createObjectURL;
+  URL.revokeObjectURL = vi.fn();
+
+  try {
+    render(<App />);
+    await user.click(
+      await screen.findByRole("button", { name: /open export presets/i }),
+    );
+    await user.click(
+      screen.getByRole("button", { name: /filtered transactions csv/i }),
+    );
+
+    await waitFor(() => expect(createObjectURL).toHaveBeenCalledTimes(1));
+    const csv = await createObjectURL.mock.calls[0][0].text();
+    expect(csv).toContain('"Direction","Counterparty","Address"');
+    expect(clickSpy).toHaveBeenCalledTimes(1);
+  } finally {
+    clickSpy.mockRestore();
+    delete URL.createObjectURL;
+    delete URL.revokeObjectURL;
+  }
+});
+
 test("renders stable shell across key viewport classes", async () => {
   const viewportCases = [
     { name: "desktop", matchesMobile: false },

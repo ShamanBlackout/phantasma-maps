@@ -228,6 +228,12 @@ React entry point.
     src/lib/color.js
     	Deterministic hue hashing and HSL-to-RGB conversion for trace-path colors.
 
+    src/lib/walletTransactions.js
+    	Shared transaction filter building, API-transaction row mapping, and CSV export helpers for the transactions modal and export presets.
+
+    src/lib/download.js
+    	Client-side blob download helper used by all exports.
+
     src/components/Header.jsx
     	Header UI for search, theme selection, sync badge, and price display.
 
@@ -346,6 +352,23 @@ Parses a timestamp into milliseconds, defaulting to now if parsing fails.
     makeExportFileName(selectedNode, ext)
     	Creates a timestamped export filename for transaction downloads.
 
+src/lib/walletTransactions.js
+buildTransactionApiFilters(filters)
+Converts the transactions modal filter inputs into GET /transactions query filters.
+
+    mapApiTransaction(transaction, index, context)
+    	Maps an API transaction into the modal row shape from the selected wallet's perspective.
+
+    toTransactionExportRows(transactions)
+    	Converts modal transaction rows into export row objects.
+
+    transactionExportRowsToCsv(rows)
+    	Serializes export rows into the transaction CSV format.
+
+src/lib/download.js
+downloadBlobFile(content, mimeType, fileName)
+Triggers a client-side file download for exported content.
+
 src/graph/graphBuilders.js
 getMockTokenData(tokenSymbol)
 Returns a normalized mock dataset for the requested symbol.
@@ -436,10 +459,7 @@ src/App.jsx
     	Clears all modal-side transaction filters.
 
     buildExportRows()
-    	Converts filtered transaction objects into exportable row objects.
-
-    downloadBlobFile(content, mimeType, fileName)
-    	Triggers a client-side file download for exported content.
+    	Builds export rows from the filtered transactions, fetching every API page when the transactions come from the API.
 
     exportTransactions(format)
     	Exports filtered transactions as JSON or CSV.

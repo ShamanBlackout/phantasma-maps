@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { parseUtcDateTimeInput } from "../lib/format";
+import { buildTransactionApiFilters } from "../lib/walletTransactions";
 import {
   fetchTransactionsPageForAddress as fetchTransactionsPageForAddressFromApi,
 } from "../api/mapsApi";
@@ -50,35 +50,19 @@ export default function useSelectedNodeTransactions({
       setIsSelectedNodeTransactionsLoading(true);
       setSelectedNodeApiTransactionsError("");
 
-      const startTs = parseUtcDateTimeInput(transactionStartTime);
-      const endTs = parseUtcDateTimeInput(transactionEndTime);
-      const minAmount =
-        transactionMinAmount === "" ? null : Number(transactionMinAmount);
-      const maxAmount =
-        transactionMaxAmount === "" ? null : Number(transactionMaxAmount);
-      const minUsd =
-        transactionMinUsd === "" ? null : Number(transactionMinUsd);
-      const maxUsd =
-        transactionMaxUsd === "" ? null : Number(transactionMaxUsd);
-
-      const apiFilters = {
+      const apiFilters = buildTransactionApiFilters({
         direction: transactionDirFilter,
         counterparty: transactionCounterpartyFilter,
-        startTime: startTs === null ? "" : new Date(startTs).toISOString(),
-        endTime: endTs === null ? "" : new Date(endTs).toISOString(),
-        minAmount: Number.isFinite(minAmount) ? minAmount : null,
-        maxAmount: Number.isFinite(maxAmount) ? maxAmount : null,
-        minUsd: Number.isFinite(minUsd) ? minUsd : null,
-        maxUsd: Number.isFinite(maxUsd) ? maxUsd : null,
-        usdRateNow: Number.isFinite(Number(activeTokenInfo.price))
-          ? Number(activeTokenInfo.price)
-          : null,
-        sortBy:
-          transactionSortBy === "amount" || transactionSortBy === "time"
-            ? transactionSortBy
-            : null,
-        sortDir: transactionSortDirection,
-      };
+        startTime: transactionStartTime,
+        endTime: transactionEndTime,
+        minAmount: transactionMinAmount,
+        maxAmount: transactionMaxAmount,
+        minUsd: transactionMinUsd,
+        maxUsd: transactionMaxUsd,
+        usdPrice: activeTokenInfo.price,
+        sortBy: transactionSortBy,
+        sortDirection: transactionSortDirection,
+      });
 
       try {
         const pageData = await fetchTransactionsPageForAddressFromApi(
