@@ -715,6 +715,24 @@ test("keeps the address bar in sync with the current view", async () => {
   expect(new URLSearchParams(window.location.search).get("q")).toBe("whale");
 });
 
+test("restores transaction filters from the URL with the selected wallet", async () => {
+  const treasury = "P2K8mNxHvT3qAaBpFsuWcY9JeGKd4kQ7Rmj6CiDyEF";
+  const whale = "P2Kd4TsHvN8wMqBbCpRsuY3K7Je5FXZ9kQ6Lmj4WXyz";
+  window.history.replaceState(
+    null,
+    "",
+    `/?token=SOUL&node=${treasury}&txdir=from&txcp=${whale}`,
+  );
+  render(<App />);
+
+  await waitFor(() => {
+    const params = new URLSearchParams(window.location.search);
+    expect(params.get("node")).toBe(treasury);
+    expect(params.get("txdir")).toBe("from");
+    expect(params.get("txcp")).toBe(whale);
+  });
+});
+
 test("does not refetch the token graph when token metadata arrives", async () => {
   render(<App />);
 

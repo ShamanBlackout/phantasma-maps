@@ -198,6 +198,14 @@ export default function App() {
   });
   const previousSelectedTokenSymbolRef = useRef(selectedTokenSymbol);
   const initialNodeIdFromUrlRef = useRef(initialUrlParams.nodeId);
+  // Transaction filters only apply to a selected wallet, so URL values wait
+  // until the URL node is restored (selection changes reset the filters).
+  const initialTransactionFiltersFromUrlRef = useRef({
+    dir: ["from", "to"].includes(initialUrlParams.txDir)
+      ? initialUrlParams.txDir
+      : "",
+    counterparty: String(initialUrlParams.txCounterparty || "").trim(),
+  });
   const initialRootAddressFromUrlRef = useRef(initialUrlParams.rootAddress);
   const [apiTokenSymbols, setApiTokenSymbols] = useState([]);
   const [apiTokenInfo, setApiTokenInfo] = useState(null);
@@ -1468,8 +1476,11 @@ export default function App() {
     if (node) {
       setSelectedNode(node);
       initialNodeIdFromUrlRef.current = null;
+      const { dir, counterparty } = initialTransactionFiltersFromUrlRef.current;
+      if (dir) setTransactionDirFilter(dir);
+      if (counterparty) setTransactionCounterpartyFilter(counterparty);
     }
-  }, [nodeById]);
+  }, [nodeById, setTransactionCounterpartyFilter, setTransactionDirFilter]);
 
   const resolvedSelectedNode = selectedNode
     ? nodeById.get(selectedNode.id) || selectedNode
