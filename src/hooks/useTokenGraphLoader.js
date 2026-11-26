@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import {
   buildApiErrorRecord,
   buildTokenNotFoundStatus,
@@ -65,6 +65,15 @@ export default function useTokenGraphLoader({
   setTokenSelectorStatus,
   setTrackedTokenSupply,
 }) {
+  // Token metadata/supply arrive and poll independently of the graph; read the
+  // latest values without refetching. App re-applies live supply to nodes.
+  const tokenMetaRef = useRef(null);
+  tokenMetaRef.current = {
+    currentSupply: activeTokenInfo?.currentSupply,
+    totalSupply: activeTokenInfo?.totalSupply,
+    decimals: apiTokenInfo?.decimals,
+  };
+
   useEffect(() => {
     let isMounted = true;
 
@@ -207,7 +216,7 @@ export default function useTokenGraphLoader({
             }
 
             if (tokenGraphFallbackResult.ok) {
-              const graphDecimals = apiTokenInfo?.decimals ?? 0;
+              const graphDecimals = tokenMetaRef.current.decimals ?? 0;
               balanceFallbackGraph = buildGraphDataFromApi(
                 tokenGraphFallbackResult.payload,
                 graphDecimals,
@@ -216,27 +225,26 @@ export default function useTokenGraphLoader({
 
             if (!isMounted) return;
 
+            const connectionsCurrentSupply =
+              Number(balanceFallbackGraph?.totalSupply) ||
+              Number(tokenMetaRef.current.currentSupply) ||
+              Number(tokenMetaRef.current.totalSupply) ||
+              0;
+
             setConnectionsGraphContext({
               items: Array.isArray(connectionsResult.items)
                 ? connectionsResult.items
                 : [],
               rootAddress: activeGraphRootAddress,
               fallbackGraph: balanceFallbackGraph,
-              currentSupply:
-                Number(balanceFallbackGraph?.totalSupply) ||
-                Number(activeTokenInfo?.currentSupply) ||
-                Number(activeTokenInfo?.totalSupply) ||
-                0,
+              currentSupply: connectionsCurrentSupply,
             });
 
             const tableFocusedGraph = buildConnectionsGraphFromConnections(
               connectionsResult.items,
               activeGraphRootAddress,
               balanceFallbackGraph,
-              Number(balanceFallbackGraph?.totalSupply) ||
-                Number(activeTokenInfo?.currentSupply) ||
-                Number(activeTokenInfo?.totalSupply) ||
-                0,
+              connectionsCurrentSupply,
             );
 
             if (
@@ -305,7 +313,7 @@ export default function useTokenGraphLoader({
             }
 
             if (tokenGraphFallbackResult.ok) {
-              const graphDecimals = apiTokenInfo?.decimals ?? 0;
+              const graphDecimals = tokenMetaRef.current.decimals ?? 0;
               const fallbackGraph = buildGraphDataFromApi(
                 tokenGraphFallbackResult.payload,
                 graphDecimals,
@@ -426,7 +434,7 @@ export default function useTokenGraphLoader({
       setIsUsingMockApiFallback(false);
       setMapLoadingProgress(62);
 
-      const graphDecimals = apiTokenInfo?.decimals ?? 0;
+      const graphDecimals = tokenMetaRef.current.decimals ?? 0;
       const mappedGraph = buildGraphDataFromApi(result.payload, graphDecimals);
       const shouldTrackOverallMaxStats =
         !isConnectionsView && !String(activeGraphRootAddress || "").trim();
@@ -756,9 +764,6 @@ export default function useTokenGraphLoader({
     };
   }, [
     activeGraphRootAddress,
-    activeTokenInfo?.currentSupply,
-    activeTokenInfo?.totalSupply,
-    apiTokenInfo?.decimals,
     graphEdgeLimit,
     graphNodeLimit,
     isGraphEnrichmentEnabled,

@@ -715,6 +715,28 @@ test("keeps the address bar in sync with the current view", async () => {
   expect(new URLSearchParams(window.location.search).get("q")).toBe("whale");
 });
 
+test("does not refetch the token graph when token metadata arrives", async () => {
+  render(<App />);
+
+  await waitFor(() =>
+    expect(
+      global.fetch.mock.calls.some(([input]) =>
+        String(input).includes("/metadata"),
+      ),
+    ).toBe(true),
+  );
+  await screen.findByText(/Showing 2 tracked tokens/i);
+  await new Promise((resolve) => setTimeout(resolve, 50));
+
+  // Token snapshots fetch their own graph with topHoldersLimit; count only the
+  // main map loader.
+  const graphRequests = global.fetch.mock.calls.filter(([input]) => {
+    const url = String(input);
+    return url.includes("/graph/token/") && !url.includes("topHoldersLimit");
+  });
+  expect(graphRequests).toHaveLength(1);
+});
+
 test("filtered transactions preset downloads a CSV", async () => {
   const user = userEvent.setup();
   const createObjectURL = vi.fn(() => "blob:test");
