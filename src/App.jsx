@@ -31,6 +31,13 @@ import useSelectedNodeActivity from "./hooks/useSelectedNodeActivity";
 import useTraceDbPaths from "./hooks/useTraceDbPaths";
 import useCompareSnapshot from "./hooks/useCompareSnapshot";
 import usePopoutDismissal from "./hooks/usePopoutDismissal";
+import useActiveTokenInfo from "./hooks/useActiveTokenInfo";
+import useSelectedNodeTransfers from "./hooks/useSelectedNodeTransfers";
+import useFilteredTransactions from "./hooks/useFilteredTransactions";
+import useMapRecoveryState from "./hooks/useMapRecoveryState";
+import useTraceComputation from "./hooks/useTraceComputation";
+import useExecutiveSummary from "./hooks/useExecutiveSummary";
+import useCommandPaletteActions from "./hooks/useCommandPaletteActions";
 import { ONBOARDING_TUTORIAL_STEPS } from "./data/onboardingSteps";
 import {
   applyCurrentSupplyToNodes,
@@ -972,10 +979,10 @@ export default function App() {
     setSelectedTokenSymbol(DEFAULT_MAPS_API_TOKEN_SYMBOL);
   }
 
-  function handleRetryGraphLoad() {
+  const handleRetryGraphLoad = useCallback(() => {
     setMapRefreshNonce((current) => current + 1);
     setMapDataStatus("Retrying graph request...");
-  }
+  }, []);
 
   const handleResetConnectionMinimum = useCallback(() => {
     setConnectionMinAmount("");
@@ -1038,87 +1045,15 @@ export default function App() {
     return selectedTokenSymbol ? [selectedTokenSymbol] : [];
   }, [apiTokenSymbols, isUsingMockApiFallback, selectedTokenSymbol]);
 
-  const activeTokenInfo = useMemo(() => {
-    const fallbackTokenInfo = selectedMockTokenData?.tokenInfo;
-
-    // Prefer API-sourced token metadata, then mock fallback, then defaults.
-    const resolvedFullName =
-      apiTokenInfo?.fullName ||
-      (isUsingMockApiFallback ? fallbackTokenInfo?.fullName : null) ||
-      `${selectedTokenSymbol} Token`;
-
-    const resolvedChain = apiTokenInfo?.chain || TOKEN_INFO.chain;
-
-    const hasMetadataMaxSupply = Boolean(apiTokenInfo?.hasMetadataMaxSupply);
-
-    const resolvedCurrentSupply =
-      (Number.isFinite(apiTokenInfo?.currentSupply)
-        ? apiTokenInfo.currentSupply
-        : null) ??
-      ((trackedTokenSupply > 0 ? trackedTokenSupply : 0) ||
-        (isUsingMockApiFallback
-          ? (fallbackTokenInfo?.totalSupply ??
-            (selectedTokenSymbol === TOKEN_INFO.name
-              ? TOKEN_INFO.totalSupply
-              : 0))
-          : 0));
-
-    const resolvedTotalSupply = resolvedCurrentSupply;
-    const resolvedMaxSupply = hasMetadataMaxSupply
-      ? Number.isFinite(apiTokenInfo?.maxSupply)
-        ? apiTokenInfo.maxSupply
-        : 0
-      : null;
-
-    const trackedTokenQuote = trackedTokenQuotes[selectedTokenSymbol] || null;
-    const resolvedPrice =
-      selectedTokenSymbol !== TOKEN_INFO.name &&
-      Number.isFinite(trackedTokenQuote?.price)
-        ? trackedTokenQuote.price
-        : Number.isFinite(apiTokenInfo?.price)
-          ? apiTokenInfo.price
-          : selectedTokenSymbol === TOKEN_INFO.name
-            ? liveTokenInfo.price
-            : isUsingMockApiFallback
-              ? (fallbackTokenInfo?.price ?? null)
-              : null;
-
-    const resolvedPriceChange24h =
-      selectedTokenSymbol !== TOKEN_INFO.name &&
-      Number.isFinite(trackedTokenQuote?.priceChange24h)
-        ? trackedTokenQuote.priceChange24h
-        : Number.isFinite(apiTokenInfo?.priceChange24h)
-          ? apiTokenInfo.priceChange24h
-          : selectedTokenSymbol === TOKEN_INFO.name
-            ? liveTokenInfo.priceChange24h
-            : isUsingMockApiFallback
-              ? (fallbackTokenInfo?.priceChange24h ?? null)
-              : null;
-
-    return {
-      name: selectedTokenSymbol,
-      fullName: resolvedFullName,
-      chain: resolvedChain,
-      totalSupply: resolvedTotalSupply,
-      currentSupply: resolvedCurrentSupply,
-      maxSupply: resolvedMaxSupply,
-      hasMetadataMaxSupply,
-      globalHolderCount: Number.isFinite(apiTokenInfo?.globalHolderCount)
-        ? apiTokenInfo.globalHolderCount
-        : null,
-      price: resolvedPrice,
-      priceChange24h: resolvedPriceChange24h,
-    };
-  }, [
+  const activeTokenInfo = useActiveTokenInfo({
     apiTokenInfo,
     isUsingMockApiFallback,
+    liveTokenInfo,
     selectedMockTokenData,
     selectedTokenSymbol,
-    trackedTokenSupply,
     trackedTokenQuotes,
-    liveTokenInfo.price,
-    liveTokenInfo.priceChange24h,
-  ]);
+    trackedTokenSupply,
+  });
 
   useEffect(() => {
     if (!isMapLoading) return undefined;
@@ -1804,136 +1739,30 @@ export default function App() {
     activeTokenInfo.price,
   ]);
 
-  const selectedNodeTransfers = useMemo(() => {
-    if (!selectedNode) return [];
-
-    if (!selectedNodeApiTransactionsError) {
-      return selectedNodeApiTransactions.map((transaction, index) => {
-        const fromAddress = String(
-          transaction.from_address ?? transaction.fromAddress ?? "",
-        );
-        const toAddress = String(
-          transaction.to_address ?? transaction.toAddress ?? "",
-        );
-        const txHash = String(transaction.tx_hash ?? transaction.txHash ?? "");
-        const token = String(
-          transaction.token_symbol ??
-            transaction.tokenSymbol ??
-            activeTokenInfo.name,
-        );
-        const amount = normalizeAmount(
-          transaction.amountNormalized ??
-            transaction.amount_normalized ??
-            transaction.amount,
-        );
-        const timestamp = parseTimestampMs(transaction.timestamp);
-        const isOutgoing = fromAddress === selectedNode.id;
-        const counterpartId = isOutgoing ? toAddress : fromAddress;
-        const counterpartNode = nodeById.get(counterpartId);
-
-        return {
-          id: String(
-            transaction.id ||
-              `${txHash}-${transaction.event_index ?? transaction.eventIndex ?? index}`,
-          ),
-          direction: isOutgoing ? "To" : "From",
-          counterpartLabel:
-            counterpartNode?.label ||
-            counterpartNode?.shortAddr ||
-            shortenAddress(counterpartId),
-          counterpartAddress: counterpartId,
-          counterpartAddr:
-            counterpartNode?.shortAddr || shortenAddress(counterpartId),
-          token,
-          amount,
-          usd: amount * Number(activeTokenInfo.price),
-          sentTransactions: isOutgoing ? 1 : 0,
-          receivedTransactions: isOutgoing ? 0 : 1,
-          transactionHash: txHash || "N/A",
-          timestamp,
-          timeUtc: formatUtcDateTime(timestamp),
-          timeInputValue: toUtcDateTimeInputValue(timestamp),
-        };
-      });
-    }
-
-    return fallbackSelectedNodeTransfers;
-  }, [
+  const selectedNodeTransfers = useSelectedNodeTransfers({
+    activeTokenInfo,
+    fallbackSelectedNodeTransfers,
+    nodeById,
     selectedNode,
     selectedNodeApiTransactions,
     selectedNodeApiTransactionsError,
-    fallbackSelectedNodeTransfers,
-    nodeById,
-    activeTokenInfo.name,
-    activeTokenInfo.price,
-  ]);
+  });
 
-  const filteredTransactions = useMemo(() => {
-    const shouldUseServerFilteredPage =
-      Boolean(selectedNode?.id) && !selectedNodeApiTransactionsError;
-    if (shouldUseServerFilteredPage) {
-      return selectedNodeTransfers;
-    }
-
-    const startTs = parseUtcDateTimeInput(transactionStartTime);
-    const endTs = parseUtcDateTimeInput(transactionEndTime);
-    const minAmount =
-      transactionMinAmount === "" ? null : Number(transactionMinAmount);
-    const maxAmount =
-      transactionMaxAmount === "" ? null : Number(transactionMaxAmount);
-    const minUsd = transactionMinUsd === "" ? null : Number(transactionMinUsd);
-    const maxUsd = transactionMaxUsd === "" ? null : Number(transactionMaxUsd);
-    const counterpartyQuery = transactionCounterpartyFilter
-      .trim()
-      .toLowerCase();
-
-    const filtered = selectedNodeTransfers.filter((transaction) => {
-      if (transactionDirFilter !== "all") {
-        if (transaction.direction.toLowerCase() !== transactionDirFilter)
-          return false;
-      }
-      if (counterpartyQuery) {
-        const haystack =
-          `${transaction.counterpartLabel} ${transaction.counterpartAddr}`.toLowerCase();
-        if (!haystack.includes(counterpartyQuery)) return false;
-      }
-      if (startTs !== null && transaction.timestamp < startTs) return false;
-      if (endTs !== null && transaction.timestamp > endTs) return false;
-      if (minAmount !== null && transaction.amount < minAmount) return false;
-      if (maxAmount !== null && transaction.amount > maxAmount) return false;
-      if (minUsd !== null && transaction.usd < minUsd) return false;
-      if (maxUsd !== null && transaction.usd > maxUsd) return false;
-      return true;
-    });
-
-    if (transactionSortBy !== "amount" && transactionSortBy !== "time") {
-      return filtered;
-    }
-
-    const directionMultiplier = transactionSortDirection === "desc" ? -1 : 1;
-    return [...filtered].sort((left, right) => {
-      const leftValue = Number(left?.[transactionSortBy]) || 0;
-      const rightValue = Number(right?.[transactionSortBy]) || 0;
-      if (leftValue === rightValue) return 0;
-      return leftValue > rightValue
-        ? directionMultiplier
-        : -directionMultiplier;
-    });
-  }, [
+  const filteredTransactions = useFilteredTransactions({
     selectedNode,
-    selectedNodeTransfers,
     selectedNodeApiTransactionsError,
-    transactionDirFilter,
+    selectedNodeTransfers,
     transactionCounterpartyFilter,
-    transactionStartTime,
+    transactionDirFilter,
     transactionEndTime,
-    transactionMinAmount,
     transactionMaxAmount,
-    transactionMinUsd,
     transactionMaxUsd,
+    transactionMinAmount,
+    transactionMinUsd,
     transactionSortBy,
     transactionSortDirection,
-  ]);
+    transactionStartTime,
+  });
 
   const TRANSACTIONS_PER_PAGE = 100;
   const isUsingApiTransactions =
@@ -2518,228 +2347,26 @@ export default function App() {
     );
   }, [mapDataStatus]);
 
-  const mapRecoveryState = useMemo(() => {
-    if (isMapLoading || filteredNodes.length > 0) {
-      return null;
-    }
-
-    const canClearSearch = Boolean(searchQuery);
-    const canClearLegend = Boolean(activeHolderTypeFilter);
-    const canClearConnections = Boolean(isConnectionsView);
-
-    if (hasMapError) {
-      return {
-        title: "Live data is temporarily unavailable",
-        copy: "The graph request failed or timed out. Retry the request or reset filters to continue with a stable view.",
-        actions: [
-          {
-            key: "retry",
-            label: "Retry",
-            onClick: handleRetryGraphLoad,
-          },
-          {
-            key: "reset",
-            label: "Reset View",
-            onClick: handleClearConnections,
-          },
-        ],
-      };
-    }
-
-    if (isConnectionsView) {
-      const connectionThreshold = normalizeAmount(connectionMinAmount);
-      return {
-        title:
-          connectionThreshold > 0
-            ? "No connections meet the minimum amount"
-            : "No connected wallets for this address",
-        copy:
-          connectionThreshold > 0
-            ? `Lower the minimum amount below ${fmtTokenAmount(connectionThreshold)} ${activeTokenInfo.name} or clear it to show all connections.`
-            : "Try another root wallet or return to token overview to continue exploring holder distribution.",
-        actions: [
-          {
-            key: "clear-connections",
-            label: "Back to Token Overview",
-            onClick: handleClearConnections,
-          },
-          {
-            key: "retry-connections",
-            label: "Retry Connections",
-            onClick: handleRetryGraphLoad,
-          },
-        ],
-      };
-    }
-
-    if (canClearSearch || canClearLegend || canClearConnections) {
-      return {
-        title: "No wallets match current filters",
-        copy: "Clear one or more filters to recover the graph and continue analysis.",
-        actions: [
-          canClearSearch
-            ? {
-                key: "clear-search",
-                label: "Clear Search",
-                onClick: () => setSearchQuery(""),
-              }
-            : null,
-          canClearLegend
-            ? {
-                key: "clear-legend",
-                label: "Clear Legend Filter",
-                onClick: () => setActiveHolderTypeFilter(""),
-              }
-            : null,
-          {
-            key: "reset-all",
-            label: "Reset View",
-            onClick: handleClearConnections,
-          },
-        ].filter(Boolean),
-      };
-    }
-
-    return {
-      title: "No graph data available",
-      copy: "The selected token did not return a renderable graph yet. Retry or switch tokens.",
-      actions: [
-        {
-          key: "retry-empty",
-          label: "Retry",
-          onClick: handleRetryGraphLoad,
-        },
-      ],
-    };
-  }, [
+  const mapRecoveryState = useMapRecoveryState({
     activeHolderTypeFilter,
-    filteredNodes.length,
+    activeTokenInfo,
+    connectionMinAmount,
+    filteredNodes,
     handleClearConnections,
+    handleRetryGraphLoad,
     hasMapError,
     isConnectionsView,
     isMapLoading,
     searchQuery,
-    connectionMinAmount,
-    activeTokenInfo.name,
-  ]);
+    setActiveHolderTypeFilter,
+    setSearchQuery,
+  });
 
-  const traceComputation = useMemo(() => {
-    const fromId = String(traceFromNodeId || "").trim();
-    const toId = String(traceToNodeId || "").trim();
-    if (!fromId || !toId || fromId === toId) {
-      return {
-        nodeIds: [],
-        linkKeys: [],
-        relevanceScore: null,
-        status:
-          fromId && toId && fromId === toId
-            ? "Select two different wallets to trace a path."
-            : "",
-      };
-    }
-
-    const adjacency = new Map();
-    const pairVolumeMap = new Map();
-    let maxPairVolume = 0;
-    filteredLinks.forEach((link) => {
-      const source = getLinkEndpointId(link?.source);
-      const target = getLinkEndpointId(link?.target);
-      if (!source || !target) return;
-      if (!adjacency.has(source)) adjacency.set(source, []);
-      if (!adjacency.has(target)) adjacency.set(target, []);
-      adjacency.get(source).push(target);
-      adjacency.get(target).push(source);
-
-      const pairKey = [source, target].sort().join("::");
-      const nextVolume =
-        (pairVolumeMap.get(pairKey) || 0) +
-        (Number(link?.transactionVolume) || 0);
-      pairVolumeMap.set(pairKey, nextVolume);
-      if (nextVolume > maxPairVolume) {
-        maxPairVolume = nextVolume;
-      }
-    });
-
-    if (!adjacency.has(fromId) || !adjacency.has(toId)) {
-      return {
-        nodeIds: [],
-        linkKeys: [],
-        relevanceScore: null,
-        status:
-          "Selected wallets are not connected in the current visible graph.",
-      };
-    }
-
-    const queue = [fromId];
-    const visited = new Set([fromId]);
-    const prev = new Map();
-
-    while (queue.length) {
-      const current = queue.shift();
-      if (current === toId) break;
-      (adjacency.get(current) || []).forEach((nextNodeId) => {
-        if (visited.has(nextNodeId)) return;
-        visited.add(nextNodeId);
-        prev.set(nextNodeId, current);
-        queue.push(nextNodeId);
-      });
-    }
-
-    if (!visited.has(toId)) {
-      return {
-        nodeIds: [],
-        linkKeys: [],
-        relevanceScore: null,
-        status: "No path found between these wallets in the current view.",
-      };
-    }
-
-    const pathNodeIds = [];
-    let cursor = toId;
-    while (cursor) {
-      pathNodeIds.push(cursor);
-      if (cursor === fromId) break;
-      cursor = prev.get(cursor);
-    }
-    pathNodeIds.reverse();
-
-    const pathLinkKeys = [];
-    let pathVolumeTotal = 0;
-    for (let index = 0; index < pathNodeIds.length - 1; index += 1) {
-      const left = pathNodeIds[index];
-      const right = pathNodeIds[index + 1];
-      pathLinkKeys.push(getLinkKey(left, right));
-      pathLinkKeys.push(getLinkKey(right, left));
-
-      const pairKey = [left, right].sort().join("::");
-      pathVolumeTotal += pairVolumeMap.get(pairKey) || 0;
-    }
-
-    const hopCount = Math.max(0, pathNodeIds.length - 1);
-    const averageHopVolume = hopCount > 0 ? pathVolumeTotal / hopCount : 0;
-    const hopScore =
-      hopCount <= 1 ? 100 : Math.max(28, 100 - (hopCount - 1) * 16);
-    const volumeScore =
-      maxPairVolume > 0
-        ? Math.min(24, (averageHopVolume / maxPairVolume) * 24)
-        : 0;
-    const relevanceScore = Math.round(
-      Math.max(20, Math.min(100, hopScore + volumeScore)),
-    );
-    const relevanceLabel =
-      relevanceScore >= 80
-        ? "strong"
-        : relevanceScore >= 60
-          ? "moderate"
-          : "light";
-
-    return {
-      nodeIds: pathNodeIds,
-      linkKeys: pathLinkKeys,
-      relevanceScore,
-      status: `Trace path found across ${hopCount} hop(s). Relevance ${relevanceScore}/100 (${relevanceLabel}).`,
-    };
-  }, [filteredLinks, traceFromNodeId, traceToNodeId]);
+  const traceComputation = useTraceComputation({
+    filteredLinks,
+    traceFromNodeId,
+    traceToNodeId,
+  });
 
   const selectedTraceDbPath = useMemo(() => {
     if (!selectedTraceDbPathKey) {
@@ -2918,58 +2545,12 @@ export default function App() {
       : [];
   }, [selectedTraceDbPath, traceListedDbPaths]);
 
-  const executiveSummary = useMemo(() => {
-    const summaryPool = Array.isArray(renderedGraphNodes)
-      ? renderedGraphNodes
-      : [];
-    const visibleWallets = renderedGraphNodes.length;
-    const visibleConnections = renderedGraphLinks.length;
-    const getNodeSharePct = (holder) => {
-      const pctFromNode = Number(holder?.pct);
-      if (Number.isFinite(pctFromNode) && pctFromNode >= 0) {
-        return pctFromNode;
-      }
-
-      if (currentSupplyBase > 0) {
-        return (Number(holder?.value || 0) / currentSupplyBase) * 100;
-      }
-
-      return 0;
-    };
-    const topWallet = summaryPool.length
-      ? summaryPool.reduce((best, holder) =>
-          getNodeSharePct(holder) > getNodeSharePct(best) ? holder : best,
-        )
-      : null;
-    const topWalletShare = topWallet
-      ? Math.min(100, Math.max(0, getNodeSharePct(topWallet)))
-      : 0;
-    const concentrationTop10 = Math.min(
-      100,
-      Math.max(
-        0,
-        summaryPool
-          .slice()
-          .sort((a, b) => getNodeSharePct(b) - getNodeSharePct(a))
-          .slice(0, 10)
-          .reduce((sum, holder) => sum + getNodeSharePct(holder), 0),
-      ),
-    );
-
-    return {
-      isFocusedPath: Boolean(hasTraceDbPathsGraph),
-      visibleWallets,
-      visibleConnections,
-      topWalletLabel: topWallet?.shortAddr || topWallet?.label || "N/A",
-      topWalletShare,
-      concentrationTop10,
-    };
-  }, [
+  const executiveSummary = useExecutiveSummary({
     currentSupplyBase,
     hasTraceDbPathsGraph,
-    renderedGraphLinks.length,
+    renderedGraphLinks,
     renderedGraphNodes,
-  ]);
+  });
 
   const activeTracePathHighlights = useMemo(() => {
     if (traceDbPathHighlights.length) {
@@ -3341,88 +2922,23 @@ export default function App() {
       document.removeEventListener("pointerdown", handlePointerDown, true);
   }, [isTraceToolOpen]);
 
-  const commandPaletteActions = useMemo(
-    () => [
-      {
-        id: "search-focus",
-        label: "Focus search input",
-        shortcut: "/",
-        run: () => document.getElementById("header-search-input")?.focus(),
-      },
-      {
-        id: "fit",
-        label: "Fit graph to view",
-        shortcut: "G",
-        run: () => bubbleMapActionsRef.current?.fitToView?.(),
-      },
-      {
-        id: "focus",
-        label: isFocusMode ? "Disable Focus Mode" : "Enable Focus Mode",
-        shortcut: "F",
-        run: () => setIsFocusMode((current) => !current),
-      },
-      {
-        id: "clear-context",
-        label: "Clear active context",
-        shortcut: "Esc",
-        run: clearActiveContext,
-      },
-      {
-        id: "connections-clear",
-        label: "Clear connections mode",
-        run: handleClearConnections,
-      },
-      {
-        id: "legend-clear",
-        label: "Clear legend filter",
-        run: () => setActiveHolderTypeFilter(""),
-      },
-      {
-        id: "retry",
-        label: "Retry graph load",
-        run: handleRetryGraphLoad,
-      },
-      {
-        id: "diagnostics",
-        label: "Open diagnostics details",
-        run: () => setIsDiagnosticsOpen(true),
-      },
-      {
-        id: "trace",
-        label: "Open node-to-node trace tool",
-        run: () => {
-          setSearchedRootAddress("");
-          setIsConnectionsView(false);
-          setConnectionsGraphContext(null);
-          setConnectionMinAmount("");
-          setIsTraceToolOpen(true);
-        },
-      },
-      {
-        id: "compare",
-        label: "Open token compare mode",
-        run: () => setIsCompareModeOpen(true),
-      },
-      {
-        id: "export-graph",
-        label: "Export visible graph preset",
-        run: exportVisibleGraphPreset,
-      },
-    ],
-    [
-      clearActiveContext,
-      handleClearConnections,
-      isFocusMode,
-      setConnectionMinAmount,
-      setConnectionsGraphContext,
-      setIsFocusMode,
-      setIsConnectionsView,
-      setIsTraceToolOpen,
-      setSearchedRootAddress,
-      setActiveHolderTypeFilter,
-      exportVisibleGraphPreset,
-    ],
-  );
+  const commandPaletteActions = useCommandPaletteActions({
+    bubbleMapActionsRef,
+    clearActiveContext,
+    exportVisibleGraphPreset,
+    handleClearConnections,
+    handleRetryGraphLoad,
+    isFocusMode,
+    setActiveHolderTypeFilter,
+    setConnectionMinAmount,
+    setConnectionsGraphContext,
+    setIsCompareModeOpen,
+    setIsConnectionsView,
+    setIsDiagnosticsOpen,
+    setIsFocusMode,
+    setIsTraceToolOpen,
+    setSearchedRootAddress,
+  });
 
   const filteredCommandPaletteActions = useMemo(() => {
     const query = String(commandPaletteQuery || "")

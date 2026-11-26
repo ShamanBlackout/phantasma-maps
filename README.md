@@ -285,6 +285,15 @@ React entry point.
     src/hooks/useTraceDbPaths.js, useCompareSnapshot.js, usePopoutDismissal.js
     	Fetch trace paths between two wallets, load the compare-token snapshot, and close shell popouts on an outside click.
 
+    src/hooks/useActiveTokenInfo.js, useExecutiveSummary.js, useMapRecoveryState.js
+    	Derive the merged token info (API metadata, live price, supply), the StatsPanel executive summary, and the empty/error map recovery message.
+
+    src/hooks/useSelectedNodeTransfers.js, useFilteredTransactions.js
+    	Derive the selected wallet's transfer list, then apply the modal's direction, counterparty, time, amount, and USD filters and sort order.
+
+    src/hooks/useTraceComputation.js, useCommandPaletteActions.js
+    	Compute client-side trace paths between two nodes and build the command palette's action list.
+
     src/theme/holderPalettes.js
     	Color palettes and graph styling presets by theme.
 
